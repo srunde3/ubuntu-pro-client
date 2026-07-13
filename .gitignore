@@ -51,5 +51,11 @@ node_modules
 docs/build/
 .sphinx
 
+# local MCP package artifacts
+tools/mcp-behave-server/build/
+tools/mcp-behave-server/.venv/
+tools/mcp-behave-server/.pytest_cache/
+.mcp_behave_logs/
+
 # compiled translations
 debian/po/usr
