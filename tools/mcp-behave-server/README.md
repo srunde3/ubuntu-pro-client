@@ -4,10 +4,12 @@ This package provides a host-side MCP server for running selected behave scenari
 
 ## What it does
 
-The server exposes two MCP tools:
+The server exposes these MCP tools:
 
 - `list_features`: returns the available feature files under the repository
-- `run_behave_scenario`: runs a whitelisted behave scenario through `tox -e behave`
+- `start_behave_scenario`: starts a whitelisted behave scenario in the background and returns a `job_id`
+- `check_scenario_status`: checks job status and returns running output tail or compact completion summary
+- `get_scenario_logs`: returns a bounded tail of captured stdout logs for a job
 
 It also exposes a health endpoint at `/healthz` for basic checks.
 
@@ -48,6 +50,26 @@ If you prefer keeping cache enabled, clear stale entries after package changes:
 
 ```bash
 uv cache clean mcp-behave-server
+```
+
+## Testing
+
+Run the package tests:
+
+```bash
+uv run pytest -q
+```
+
+Run only fast tests (exclude end-to-end long-running test):
+
+```bash
+uv run pytest -q -m "not e2e"
+```
+
+Run only the long-running end-to-end MCP test:
+
+```bash
+uv run pytest -q -m "e2e and long_running"
 ```
 
 ## Environment variables
