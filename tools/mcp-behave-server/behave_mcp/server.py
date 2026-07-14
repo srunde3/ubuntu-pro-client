@@ -1,5 +1,6 @@
 import json
 import os
+import posixpath
 import subprocess
 import threading
 import uuid
@@ -13,7 +14,6 @@ from starlette.responses import JSONResponse
 host = os.environ.get("MCP_HOST", "127.0.0.1")
 port = int(os.environ.get("MCP_PORT", "8000"))
 mcp = FastMCP("Ubuntu Pro Client Behave MCP", host=host, port=port)
-ALLOWED_FEATURES = {"features/cli/attach.feature"}
 ALLOWED_MACHINE_TYPES = {"lxd-container", "lxd-vm"}
 ALLOWED_ENV_VARS = {
     "UACLIENT_BEHAVE_CONTRACT_TOKEN",
@@ -34,25 +34,17 @@ async def healthcheck(request):
 @mcp.tool(
     description=(
         "List feature files available in the repository so an agent can choose "
-        "a supported behave scenario."
+        "an allowed behave scenario."
     )
 )
 def list_features() -> str:
     repo_root = resolve_repo_root()
-    features_dir = repo_root / "features"
-    if not features_dir.exists():
-        return json.dumps({"features": []})
-
-    feature_files = sorted(
-        str(path.relative_to(repo_root)).replace("\\", "/")
-        for path in features_dir.rglob("*.feature")
-    )
-    return json.dumps({"features": feature_files})
+    return json.dumps({"features": _discover_feature_files(repo_root)})
 
 
 @mcp.tool(
     description=(
-        "Start a whitelisted behave scenario through tox in the background and "
+        "Start a listed behave scenario through tox in the background and "
         "return a job_id immediately. Poll check_scenario_status for completion."
     )
 )
@@ -62,10 +54,10 @@ def start_behave_scenario(
     scenario_name: str = "",
     releases: list[str] | None = None,
 ) -> str:
-    if feature_file not in ALLOWED_FEATURES:
-        return json.dumps(
-            {"ok": False, "error": f"Feature not allowed: {feature_file}"}
-        )
+    repo_root = resolve_repo_root()
+    feature_validation_error = validate_feature_file(repo_root, feature_file)
+    if feature_validation_error:
+        return json.dumps({"ok": False, "error": feature_validation_error})
 
     if not machine_types:
         return json.dumps(
@@ -92,7 +84,6 @@ def start_behave_scenario(
             }
         )
 
-    repo_root = resolve_repo_root()
     log_dir = resolve_log_dir(repo_root)
     job_id = uuid.uuid4().hex[:8]
     json_report_path = log_dir / f"{job_id}_report.json"
@@ -255,6 +246,33 @@ def resolve_repo_root() -> Path:
             return candidate
 
     return current.parents[3]
+
+
+def validate_feature_file(repo_root: Path, feature_file: str) -> str | None:
+    normalized = _normalize_feature_file_arg(feature_file)
+    allowed_features = set(_discover_feature_files(repo_root))
+    if normalized not in allowed_features:
+        return "Feature is not listed by list_features: " f"{feature_file}"
+
+    return None
+
+
+def _discover_feature_files(repo_root: Path) -> list[str]:
+    features_dir = repo_root / "features"
+    if not features_dir.exists():
+        return []
+
+    return sorted(
+        str(path.relative_to(repo_root)).replace("\\", "/")
+        for path in features_dir.rglob("*.feature")
+    )
+
+
+def _normalize_feature_file_arg(feature_file: str) -> str:
+    normalized = posixpath.normpath(feature_file.replace("\\", "/"))
+    if normalized.startswith("./"):
+        normalized = normalized[2:]
+    return normalized
 
 
 def resolve_log_dir(repo_root: Path) -> Path:

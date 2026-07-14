@@ -3,7 +3,6 @@ from pathlib import Path
 
 from behave_mcp.server import (
     ACTIVE_JOBS,
-    ALLOWED_FEATURES,
     check_scenario_status,
     get_scenario_logs,
     list_features,
@@ -21,7 +20,7 @@ def test_list_features_returns_feature_files(monkeypatch):
     assert "features/cli/attach.feature" in result["features"]
 
 
-def test_start_behave_scenario_rejects_disallowed_feature(monkeypatch):
+def test_start_behave_scenario_rejects_unlisted_feature(monkeypatch):
     ACTIVE_JOBS.clear()
     monkeypatch.setenv(
         "UBUNTU_PRO_CLIENT_REPO", str(Path(__file__).resolve().parents[3])
@@ -29,12 +28,43 @@ def test_start_behave_scenario_rejects_disallowed_feature(monkeypatch):
 
     result = json.loads(
         start_behave_scenario(
-            "features/cli/not-allowed.feature", machine_types=["lxd-container"]
+            "features/cli/does-not-exist.feature",
+            machine_types=["lxd-container"],
         )
     )
 
     assert result["ok"] is False
-    assert "Feature not allowed" in result["error"]
+    assert "Feature is not listed by list_features" in result["error"]
+
+
+def test_start_behave_scenario_accepts_normalized_listed_feature(
+    monkeypatch, tmp_path
+):
+    ACTIVE_JOBS.clear()
+    monkeypatch.setenv("MCP_LOG_DIR", str(tmp_path))
+    monkeypatch.setenv(
+        "UBUNTU_PRO_CLIENT_REPO", str(Path(__file__).resolve().parents[3])
+    )
+
+    class FakePopen:
+        def __init__(self, command, cwd, env, stdout, stderr, text):
+            self.returncode = None
+
+        def poll(self):
+            return self.returncode
+
+    import behave_mcp.server as server_module
+
+    monkeypatch.setattr(server_module.subprocess, "Popen", FakePopen)
+
+    result = json.loads(
+        start_behave_scenario(
+            "features/cli/../cli/attach.feature",
+            machine_types=["lxd-container"],
+        )
+    )
+
+    assert result["ok"] is True
 
 
 def test_start_behave_scenario_builds_command(monkeypatch, tmp_path):
@@ -66,7 +96,7 @@ def test_start_behave_scenario_builds_command(monkeypatch, tmp_path):
 
     result = json.loads(
         start_behave_scenario(
-            next(iter(ALLOWED_FEATURES)),
+            "features/cli/attach.feature",
             machine_types=["lxd-container"],
             scenario_name="attach",
             releases=["resolute"],
@@ -80,7 +110,7 @@ def test_start_behave_scenario_builds_command(monkeypatch, tmp_path):
         "-e",
         "behave",
         "--",
-        next(iter(ALLOWED_FEATURES)),
+        "features/cli/attach.feature",
     ]
     assert "--name" in calls["command"]
     assert "-f" in calls["command"]
@@ -96,7 +126,7 @@ def test_start_behave_scenario_requires_machine_types(monkeypatch):
     )
 
     result = json.loads(
-        start_behave_scenario(next(iter(ALLOWED_FEATURES)), [])
+        start_behave_scenario("features/cli/attach.feature", [])
     )
 
     assert result["ok"] is False
@@ -111,7 +141,7 @@ def test_start_behave_scenario_rejects_unsupported_machine_type(monkeypatch):
 
     result = json.loads(
         start_behave_scenario(
-            next(iter(ALLOWED_FEATURES)), machine_types=["azure.generic"]
+            "features/cli/attach.feature", machine_types=["azure.generic"]
         )
     )
 

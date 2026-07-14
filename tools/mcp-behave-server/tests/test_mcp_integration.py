@@ -188,7 +188,6 @@ async def test_mcp_e2e_long_running_attach_flow(monkeypatch):
         assert completed_payload["status"] == "completed"
         assert isinstance(completed_payload.get("ok"), bool)
         assert "returncode" in completed_payload
-        # A true e2e run must execute at least one scenario and one step.
         assert completed_payload["summary"] is not None
         assert completed_payload["summary"]["scenarios"]["total"] > 0
         assert completed_payload["summary"]["steps"]["total"] > 0
@@ -208,6 +207,22 @@ async def test_mcp_start_requires_machine_types():
     payload = _result_json(result)
     assert payload["ok"] is False
     assert "machine_types is required" in payload["error"]
+
+
+@pytest.mark.asyncio
+async def test_mcp_start_rejects_unlisted_feature():
+    async with create_connected_server_and_client_session(mcp) as client:
+        result = await client.call_tool(
+            "start_behave_scenario",
+            {
+                "feature_file": "features/cli/does-not-exist.feature",
+                "machine_types": ["lxd-container"],
+            },
+        )
+
+    payload = _result_json(result)
+    assert payload["ok"] is False
+    assert "Feature is not listed by list_features" in payload["error"]
 
 
 @pytest.mark.asyncio

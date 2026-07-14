@@ -7,7 +7,7 @@ This package provides a host-side MCP server for running selected behave scenari
 The server exposes these MCP tools:
 
 - `list_features`: returns the available feature files under the repository
-- `start_behave_scenario`: starts a whitelisted behave scenario in the background and returns a `job_id`
+- `start_behave_scenario`: starts a behave scenario in the background and returns a `job_id`
 - `check_scenario_status`: checks job status and returns running output tail or compact completion summary
 - `get_scenario_logs`: returns a bounded tail of captured stdout logs for a job
 
@@ -78,3 +78,8 @@ The server will forward a small allowlist of environment variables to the behave
 
 - `UACLIENT_BEHAVE_CONTRACT_TOKEN`
 - `UACLIENT_BEHAVE_INSTALL_FROM`
+
+## Safety constraints
+
+- `feature_file` must be one of the paths returned by `list_features`.
+- `machine_types` is required and currently limited to: `lxd-container`, `lxd-vm`.
