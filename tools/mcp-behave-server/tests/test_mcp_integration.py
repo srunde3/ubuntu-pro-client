@@ -76,6 +76,7 @@ async def test_mcp_start_check_and_log_flow(monkeypatch, tmp_path):
             "start_behave_scenario",
             {
                 "feature_file": "features/cli/attach.feature",
+                "machine_types": ["lxd-container"],
                 "releases": ["noble"],
             },
         )
@@ -152,6 +153,7 @@ async def test_mcp_e2e_long_running_attach_flow(monkeypatch):
             "start_behave_scenario",
             {
                 "feature_file": "features/cli/attach.feature",
+                "machine_types": ["lxd-container"],
                 "releases": ["noble"],
             },
         )
@@ -190,3 +192,41 @@ async def test_mcp_e2e_long_running_attach_flow(monkeypatch):
         assert completed_payload["summary"] is not None
         assert completed_payload["summary"]["scenarios"]["total"] > 0
         assert completed_payload["summary"]["steps"]["total"] > 0
+
+
+@pytest.mark.asyncio
+async def test_mcp_start_requires_machine_types():
+    async with create_connected_server_and_client_session(mcp) as client:
+        result = await client.call_tool(
+            "start_behave_scenario",
+            {
+                "feature_file": "features/cli/attach.feature",
+                "machine_types": [],
+            },
+        )
+
+    payload = _result_json(result)
+    assert payload["ok"] is False
+    assert "machine_types is required" in payload["error"]
+
+
+@pytest.mark.asyncio
+async def test_mcp_start_rejects_cloud_machine_types():
+    """
+    Avoid accidental calls to cloud providers for now.
+
+    In the future, this might change.
+    """
+
+    async with create_connected_server_and_client_session(mcp) as client:
+        result = await client.call_tool(
+            "start_behave_scenario",
+            {
+                "feature_file": "features/cli/attach.feature",
+                "machine_types": ["azure.generic"],
+            },
+        )
+
+    payload = _result_json(result)
+    assert payload["ok"] is False
+    assert "Unsupported machine_types" in payload["error"]

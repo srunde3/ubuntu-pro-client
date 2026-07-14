@@ -14,6 +14,7 @@ host = os.environ.get("MCP_HOST", "127.0.0.1")
 port = int(os.environ.get("MCP_PORT", "8000"))
 mcp = FastMCP("Ubuntu Pro Client Behave MCP", host=host, port=port)
 ALLOWED_FEATURES = {"features/cli/attach.feature"}
+ALLOWED_MACHINE_TYPES = {"lxd-container", "lxd-vm"}
 ALLOWED_ENV_VARS = {
     "UACLIENT_BEHAVE_CONTRACT_TOKEN",
     "UACLIENT_BEHAVE_INSTALL_FROM",
@@ -57,13 +58,38 @@ def list_features() -> str:
 )
 def start_behave_scenario(
     feature_file: str,
+    machine_types: list[str],
     scenario_name: str = "",
     releases: list[str] | None = None,
-    machine_types: list[str] | None = None,
 ) -> str:
     if feature_file not in ALLOWED_FEATURES:
         return json.dumps(
             {"ok": False, "error": f"Feature not allowed: {feature_file}"}
+        )
+
+    if not machine_types:
+        return json.dumps(
+            {
+                "ok": False,
+                "error": "machine_types is required. Allowed values: lxd-container,lxd-vm",
+            }
+        )
+
+    invalid_machine_types = sorted(
+        machine_type
+        for machine_type in machine_types
+        if machine_type not in ALLOWED_MACHINE_TYPES
+    )
+    if invalid_machine_types:
+        return json.dumps(
+            {
+                "ok": False,
+                "error": (
+                    "Unsupported machine_types: "
+                    f"{','.join(invalid_machine_types)}. "
+                    "Allowed values: lxd-container,lxd-vm"
+                ),
+            }
         )
 
     repo_root = resolve_repo_root()
@@ -77,8 +103,7 @@ def start_behave_scenario(
         command.extend(["--name", scenario_name])
     if releases:
         command.extend(["-D", f"releases={','.join(releases)}"])
-    if machine_types:
-        command.extend(["-D", f"machine_types={','.join(machine_types)}"])
+    command.extend(["-D", f"machine_types={','.join(machine_types)}"])
     command.extend(["-f", "json", "-o", str(json_report_path), "-f", "plain"])
 
     env = os.environ.copy()

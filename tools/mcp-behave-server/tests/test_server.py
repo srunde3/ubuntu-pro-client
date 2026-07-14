@@ -28,7 +28,9 @@ def test_start_behave_scenario_rejects_disallowed_feature(monkeypatch):
     )
 
     result = json.loads(
-        start_behave_scenario("features/cli/not-allowed.feature")
+        start_behave_scenario(
+            "features/cli/not-allowed.feature", machine_types=["lxd-container"]
+        )
     )
 
     assert result["ok"] is False
@@ -65,9 +67,9 @@ def test_start_behave_scenario_builds_command(monkeypatch, tmp_path):
     result = json.loads(
         start_behave_scenario(
             next(iter(ALLOWED_FEATURES)),
+            machine_types=["lxd-container"],
             scenario_name="attach",
             releases=["resolute"],
-            machine_types=["lxd-container"],
         )
     )
 
@@ -85,6 +87,36 @@ def test_start_behave_scenario_builds_command(monkeypatch, tmp_path):
     assert "json" in calls["command"]
     assert calls["cwd"].endswith("ubuntu-pro-client")
     assert calls["env"]["UACLIENT_BEHAVE_CONTRACT_TOKEN"] == "token"
+
+
+def test_start_behave_scenario_requires_machine_types(monkeypatch):
+    ACTIVE_JOBS.clear()
+    monkeypatch.setenv(
+        "UBUNTU_PRO_CLIENT_REPO", str(Path(__file__).resolve().parents[3])
+    )
+
+    result = json.loads(
+        start_behave_scenario(next(iter(ALLOWED_FEATURES)), [])
+    )
+
+    assert result["ok"] is False
+    assert "machine_types is required" in result["error"]
+
+
+def test_start_behave_scenario_rejects_unsupported_machine_type(monkeypatch):
+    ACTIVE_JOBS.clear()
+    monkeypatch.setenv(
+        "UBUNTU_PRO_CLIENT_REPO", str(Path(__file__).resolve().parents[3])
+    )
+
+    result = json.loads(
+        start_behave_scenario(
+            next(iter(ALLOWED_FEATURES)), machine_types=["azure.generic"]
+        )
+    )
+
+    assert result["ok"] is False
+    assert "Unsupported machine_types" in result["error"]
 
 
 def test_check_scenario_status_running_and_completed(monkeypatch, tmp_path):
