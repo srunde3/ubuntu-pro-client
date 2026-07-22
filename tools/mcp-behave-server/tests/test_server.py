@@ -1,12 +1,13 @@
 import json
 from pathlib import Path
 
+import behave_mcp.server as server_module
 from behave_mcp.server import (
     ACTIVE_JOBS,
-    check_scenario_status,
     get_scenario_logs,
     list_features,
     start_behave_scenario,
+    wait_for_scenario_completion,
 )
 
 
@@ -53,8 +54,6 @@ def test_start_behave_scenario_accepts_normalized_listed_feature(
         def poll(self):
             return self.returncode
 
-    import behave_mcp.server as server_module
-
     monkeypatch.setattr(server_module.subprocess, "Popen", FakePopen)
 
     result = json.loads(
@@ -90,8 +89,6 @@ def test_start_behave_scenario_builds_command(monkeypatch, tmp_path):
 
     calls = {}
 
-    import behave_mcp.server as server_module
-
     monkeypatch.setattr(server_module.subprocess, "Popen", FakePopen)
 
     result = json.loads(
@@ -115,7 +112,7 @@ def test_start_behave_scenario_builds_command(monkeypatch, tmp_path):
     assert "--name" in calls["command"]
     assert "-f" in calls["command"]
     assert "json" in calls["command"]
-    assert calls["cwd"].endswith("ubuntu-pro-client")
+    assert calls["cwd"] == str(Path(__file__).resolve().parents[3])
     assert calls["env"]["UACLIENT_BEHAVE_CONTRACT_TOKEN"] == "token"
 
 
@@ -149,7 +146,9 @@ def test_start_behave_scenario_rejects_unsupported_machine_type(monkeypatch):
     assert "Unsupported machine_types" in result["error"]
 
 
-def test_check_scenario_status_running_and_completed(monkeypatch, tmp_path):
+def test_wait_for_scenario_completion_running_to_completed(
+    monkeypatch, tmp_path
+):
     ACTIVE_JOBS.clear()
     job_id = "job12345"
     stdout_log = tmp_path / f"{job_id}_stdout.log"
@@ -177,44 +176,47 @@ def test_check_scenario_status_running_and_completed(monkeypatch, tmp_path):
         "log_file_handle": FakeLogHandle(),
     }
 
-    running = json.loads(check_scenario_status(job_id))
-    assert running["status"] == "running"
-    assert "line2" in running["recent_output"]
+    def fake_sleep(seconds):
+        report.write_text(
+            json.dumps(
+                [
+                    {
+                        "name": "feature",
+                        "elements": [
+                            {
+                                "name": "scenario",
+                                "steps": [
+                                    {
+                                        "name": "a step",
+                                        "result": {
+                                            "status": "failed",
+                                            "error_message": "boom",
+                                        },
+                                    }
+                                ],
+                            }
+                        ],
+                    }
+                ]
+            ),
+            encoding="utf-8",
+        )
+        proc._returncode = 1
 
-    report.write_text(
-        json.dumps(
-            [
-                {
-                    "name": "feature",
-                    "elements": [
-                        {
-                            "name": "scenario",
-                            "steps": [
-                                {
-                                    "name": "a step",
-                                    "result": {
-                                        "status": "failed",
-                                        "error_message": "boom",
-                                    },
-                                }
-                            ],
-                        }
-                    ],
-                }
-            ]
-        ),
-        encoding="utf-8",
+    monkeypatch.setattr(server_module.time, "sleep", fake_sleep)
+
+    completed = json.loads(
+        wait_for_scenario_completion(
+            job_id, max_wait_seconds=60, poll_interval_seconds=0.01
+        )
     )
-    proc._returncode = 1
-
-    completed = json.loads(check_scenario_status(job_id))
     assert completed["status"] == "completed"
     assert completed["ok"] is False
     assert completed["summary"]["steps"]["failed"] == 1
     assert completed["failures"][0]["step"] == "a step"
 
 
-def test_check_scenario_status_missing_report_fallback(tmp_path):
+def test_wait_for_scenario_completion_missing_report_fallback(tmp_path):
     ACTIVE_JOBS.clear()
     job_id = "job54321"
     stdout_log = tmp_path / f"{job_id}_stdout.log"
@@ -237,11 +239,47 @@ def test_check_scenario_status_missing_report_fallback(tmp_path):
         "log_file_handle": FakeLogHandle(),
     }
 
-    completed = json.loads(check_scenario_status(job_id))
+    completed = json.loads(wait_for_scenario_completion(job_id))
     assert completed["status"] == "completed"
     assert completed["ok"] is False
     assert completed["summary"] is None
     assert "setup failed" in completed["recent_output"]
+
+
+def test_wait_for_scenario_completion_timeout(monkeypatch, tmp_path):
+    ACTIVE_JOBS.clear()
+    job_id = "jobtimeout"
+    stdout_log = tmp_path / f"{job_id}_stdout.log"
+    stdout_log.write_text("still running\n", encoding="utf-8")
+
+    class FakePopen:
+        def poll(self):
+            return None
+
+    ACTIVE_JOBS[job_id] = {
+        "process": FakePopen(),
+        "json_report": tmp_path / "missing.json",
+        "stdout_log": stdout_log,
+        "log_file_handle": None,
+    }
+
+    monotonic_values = iter([0.0, 0.1, 0.6, 1.1])
+
+    def fake_monotonic():
+        return next(monotonic_values)
+
+    monkeypatch.setattr(server_module.time, "monotonic", fake_monotonic)
+    monkeypatch.setattr(server_module.time, "sleep", lambda seconds: None)
+
+    timeout = json.loads(
+        wait_for_scenario_completion(
+            job_id, max_wait_seconds=1, poll_interval_seconds=0.01
+        )
+    )
+    assert timeout["ok"] is False
+    assert timeout["status"] == "timeout"
+    assert timeout["last_status"] == "running"
+    assert "still running" in timeout["recent_output"]
 
 
 def test_get_scenario_logs_returns_tail(tmp_path):

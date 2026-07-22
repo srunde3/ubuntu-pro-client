@@ -3,6 +3,7 @@ import os
 import posixpath
 import subprocess
 import threading
+import time
 import uuid
 from collections import deque
 from pathlib import Path
@@ -24,6 +25,8 @@ _JOBS_LOCK = threading.Lock()
 _DEFAULT_RUNNING_TAIL_LINES = 12
 _DEFAULT_LOG_TAIL_LINES = 200
 _MAX_LOG_TAIL_LINES = 2000
+_DEFAULT_WAIT_TIMEOUT_SECONDS = 1800
+_DEFAULT_WAIT_POLL_INTERVAL_SECONDS = 5.0
 
 
 @mcp.custom_route("/healthz", methods=["GET"])
@@ -45,7 +48,8 @@ def list_features() -> str:
 @mcp.tool(
     description=(
         "Start a listed behave scenario through tox in the background and "
-        "return a job_id immediately. Poll check_scenario_status for completion."
+        "return a job_id immediately. Call wait_for_scenario_completion to "
+        "wait for completion."
     )
 )
 def start_behave_scenario(
@@ -128,27 +132,72 @@ def start_behave_scenario(
             "ok": True,
             "job_id": job_id,
             "status": "started",
-            "message": "Test started. Call check_scenario_status periodically.",
+            "message": "Test started. Call wait_for_scenario_completion.",
         }
     )
 
 
 @mcp.tool(
     description=(
-        "Check the status of a running behave job. Returns a log tail while "
-        "running, and a compact structured summary when complete."
+        "Wait for a running behave job to complete by polling internally. "
+        "Returns a compact structured summary on completion, or a timeout "
+        "payload with recent output if the wait limit is reached."
     )
 )
-def check_scenario_status(job_id: str) -> str:
+def wait_for_scenario_completion(
+    job_id: str,
+    max_wait_seconds: int = _DEFAULT_WAIT_TIMEOUT_SECONDS,
+    poll_interval_seconds: float = _DEFAULT_WAIT_POLL_INTERVAL_SECONDS,
+) -> str:
+    if max_wait_seconds <= 0:
+        return json.dumps(
+            {
+                "ok": False,
+                "error": "max_wait_seconds must be greater than 0",
+            }
+        )
+    if poll_interval_seconds <= 0:
+        return json.dumps(
+            {
+                "ok": False,
+                "error": "poll_interval_seconds must be greater than 0",
+            }
+        )
+
+    deadline = time.monotonic() + max_wait_seconds
+
+    while True:
+        payload = _scenario_status_payload(job_id)
+        if payload.get("ok") is False:
+            return json.dumps(payload)
+
+        if payload.get("status") == "completed":
+            return json.dumps(payload)
+
+        if time.monotonic() >= deadline:
+            return json.dumps(
+                {
+                    "ok": False,
+                    "status": "timeout",
+                    "job_id": job_id,
+                    "max_wait_seconds": max_wait_seconds,
+                    "poll_interval_seconds": poll_interval_seconds,
+                    "last_status": "running",
+                    "recent_output": payload.get("recent_output", ""),
+                }
+            )
+
+        time.sleep(poll_interval_seconds)
+
+
+def _scenario_status_payload(job_id: str) -> dict[str, Any]:
     with _JOBS_LOCK:
         job = ACTIVE_JOBS.get(job_id)
 
     if job is None:
         job = _recover_job_from_disk(job_id)
         if job is None:
-            return json.dumps(
-                {"ok": False, "error": f"Unknown job_id: {job_id}"}
-            )
+            return {"ok": False, "error": f"Unknown job_id: {job_id}"}
 
     process = job.get("process")
     stdout_log = Path(job["stdout_log"])
@@ -157,16 +206,14 @@ def check_scenario_status(job_id: str) -> str:
     if process is not None:
         returncode = process.poll()
         if returncode is None:
-            return json.dumps(
-                {
-                    "ok": True,
-                    "status": "running",
-                    "job_id": job_id,
-                    "recent_output": _tail_file(
-                        stdout_log, _DEFAULT_RUNNING_TAIL_LINES
-                    ),
-                }
-            )
+            return {
+                "ok": True,
+                "status": "running",
+                "job_id": job_id,
+                "recent_output": _tail_file(
+                    stdout_log, _DEFAULT_RUNNING_TAIL_LINES
+                ),
+            }
     else:
         returncode = None
 
@@ -176,10 +223,10 @@ def check_scenario_status(job_id: str) -> str:
 
     summary_payload = _summarize_behave_json(json_report)
     response: dict[str, Any] = {
+        "ok": returncode == 0 if returncode is not None else False,
         "status": "completed",
         "job_id": job_id,
         "returncode": returncode,
-        "ok": returncode == 0 if returncode is not None else False,
     }
     if summary_payload is None:
         response["summary"] = None
@@ -190,7 +237,7 @@ def check_scenario_status(job_id: str) -> str:
     else:
         response.update(summary_payload)
 
-    return json.dumps(response)
+    return response
 
 
 @mcp.tool(

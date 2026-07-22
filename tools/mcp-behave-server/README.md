@@ -8,7 +8,7 @@ The server exposes these MCP tools:
 
 - `list_features`: returns the available feature files under the repository
 - `start_behave_scenario`: starts a behave scenario in the background and returns a `job_id`
-- `check_scenario_status`: checks job status and returns running output tail or compact completion summary
+- `wait_for_scenario_completion`: waits for completion and returns a compact completion summary or timeout payload
 - `get_scenario_logs`: returns a bounded tail of captured stdout logs for a job
 
 It also exposes a health endpoint at `/healthz` for basic checks.

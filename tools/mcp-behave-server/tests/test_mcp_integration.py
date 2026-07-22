@@ -1,4 +1,3 @@
-import asyncio
 import json
 import os
 from pathlib import Path
@@ -25,10 +24,40 @@ def _result_json(result):
 
 
 class _FakeProcess:
-    def __init__(self):
+    def __init__(self, report_path=None):
+        self._report_path = report_path
+        self._poll_count = 0
         self.returncode = None
 
     def poll(self):
+        self._poll_count += 1
+        if (
+            self._report_path is not None
+            and self._poll_count == 2
+            and self.returncode is None
+        ):
+            self._report_path.write_text(
+                json.dumps(
+                    [
+                        {
+                            "name": "attach feature",
+                            "elements": [
+                                {
+                                    "name": "attach scenario",
+                                    "steps": [
+                                        {
+                                            "name": "do attach",
+                                            "result": {"status": "passed"},
+                                        }
+                                    ],
+                                }
+                            ],
+                        }
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            self.returncode = 0
         return self.returncode
 
 
@@ -40,7 +69,7 @@ async def test_mcp_lists_expected_tools():
     tools = {tool.name: tool for tool in result.tools}
     assert "list_features" in tools
     assert "start_behave_scenario" in tools
-    assert "check_scenario_status" in tools
+    assert "wait_for_scenario_completion" in tools
     assert "get_scenario_logs" in tools
     assert tools["start_behave_scenario"].description
 
@@ -59,14 +88,16 @@ async def test_mcp_list_features_returns_json(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_mcp_start_check_and_log_flow(monkeypatch, tmp_path):
+async def test_mcp_start_wait_and_log_flow(monkeypatch, tmp_path):
     repo_root = Path(__file__).resolve().parents[3]
     monkeypatch.setenv("UBUNTU_PRO_CLIENT_REPO", str(repo_root))
     monkeypatch.setenv("MCP_LOG_DIR", str(tmp_path))
 
-    proc = _FakeProcess()
-
     def fake_popen(command, cwd, env, stdout, stderr, text):
+        report_path = Path(command[command.index("-o") + 1])
+        stdout.write("line1\nline2\nline3\n")
+        stdout.flush()
+        proc = _FakeProcess(report_path=report_path)
         return proc
 
     monkeypatch.setattr(server_module.subprocess, "Popen", fake_popen)
@@ -85,41 +116,13 @@ async def test_mcp_start_check_and_log_flow(monkeypatch, tmp_path):
         assert start_payload["status"] == "started"
         job_id = start_payload["job_id"]
 
-        running_result = await client.call_tool(
-            "check_scenario_status", {"job_id": job_id}
-        )
-        running_payload = _result_json(running_result)
-        assert running_payload["status"] == "running"
-
-        # Simulate process completion and a report file emitted by behave.
-        report_path = tmp_path / f"{job_id}_report.json"
-        report_path.write_text(
-            json.dumps(
-                [
-                    {
-                        "name": "attach feature",
-                        "elements": [
-                            {
-                                "name": "attach scenario",
-                                "steps": [
-                                    {
-                                        "name": "do attach",
-                                        "result": {"status": "passed"},
-                                    }
-                                ],
-                            }
-                        ],
-                    }
-                ]
-            ),
-            encoding="utf-8",
-        )
-        log_path = tmp_path / f"{job_id}_stdout.log"
-        log_path.write_text("line1\nline2\nline3\n", encoding="utf-8")
-        proc.returncode = 0
-
         completed_result = await client.call_tool(
-            "check_scenario_status", {"job_id": job_id}
+            "wait_for_scenario_completion",
+            {
+                "job_id": job_id,
+                "max_wait_seconds": 5,
+                "poll_interval_seconds": 0.01,
+            },
         )
         completed_payload = _result_json(completed_result)
         assert completed_payload["status"] == "completed"
@@ -164,19 +167,15 @@ async def test_mcp_e2e_long_running_attach_flow(monkeypatch):
 
         completed_payload = None
         try:
-            # Long-running poll loop: allow up to 30 minutes.
-            for _ in range(360):
-                status_result = await client.call_tool(
-                    "check_scenario_status", {"job_id": job_id}
-                )
-                status_payload = _result_json(status_result)
-
-                if status_payload["status"] == "completed":
-                    completed_payload = status_payload
-                    break
-
-                assert status_payload["status"] == "running"
-                await asyncio.sleep(5)
+            status_result = await client.call_tool(
+                "wait_for_scenario_completion",
+                {
+                    "job_id": job_id,
+                    "max_wait_seconds": 1800,
+                    "poll_interval_seconds": 5,
+                },
+            )
+            completed_payload = _result_json(status_result)
         finally:
             job = ACTIVE_JOBS.get(job_id)
             if job and job.get("process") is not None:
