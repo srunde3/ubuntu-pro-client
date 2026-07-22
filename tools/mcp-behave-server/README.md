@@ -10,6 +10,14 @@ The server exposes these MCP tools:
 - `start_behave_scenario`: starts a behave scenario in the background and returns a `job_id`
 - `wait_for_scenario_completion`: waits for completion and returns a compact completion summary or timeout payload
 - `get_scenario_logs`: returns a bounded tail of captured stdout logs for a job
+- `get_scenario_artifacts`: returns disk artifact paths and metadata for a job
+
+For each started job, the server writes artifacts under `.mcp_behave_logs`:
+
+- `<job_id>_stdout.log`: combined stdout/stderr stream
+- `<job_id>_report.json`: behave JSON formatter output
+- `<job_id>_meta.json`: machine-readable metadata (command, params, status, timestamps, artifact paths)
+- `index.jsonl`: append-only per-job lifecycle events (`started`, `completed`)
 
 It also exposes a health endpoint at `/healthz` for basic checks.
 

@@ -4,6 +4,7 @@ from pathlib import Path
 import behave_mcp.server as server_module
 from behave_mcp.server import (
     ACTIVE_JOBS,
+    get_scenario_artifacts,
     get_scenario_logs,
     list_features,
     start_behave_scenario,
@@ -64,6 +65,8 @@ def test_start_behave_scenario_accepts_normalized_listed_feature(
     )
 
     assert result["ok"] is True
+    assert "artifacts" in result
+    assert result["artifacts"]["metadata"].endswith("_meta.json")
 
 
 def test_start_behave_scenario_builds_command(monkeypatch, tmp_path):
@@ -299,6 +302,36 @@ def test_get_scenario_logs_returns_tail(tmp_path):
     assert result["ok"] is True
     assert result["lines"] == 2
     assert result["output"] == "l2\nl3"
+    assert result["output_lines"] == ["l2", "l3"]
+
+
+def test_get_scenario_artifacts_returns_paths_and_metadata(tmp_path):
+    ACTIVE_JOBS.clear()
+    job_id = "jobmeta01"
+    stdout_log = tmp_path / f"{job_id}_stdout.log"
+    json_report = tmp_path / f"{job_id}_report.json"
+    metadata = tmp_path / f"{job_id}_meta.json"
+    stdout_log.write_text("line\n", encoding="utf-8")
+    json_report.write_text("[]\n", encoding="utf-8")
+    metadata.write_text(
+        json.dumps({"job_id": job_id, "status": "started"}),
+        encoding="utf-8",
+    )
+
+    ACTIVE_JOBS[job_id] = {
+        "process": None,
+        "json_report": json_report,
+        "stdout_log": stdout_log,
+        "metadata": metadata,
+        "log_file_handle": None,
+    }
+
+    result = json.loads(get_scenario_artifacts(job_id))
+    assert result["ok"] is True
+    assert result["exists"]["stdout_log"] is True
+    assert result["exists"]["json_report"] is True
+    assert result["exists"]["metadata"] is True
+    assert result["metadata"]["status"] == "started"
 
 
 def test_main_uses_stdio_transport_by_default(monkeypatch):

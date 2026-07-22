@@ -6,6 +6,7 @@ import threading
 import time
 import uuid
 from collections import deque
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +28,7 @@ _DEFAULT_LOG_TAIL_LINES = 200
 _MAX_LOG_TAIL_LINES = 2000
 _DEFAULT_WAIT_TIMEOUT_SECONDS = 1800
 _DEFAULT_WAIT_POLL_INTERVAL_SECONDS = 5.0
+_JOB_INDEX_FILE_NAME = "index.jsonl"
 
 
 @mcp.custom_route("/healthz", methods=["GET"])
@@ -92,6 +94,7 @@ def start_behave_scenario(
     job_id = uuid.uuid4().hex[:8]
     json_report_path = log_dir / f"{job_id}_report.json"
     stdout_path = log_dir / f"{job_id}_stdout.log"
+    metadata_path = log_dir / f"{job_id}_meta.json"
 
     command = ["tox", "-e", "behave", "--", feature_file]
     if scenario_name:
@@ -124,8 +127,48 @@ def start_behave_scenario(
             "process": process,
             "json_report": json_report_path,
             "stdout_log": stdout_path,
+            "metadata": metadata_path,
             "log_file_handle": log_file,
         }
+
+    _write_job_metadata(
+        metadata_path,
+        {
+            "job_id": job_id,
+            "status": "started",
+            "started_at": _utc_timestamp(),
+            "feature_file": feature_file,
+            "scenario_name": scenario_name,
+            "machine_types": machine_types,
+            "releases": releases or [],
+            "command": command,
+            "repo_root": str(repo_root),
+            "artifacts": _job_artifacts_payload(
+                log_dir=log_dir,
+                stdout_log=stdout_path,
+                json_report=json_report_path,
+                metadata=metadata_path,
+            ),
+        },
+    )
+    _append_job_index_event(
+        log_dir,
+        {
+            "event": "started",
+            "timestamp": _utc_timestamp(),
+            "job_id": job_id,
+            "feature_file": feature_file,
+            "scenario_name": scenario_name,
+            "machine_types": machine_types,
+            "releases": releases or [],
+            "artifacts": _job_artifacts_payload(
+                log_dir=log_dir,
+                stdout_log=stdout_path,
+                json_report=json_report_path,
+                metadata=metadata_path,
+            ),
+        },
+    )
 
     return json.dumps(
         {
@@ -133,6 +176,12 @@ def start_behave_scenario(
             "job_id": job_id,
             "status": "started",
             "message": "Test started. Call wait_for_scenario_completion.",
+            "artifacts": _job_artifacts_payload(
+                log_dir=log_dir,
+                stdout_log=stdout_path,
+                json_report=json_report_path,
+                metadata=metadata_path,
+            ),
         }
     )
 
@@ -184,6 +233,7 @@ def wait_for_scenario_completion(
                     "poll_interval_seconds": poll_interval_seconds,
                     "last_status": "running",
                     "recent_output": payload.get("recent_output", ""),
+                    "artifacts": payload.get("artifacts"),
                 }
             )
 
@@ -202,6 +252,10 @@ def _scenario_status_payload(job_id: str) -> dict[str, Any]:
     process = job.get("process")
     stdout_log = Path(job["stdout_log"])
     json_report = Path(job["json_report"])
+    metadata = Path(
+        job.get("metadata") or stdout_log.with_name(f"{job_id}_meta.json")
+    )
+    log_dir = stdout_log.parent
 
     if process is not None:
         returncode = process.poll()
@@ -212,6 +266,12 @@ def _scenario_status_payload(job_id: str) -> dict[str, Any]:
                 "job_id": job_id,
                 "recent_output": _tail_file(
                     stdout_log, _DEFAULT_RUNNING_TAIL_LINES
+                ),
+                "artifacts": _job_artifacts_payload(
+                    log_dir=log_dir,
+                    stdout_log=stdout_log,
+                    json_report=json_report,
+                    metadata=metadata,
                 ),
             }
     else:
@@ -227,6 +287,12 @@ def _scenario_status_payload(job_id: str) -> dict[str, Any]:
         "status": "completed",
         "job_id": job_id,
         "returncode": returncode,
+        "artifacts": _job_artifacts_payload(
+            log_dir=log_dir,
+            stdout_log=stdout_log,
+            json_report=json_report,
+            metadata=metadata,
+        ),
     }
     if summary_payload is None:
         response["summary"] = None
@@ -236,6 +302,30 @@ def _scenario_status_payload(job_id: str) -> dict[str, Any]:
         )
     else:
         response.update(summary_payload)
+
+    existing_metadata = _read_metadata(metadata)
+    existing_metadata.update(
+        {
+            "job_id": job_id,
+            "status": "completed",
+            "completed_at": _utc_timestamp(),
+            "returncode": returncode,
+            "ok": response["ok"],
+            "artifacts": response["artifacts"],
+        }
+    )
+    _write_job_metadata(metadata, existing_metadata)
+    _append_job_index_event(
+        log_dir,
+        {
+            "event": "completed",
+            "timestamp": _utc_timestamp(),
+            "job_id": job_id,
+            "ok": response["ok"],
+            "returncode": returncode,
+            "artifacts": response["artifacts"],
+        },
+    )
 
     return response
 
@@ -262,6 +352,11 @@ def get_scenario_logs(
             )
 
     stdout_log = Path(job["stdout_log"])
+    json_report = Path(job["json_report"])
+    metadata = Path(
+        job.get("metadata") or stdout_log.with_name(f"{job_id}_meta.json")
+    )
+    log_dir = stdout_log.parent
     if not stdout_log.exists():
         return json.dumps(
             {
@@ -276,6 +371,57 @@ def get_scenario_logs(
             "job_id": job_id,
             "lines": lines,
             "output": _tail_file(stdout_log, lines),
+            "output_lines": _tail_lines(stdout_log, lines),
+            "artifacts": _job_artifacts_payload(
+                log_dir=log_dir,
+                stdout_log=stdout_log,
+                json_report=json_report,
+                metadata=metadata,
+            ),
+        }
+    )
+
+
+@mcp.tool(
+    description=(
+        "Return artifact paths and metadata for a behave job so agents can "
+        "parse full logs and reports from disk."
+    )
+)
+def get_scenario_artifacts(job_id: str) -> str:
+    with _JOBS_LOCK:
+        job = ACTIVE_JOBS.get(job_id)
+
+    if job is None:
+        job = _recover_job_from_disk(job_id)
+        if job is None:
+            return json.dumps(
+                {"ok": False, "error": f"Unknown job_id: {job_id}"}
+            )
+
+    stdout_log = Path(job["stdout_log"])
+    json_report = Path(job["json_report"])
+    metadata = Path(
+        job.get("metadata") or stdout_log.with_name(f"{job_id}_meta.json")
+    )
+    log_dir = stdout_log.parent
+
+    return json.dumps(
+        {
+            "ok": True,
+            "job_id": job_id,
+            "artifacts": _job_artifacts_payload(
+                log_dir=log_dir,
+                stdout_log=stdout_log,
+                json_report=json_report,
+                metadata=metadata,
+            ),
+            "metadata": _read_metadata(metadata),
+            "exists": {
+                "stdout_log": stdout_log.exists(),
+                "json_report": json_report.exists(),
+                "metadata": metadata.exists(),
+            },
         }
     )
 
@@ -337,14 +483,88 @@ def _recover_job_from_disk(job_id: str) -> dict[str, Any] | None:
     log_dir = resolve_log_dir(repo_root)
     stdout_log = log_dir / f"{job_id}_stdout.log"
     json_report = log_dir / f"{job_id}_report.json"
-    if not stdout_log.exists() and not json_report.exists():
+    metadata = log_dir / f"{job_id}_meta.json"
+    if (
+        not stdout_log.exists()
+        and not json_report.exists()
+        and not metadata.exists()
+    ):
         return None
+
+    metadata_payload = _read_metadata(metadata)
+    if metadata_payload:
+        metadata_artifacts = metadata_payload.get("artifacts", {})
+        stdout_log = Path(
+            metadata_artifacts.get("stdout_log", str(stdout_log))
+        )
+        json_report = Path(
+            metadata_artifacts.get("json_report", str(json_report))
+        )
+        metadata = Path(metadata_artifacts.get("metadata", str(metadata)))
+
     return {
         "process": None,
         "json_report": json_report,
         "stdout_log": stdout_log,
+        "metadata": metadata,
         "log_file_handle": None,
     }
+
+
+def _job_artifacts_payload(
+    *,
+    log_dir: Path,
+    stdout_log: Path,
+    json_report: Path,
+    metadata: Path,
+) -> dict[str, str]:
+    return {
+        "log_dir": str(log_dir),
+        "stdout_log": str(stdout_log),
+        "json_report": str(json_report),
+        "metadata": str(metadata),
+    }
+
+
+def _utc_timestamp() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _read_metadata(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _write_job_metadata(path: Path, payload: dict[str, Any]) -> None:
+    try:
+        path.write_text(
+            json.dumps(payload, ensure_ascii=True, sort_keys=True, indent=2)
+            + "\n",
+            encoding="utf-8",
+        )
+    except OSError:
+        # Metadata write failures should not break job execution/status checks.
+        return
+
+
+def _append_job_index_event(
+    log_dir: Path, event_payload: dict[str, Any]
+) -> None:
+    index_path = log_dir / _JOB_INDEX_FILE_NAME
+    try:
+        with index_path.open("a", encoding="utf-8") as index_stream:
+            index_stream.write(
+                json.dumps(event_payload, ensure_ascii=True, sort_keys=True)
+                + "\n"
+            )
+    except OSError:
+        # Index write failures should not break job execution/status checks.
+        return
 
 
 def _tail_file(path: Path, lines: int) -> str:
@@ -354,6 +574,15 @@ def _tail_file(path: Path, lines: int) -> str:
     with path.open("r", encoding="utf-8", errors="replace") as stream:
         tail = deque(stream, maxlen=lines)
     return "".join(tail).rstrip() if tail else "Waiting for output..."
+
+
+def _tail_lines(path: Path, lines: int) -> list[str]:
+    if not path.exists():
+        return []
+
+    with path.open("r", encoding="utf-8", errors="replace") as stream:
+        tail = deque(stream, maxlen=lines)
+    return [line.rstrip("\n") for line in tail]
 
 
 def _scenario_status_from_steps(steps: list[dict[str, Any]]) -> str:

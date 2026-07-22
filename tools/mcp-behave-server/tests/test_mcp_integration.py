@@ -71,6 +71,7 @@ async def test_mcp_lists_expected_tools():
     assert "start_behave_scenario" in tools
     assert "wait_for_scenario_completion" in tools
     assert "get_scenario_logs" in tools
+    assert "get_scenario_artifacts" in tools
     assert tools["start_behave_scenario"].description
 
 
@@ -114,6 +115,7 @@ async def test_mcp_start_wait_and_log_flow(monkeypatch, tmp_path):
         start_payload = _result_json(start_result)
         assert start_payload["ok"] is True
         assert start_payload["status"] == "started"
+        assert "artifacts" in start_payload
         job_id = start_payload["job_id"]
 
         completed_result = await client.call_tool(
@@ -128,6 +130,7 @@ async def test_mcp_start_wait_and_log_flow(monkeypatch, tmp_path):
         assert completed_payload["status"] == "completed"
         assert completed_payload["ok"] is True
         assert completed_payload["summary"]["steps"]["passed"] == 1
+        assert "artifacts" in completed_payload
 
         logs_result = await client.call_tool(
             "get_scenario_logs", {"job_id": job_id, "lines": 2}
@@ -135,6 +138,14 @@ async def test_mcp_start_wait_and_log_flow(monkeypatch, tmp_path):
         logs_payload = _result_json(logs_result)
         assert logs_payload["ok"] is True
         assert logs_payload["output"] == "line2\nline3"
+        assert logs_payload["output_lines"] == ["line2", "line3"]
+
+        artifacts_result = await client.call_tool(
+            "get_scenario_artifacts", {"job_id": job_id}
+        )
+        artifacts_payload = _result_json(artifacts_result)
+        assert artifacts_payload["ok"] is True
+        assert artifacts_payload["exists"]["stdout_log"] is True
 
 
 @pytest.mark.e2e
