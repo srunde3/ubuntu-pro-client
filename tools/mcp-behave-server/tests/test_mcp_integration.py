@@ -23,6 +23,16 @@ def _result_json(result):
     raise AssertionError("Expected text content block in tool result")
 
 
+def _make_fake_repo(tmp_path: Path) -> Path:
+    repo_root = tmp_path / "fake-repo"
+    (repo_root / "features" / "cli").mkdir(parents=True)
+    (repo_root / "tox.ini").write_text("[tox]\n", encoding="utf-8")
+    (repo_root / "features" / "cli" / "sample.feature").write_text(
+        "Feature: sample\n", encoding="utf-8"
+    )
+    return repo_root
+
+
 class _FakeProcess:
     def __init__(self, report_path=None):
         self._report_path = report_path
@@ -86,6 +96,36 @@ async def test_mcp_list_features_returns_json(monkeypatch):
     payload = _result_json(result)
     assert "features" in payload
     assert "features/cli/attach.feature" in payload["features"]
+
+
+@pytest.mark.asyncio
+async def test_mcp_list_features_uses_repo_root_override(tmp_path):
+    fake_repo = _make_fake_repo(tmp_path)
+
+    async with create_connected_server_and_client_session(mcp) as client:
+        result = await client.call_tool(
+            "list_features", {"repo_root": str(fake_repo)}
+        )
+
+    payload = _result_json(result)
+    assert payload["ok"] is True
+    assert payload["repo_root"] == str(fake_repo)
+    assert payload["features"] == ["features/cli/sample.feature"]
+
+
+@pytest.mark.asyncio
+async def test_mcp_list_features_rejects_invalid_repo_root(tmp_path):
+    invalid_repo = tmp_path / "invalid-root"
+    invalid_repo.mkdir()
+
+    async with create_connected_server_and_client_session(mcp) as client:
+        result = await client.call_tool(
+            "list_features", {"repo_root": str(invalid_repo)}
+        )
+
+    payload = _result_json(result)
+    assert payload["ok"] is False
+    assert "Invalid repo_root" in payload["error"]
 
 
 @pytest.mark.asyncio

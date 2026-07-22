@@ -12,6 +12,16 @@ from behave_mcp.server import (
 )
 
 
+def _make_fake_repo(tmp_path: Path) -> Path:
+    repo_root = tmp_path / "fake-repo"
+    (repo_root / "features" / "cli").mkdir(parents=True)
+    (repo_root / "tox.ini").write_text("[tox]\n", encoding="utf-8")
+    (repo_root / "features" / "cli" / "sample.feature").write_text(
+        "Feature: sample\n", encoding="utf-8"
+    )
+    return repo_root
+
+
 def test_list_features_returns_feature_files(monkeypatch):
     repo_root = Path(__file__).resolve().parents[3]
     monkeypatch.setenv("UBUNTU_PRO_CLIENT_REPO", str(repo_root))
@@ -20,6 +30,27 @@ def test_list_features_returns_feature_files(monkeypatch):
 
     assert "features" in result
     assert "features/cli/attach.feature" in result["features"]
+
+
+def test_list_features_uses_repo_root_override(tmp_path):
+    repo_root = _make_fake_repo(tmp_path)
+
+    result = json.loads(list_features(repo_root=str(repo_root)))
+
+    assert result["ok"] is True
+    assert result["repo_root"] == str(repo_root)
+    assert result["features"] == ["features/cli/sample.feature"]
+
+
+def test_list_features_rejects_invalid_repo_root(tmp_path):
+    invalid_repo = tmp_path / "invalid-root"
+    invalid_repo.mkdir()
+
+    result = json.loads(list_features(repo_root=str(invalid_repo)))
+
+    assert result["ok"] is False
+    assert "Invalid repo_root" in result["error"]
+    assert result["features"] == []
 
 
 def test_start_behave_scenario_rejects_unlisted_feature(monkeypatch):
@@ -117,6 +148,52 @@ def test_start_behave_scenario_builds_command(monkeypatch, tmp_path):
     assert "json" in calls["command"]
     assert calls["cwd"] == str(Path(__file__).resolve().parents[3])
     assert calls["env"]["UACLIENT_BEHAVE_CONTRACT_TOKEN"] == "token"
+
+
+def test_start_behave_scenario_uses_repo_root_override(monkeypatch, tmp_path):
+    ACTIVE_JOBS.clear()
+    fake_repo = _make_fake_repo(tmp_path)
+    monkeypatch.setenv("MCP_LOG_DIR", str(tmp_path / "logs"))
+
+    class FakePopen:
+        def __init__(self, command, cwd, env, stdout, stderr, text):
+            calls["command"] = command
+            calls["cwd"] = cwd
+            self.returncode = None
+
+        def poll(self):
+            return self.returncode
+
+    calls = {}
+    monkeypatch.setattr(server_module.subprocess, "Popen", FakePopen)
+
+    result = json.loads(
+        start_behave_scenario(
+            "features/cli/sample.feature",
+            machine_types=["lxd-container"],
+            repo_root=str(fake_repo),
+        )
+    )
+
+    assert result["ok"] is True
+    assert calls["cwd"] == str(fake_repo)
+
+
+def test_start_behave_scenario_rejects_invalid_repo_root(tmp_path):
+    ACTIVE_JOBS.clear()
+    invalid_repo = tmp_path / "invalid-root"
+    invalid_repo.mkdir()
+
+    result = json.loads(
+        start_behave_scenario(
+            "features/cli/attach.feature",
+            machine_types=["lxd-container"],
+            repo_root=str(invalid_repo),
+        )
+    )
+
+    assert result["ok"] is False
+    assert "Invalid repo_root" in result["error"]
 
 
 def test_start_behave_scenario_requires_machine_types(monkeypatch):
@@ -305,6 +382,19 @@ def test_get_scenario_logs_returns_tail(tmp_path):
     assert result["output_lines"] == ["l2", "l3"]
 
 
+def test_get_scenario_logs_rejects_invalid_repo_root(tmp_path):
+    ACTIVE_JOBS.clear()
+    invalid_repo = tmp_path / "invalid-root"
+    invalid_repo.mkdir()
+
+    result = json.loads(
+        get_scenario_logs("missing-job", repo_root=str(invalid_repo))
+    )
+
+    assert result["ok"] is False
+    assert "Invalid repo_root" in result["error"]
+
+
 def test_get_scenario_artifacts_returns_paths_and_metadata(tmp_path):
     ACTIVE_JOBS.clear()
     job_id = "jobmeta01"
@@ -332,6 +422,19 @@ def test_get_scenario_artifacts_returns_paths_and_metadata(tmp_path):
     assert result["exists"]["json_report"] is True
     assert result["exists"]["metadata"] is True
     assert result["metadata"]["status"] == "started"
+
+
+def test_get_scenario_artifacts_rejects_invalid_repo_root(tmp_path):
+    ACTIVE_JOBS.clear()
+    invalid_repo = tmp_path / "invalid-root"
+    invalid_repo.mkdir()
+
+    result = json.loads(
+        get_scenario_artifacts("missing-job", repo_root=str(invalid_repo))
+    )
+
+    assert result["ok"] is False
+    assert "Invalid repo_root" in result["error"]
 
 
 def test_main_uses_stdio_transport_by_default(monkeypatch):

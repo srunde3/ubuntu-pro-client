@@ -42,9 +42,19 @@ async def healthcheck(request):
         "an allowed behave scenario."
     )
 )
-def list_features() -> str:
-    repo_root = resolve_repo_root()
-    return json.dumps({"features": _discover_feature_files(repo_root)})
+def list_features(repo_root: str = "") -> str:
+    try:
+        resolved_repo_root = resolve_repo_root(repo_root or None)
+    except ValueError as exc:
+        return json.dumps({"ok": False, "error": str(exc), "features": []})
+
+    return json.dumps(
+        {
+            "ok": True,
+            "repo_root": str(resolved_repo_root),
+            "features": _discover_feature_files(resolved_repo_root),
+        }
+    )
 
 
 @mcp.tool(
@@ -59,9 +69,16 @@ def start_behave_scenario(
     machine_types: list[str],
     scenario_name: str = "",
     releases: list[str] | None = None,
+    repo_root: str = "",
 ) -> str:
-    repo_root = resolve_repo_root()
-    feature_validation_error = validate_feature_file(repo_root, feature_file)
+    try:
+        resolved_repo_root = resolve_repo_root(repo_root or None)
+    except ValueError as exc:
+        return json.dumps({"ok": False, "error": str(exc)})
+
+    feature_validation_error = validate_feature_file(
+        resolved_repo_root, feature_file
+    )
     if feature_validation_error:
         return json.dumps({"ok": False, "error": feature_validation_error})
 
@@ -90,7 +107,7 @@ def start_behave_scenario(
             }
         )
 
-    log_dir = resolve_log_dir(repo_root)
+    log_dir = resolve_log_dir(resolved_repo_root)
     job_id = uuid.uuid4().hex[:8]
     json_report_path = log_dir / f"{job_id}_report.json"
     stdout_path = log_dir / f"{job_id}_stdout.log"
@@ -115,7 +132,7 @@ def start_behave_scenario(
     log_file = stdout_path.open("w", encoding="utf-8")
     process = subprocess.Popen(
         command,
-        cwd=str(repo_root),
+        cwd=str(resolved_repo_root),
         env=env,
         stdout=log_file,
         stderr=subprocess.STDOUT,
@@ -142,7 +159,7 @@ def start_behave_scenario(
             "machine_types": machine_types,
             "releases": releases or [],
             "command": command,
-            "repo_root": str(repo_root),
+            "repo_root": str(resolved_repo_root),
             "artifacts": _job_artifacts_payload(
                 log_dir=log_dir,
                 stdout_log=stdout_path,
@@ -197,6 +214,7 @@ def wait_for_scenario_completion(
     job_id: str,
     max_wait_seconds: int = _DEFAULT_WAIT_TIMEOUT_SECONDS,
     poll_interval_seconds: float = _DEFAULT_WAIT_POLL_INTERVAL_SECONDS,
+    repo_root: str = "",
 ) -> str:
     if max_wait_seconds <= 0:
         return json.dumps(
@@ -216,7 +234,7 @@ def wait_for_scenario_completion(
     deadline = time.monotonic() + max_wait_seconds
 
     while True:
-        payload = _scenario_status_payload(job_id)
+        payload = _scenario_status_payload(job_id, repo_root or None)
         if payload.get("ok") is False:
             return json.dumps(payload)
 
@@ -240,12 +258,17 @@ def wait_for_scenario_completion(
         time.sleep(poll_interval_seconds)
 
 
-def _scenario_status_payload(job_id: str) -> dict[str, Any]:
+def _scenario_status_payload(
+    job_id: str, repo_root_override: str | None = None
+) -> dict[str, Any]:
     with _JOBS_LOCK:
         job = ACTIVE_JOBS.get(job_id)
 
     if job is None:
-        job = _recover_job_from_disk(job_id)
+        try:
+            job = _recover_job_from_disk(job_id, repo_root_override)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
         if job is None:
             return {"ok": False, "error": f"Unknown job_id: {job_id}"}
 
@@ -337,7 +360,9 @@ def _scenario_status_payload(job_id: str) -> dict[str, Any]:
     )
 )
 def get_scenario_logs(
-    job_id: str, lines: int = _DEFAULT_LOG_TAIL_LINES
+    job_id: str,
+    lines: int = _DEFAULT_LOG_TAIL_LINES,
+    repo_root: str = "",
 ) -> str:
     lines = max(1, min(lines, _MAX_LOG_TAIL_LINES))
 
@@ -345,7 +370,10 @@ def get_scenario_logs(
         job = ACTIVE_JOBS.get(job_id)
 
     if job is None:
-        job = _recover_job_from_disk(job_id)
+        try:
+            job = _recover_job_from_disk(job_id, repo_root or None)
+        except ValueError as exc:
+            return json.dumps({"ok": False, "error": str(exc)})
         if job is None:
             return json.dumps(
                 {"ok": False, "error": f"Unknown job_id: {job_id}"}
@@ -388,12 +416,15 @@ def get_scenario_logs(
         "parse full logs and reports from disk."
     )
 )
-def get_scenario_artifacts(job_id: str) -> str:
+def get_scenario_artifacts(job_id: str, repo_root: str = "") -> str:
     with _JOBS_LOCK:
         job = ACTIVE_JOBS.get(job_id)
 
     if job is None:
-        job = _recover_job_from_disk(job_id)
+        try:
+            job = _recover_job_from_disk(job_id, repo_root or None)
+        except ValueError as exc:
+            return json.dumps({"ok": False, "error": str(exc)})
         if job is None:
             return json.dumps(
                 {"ok": False, "error": f"Unknown job_id: {job_id}"}
@@ -426,19 +457,33 @@ def get_scenario_artifacts(job_id: str) -> str:
     )
 
 
-def resolve_repo_root() -> Path:
+def resolve_repo_root(repo_root_override: str | None = None) -> Path:
+    if repo_root_override:
+        return _validated_repo_root(Path(repo_root_override).expanduser())
+
     env_value = os.environ.get("UBUNTU_PRO_CLIENT_REPO")
     if env_value:
-        return Path(env_value).resolve()
+        return _validated_repo_root(Path(env_value).expanduser())
 
     current = Path(__file__).resolve()
     for candidate in [current, *current.parents]:
         if (candidate / "features").exists() and (
             candidate / "tox.ini"
         ).exists():
-            return candidate
+            return candidate.resolve()
 
-    return current.parents[3]
+    return _validated_repo_root(current.parents[3])
+
+
+def _validated_repo_root(candidate: Path) -> Path:
+    resolved = candidate.resolve()
+    features_dir = resolved / "features"
+    tox_file = resolved / "tox.ini"
+    if not features_dir.exists() or not tox_file.exists():
+        raise ValueError(
+            "Invalid repo_root: expected directory containing features/ and tox.ini"
+        )
+    return resolved
 
 
 def validate_feature_file(repo_root: Path, feature_file: str) -> str | None:
@@ -478,8 +523,10 @@ def resolve_log_dir(repo_root: Path) -> Path:
     return log_dir
 
 
-def _recover_job_from_disk(job_id: str) -> dict[str, Any] | None:
-    repo_root = resolve_repo_root()
+def _recover_job_from_disk(
+    job_id: str, repo_root_override: str | None = None
+) -> dict[str, Any] | None:
+    repo_root = resolve_repo_root(repo_root_override)
     log_dir = resolve_log_dir(repo_root)
     stdout_log = log_dir / f"{job_id}_stdout.log"
     json_report = log_dir / f"{job_id}_report.json"
