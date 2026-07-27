@@ -210,7 +210,9 @@ def test_start_behave_scenario_requires_machine_types(monkeypatch):
     assert "machine_types is required" in result["error"]
 
 
-def test_start_behave_scenario_rejects_unsupported_machine_type(monkeypatch):
+def test_start_behave_scenario_rejects_cloud_machine_type_by_default(
+    monkeypatch,
+):
     ACTIVE_JOBS.clear()
     monkeypatch.setenv(
         "UBUNTU_PRO_CLIENT_REPO", str(Path(__file__).resolve().parents[3])
@@ -223,7 +225,36 @@ def test_start_behave_scenario_rejects_unsupported_machine_type(monkeypatch):
     )
 
     assert result["ok"] is False
-    assert "Unsupported machine_types" in result["error"]
+    assert "Cloud machine_types are disabled by default" in result["error"]
+
+
+def test_start_behave_scenario_allows_cloud_machine_type_with_toggle(
+    monkeypatch, tmp_path
+):
+    ACTIVE_JOBS.clear()
+    monkeypatch.setenv("MCP_LOG_DIR", str(tmp_path))
+    monkeypatch.setenv(
+        "UBUNTU_PRO_CLIENT_REPO", str(Path(__file__).resolve().parents[3])
+    )
+    monkeypatch.setenv("MCP_ALLOW_CLOUD_MACHINE_TYPES", "1")
+
+    class FakePopen:
+        def __init__(self, command, cwd, env, stdout, stderr, text):
+            self.returncode = None
+
+        def poll(self):
+            return self.returncode
+
+    monkeypatch.setattr(server_module.subprocess, "Popen", FakePopen)
+
+    result = json.loads(
+        start_behave_scenario(
+            "features/cli/attach.feature",
+            machine_types=["azure.generic"],
+        )
+    )
+
+    assert result["ok"] is True
 
 
 def test_wait_for_scenario_completion_running_to_completed(

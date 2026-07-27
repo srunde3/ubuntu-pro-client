@@ -87,7 +87,12 @@ The server will forward a small allowlist of environment variables to the behave
 - `UACLIENT_BEHAVE_CONTRACT_TOKEN`
 - `UACLIENT_BEHAVE_INSTALL_FROM`
 
+The server also supports one MCP-only safety toggle:
+
+- `MCP_ALLOW_CLOUD_MACHINE_TYPES`: defaults to disabled. Set to `1` (or `true`/`yes`/`on`) to allow cloud machine types (`aws.generic`, `gcp.generic`, `azure.generic`).
+
 ## Safety constraints
 
 - `feature_file` must be one of the paths returned by `list_features`.
-- `machine_types` is required and currently limited to: `lxd-container`, `lxd-vm`.
+- `machine_types` is required.
+- Cloud machine types are blocked by default and require setting `MCP_ALLOW_CLOUD_MACHINE_TYPES=1`.

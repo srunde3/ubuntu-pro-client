@@ -16,11 +16,19 @@ from starlette.responses import JSONResponse
 host = os.environ.get("MCP_HOST", "127.0.0.1")
 port = int(os.environ.get("MCP_PORT", "8000"))
 mcp = FastMCP("Ubuntu Pro Client Behave MCP", host=host, port=port)
-ALLOWED_MACHINE_TYPES = {"lxd-container", "lxd-vm"}
-ALLOWED_ENV_VARS = {
-    "UACLIENT_BEHAVE_CONTRACT_TOKEN",
-    "UACLIENT_BEHAVE_INSTALL_FROM",
+ALLOWED_MACHINE_TYPES = {
+    "lxd-container",
+    "lxd-vm",
+    "aws.generic",
+    "gcp.generic",
+    "azure.generic",
 }
+CLOUD_MACHINE_TYPES = {
+    "aws.generic",
+    "gcp.generic",
+    "azure.generic",
+}
+ALLOW_CLOUD_MACHINE_TYPES_ENV_VAR = "MCP_ALLOW_CLOUD_MACHINE_TYPES"
 ACTIVE_JOBS: dict[str, dict[str, Any]] = {}
 _JOBS_LOCK = threading.Lock()
 _DEFAULT_RUNNING_TAIL_LINES = 12
@@ -29,6 +37,11 @@ _MAX_LOG_TAIL_LINES = 2000
 _DEFAULT_WAIT_TIMEOUT_SECONDS = 1800
 _DEFAULT_WAIT_POLL_INTERVAL_SECONDS = 5.0
 _JOB_INDEX_FILE_NAME = "index.jsonl"
+
+
+def _env_flag_enabled(name: str) -> bool:
+    value = os.environ.get(name, "")
+    return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 @mcp.custom_route("/healthz", methods=["GET"])
@@ -107,6 +120,27 @@ def start_behave_scenario(
             }
         )
 
+    cloud_machine_types = sorted(
+        machine_type
+        for machine_type in machine_types
+        if machine_type in CLOUD_MACHINE_TYPES
+    )
+    if cloud_machine_types and not _env_flag_enabled(
+        ALLOW_CLOUD_MACHINE_TYPES_ENV_VAR
+    ):
+        return json.dumps(
+            {
+                "ok": False,
+                "error": (
+                    "Cloud machine_types are disabled by default. "
+                    "Set "
+                    f"{ALLOW_CLOUD_MACHINE_TYPES_ENV_VAR}=1 "
+                    "to allow: "
+                    f"{','.join(cloud_machine_types)}"
+                ),
+            }
+        )
+
     log_dir = resolve_log_dir(resolved_repo_root)
     job_id = uuid.uuid4().hex[:8]
     json_report_path = log_dir / f"{job_id}_report.json"
@@ -122,13 +156,6 @@ def start_behave_scenario(
     command.extend(["-f", "json", "-o", str(json_report_path), "-f", "plain"])
 
     env = os.environ.copy()
-    env.update(
-        {
-            key: os.environ[key]
-            for key in sorted(ALLOWED_ENV_VARS)
-            if key in os.environ
-        }
-    )
     log_file = stdout_path.open("w", encoding="utf-8")
     process = subprocess.Popen(
         command,
