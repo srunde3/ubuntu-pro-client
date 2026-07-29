@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server import FastMCP
 from starlette.responses import JSONResponse
 
 host = os.environ.get("MCP_HOST", "127.0.0.1")
@@ -22,11 +22,17 @@ ALLOWED_MACHINE_TYPES = {
     "aws.generic",
     "gcp.generic",
     "azure.generic",
+    "aws.pro",
+    "gcp.pro",
+    "azure.pro",
 }
 CLOUD_MACHINE_TYPES = {
     "aws.generic",
     "gcp.generic",
     "azure.generic",
+    "aws.pro",
+    "gcp.pro",
+    "azure.pro",
 }
 ALLOW_CLOUD_MACHINE_TYPES_ENV_VAR = "MCP_ALLOW_CLOUD_MACHINE_TYPES"
 ACTIVE_JOBS: dict[str, dict[str, Any]] = {}
