@@ -2,17 +2,18 @@ import json
 import os
 from pathlib import Path
 
+import behave_mcp.adapters as adapters_module
 import behave_mcp.server as server_module
 import pytest
-from behave_mcp.server import ACTIVE_JOBS, mcp
+from behave_mcp.server import mcp, registry
 from mcp.shared.memory import create_connected_server_and_client_session
 
 
 @pytest.fixture(autouse=True)
 def clear_jobs():
-    ACTIVE_JOBS.clear()
+    registry.clear()
     yield
-    ACTIVE_JOBS.clear()
+    registry.clear()
 
 
 def _result_json(result):
@@ -141,7 +142,7 @@ async def test_mcp_start_wait_and_log_flow(monkeypatch, tmp_path):
         proc = _FakeProcess(report_path=report_path)
         return proc
 
-    monkeypatch.setattr(server_module.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(adapters_module.subprocess, "Popen", fake_popen)
 
     async with create_connected_server_and_client_session(mcp) as client:
         start_result = await client.call_tool(
@@ -228,9 +229,9 @@ async def test_mcp_e2e_long_running_attach_flow(monkeypatch):
             )
             completed_payload = _result_json(status_result)
         finally:
-            job = ACTIVE_JOBS.get(job_id)
-            if job and job.get("process") is not None:
-                process = job["process"]
+            job = registry.get(job_id)
+            if job and job.process_handle is not None:
+                process = job.process_handle
                 if process.poll() is None:
                     process.terminate()
 
@@ -295,3 +296,18 @@ async def test_mcp_start_rejects_cloud_machine_types():
     payload = _result_json(result)
     assert payload["ok"] is False
     assert "Cloud machine_types are disabled by default" in payload["error"]
+
+
+def test_main_uses_stdio_transport_by_default(monkeypatch):
+    monkeypatch.delenv("MCP_TRANSPORT", raising=False)
+    captured = {}
+
+    def fake_run(transport, mount_path=None):
+        captured["transport"] = transport
+        captured["mount_path"] = mount_path
+
+    monkeypatch.setattr(server_module.mcp, "run", fake_run)
+
+    server_module.main()
+
+    assert captured["transport"] == "stdio"

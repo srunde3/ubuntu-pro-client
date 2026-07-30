@@ -1,98 +1,183 @@
 import json
 from pathlib import Path
 
-import behave_mcp.server as server_module
-from behave_mcp.server import (
-    ACTIVE_JOBS,
-    get_scenario_artifacts,
-    get_scenario_logs,
-    list_features,
-    start_behave_scenario,
-    wait_for_scenario_completion,
-)
+from behave_mcp.adapters import InMemoryJobRegistry, LocalArtifactStore
+from behave_mcp.ports import Job, LogFileOpenError, ProcessStartError
+from behave_mcp.service import BehaveService
 
 
-def _make_fake_repo(tmp_path: Path) -> Path:
-    repo_root = tmp_path / "fake-repo"
-    (repo_root / "features" / "cli").mkdir(parents=True)
+class FakeHandle:
+    def __init__(self, returncode=None):
+        self.returncode = returncode
+        self.closed = False
+        self.terminated = False
+
+    def poll(self):
+        return self.returncode
+
+    def close(self):
+        self.closed = True
+
+    def terminate(self):
+        self.terminated = True
+
+
+class FakeLauncher:
+    def __init__(self, handle=None, error=None):
+        self.calls = []
+        self._handle = handle if handle is not None else FakeHandle()
+        self._error = error
+
+    def launch(self, command, cwd, env, stdout_log_path):
+        self.calls.append(
+            {
+                "command": command,
+                "cwd": cwd,
+                "env": env,
+                "stdout_log_path": stdout_log_path,
+            }
+        )
+        if self._error is not None:
+            raise self._error
+        return self._handle
+
+
+class FakeConfig:
+    def __init__(
+        self,
+        *,
+        repo_root=None,
+        log_dir=None,
+        allow_cloud=False,
+        max_parallel=(1, None),
+        env=None,
+        transport="stdio",
+        repo_root_error=None,
+    ):
+        self._repo_root = repo_root
+        self._log_dir = log_dir
+        self._allow_cloud = allow_cloud
+        self._max_parallel = max_parallel
+        self._env = env if env is not None else {}
+        self._transport = transport
+        self._repo_root_error = repo_root_error
+
+    def resolve_repo_root(self, override):
+        if self._repo_root_error is not None:
+            raise ValueError(self._repo_root_error)
+        if override:
+            return Path(override)
+        return self._repo_root
+
+    def resolve_log_dir(self, repo_root):
+        return self._log_dir
+
+    def allow_cloud_machine_types(self):
+        return self._allow_cloud
+
+    def max_parallel_jobs(self):
+        return self._max_parallel
+
+    def subprocess_env(self):
+        return dict(self._env)
+
+    def transport(self):
+        return self._transport
+
+
+def _make_repo_with_feature(
+    tmp_path, rel="features/cli/attach.feature"
+) -> Path:
+    repo_root = tmp_path / "repo"
+    feature_path = repo_root / rel
+    feature_path.parent.mkdir(parents=True, exist_ok=True)
     (repo_root / "tox.ini").write_text("[tox]\n", encoding="utf-8")
-    (repo_root / "features" / "cli" / "sample.feature").write_text(
-        "Feature: sample\n", encoding="utf-8"
-    )
+    feature_path.write_text("Feature: sample\n", encoding="utf-8")
     return repo_root
 
 
-def test_list_features_returns_feature_files(monkeypatch):
-    repo_root = Path(__file__).resolve().parents[3]
-    monkeypatch.setenv("UBUNTU_PRO_CLIENT_REPO", str(repo_root))
+def _make_service(
+    config,
+    *,
+    launcher=None,
+    registry=None,
+    monotonic=None,
+    sleep=None,
+    now_utc=None,
+    new_job_id=None,
+) -> BehaveService:
+    return BehaveService(
+        config=config,
+        artifact_store=LocalArtifactStore(),
+        registry=registry if registry is not None else InMemoryJobRegistry(),
+        launcher=launcher if launcher is not None else FakeLauncher(),
+        monotonic=monotonic if monotonic is not None else (lambda: 0.0),
+        sleep=sleep if sleep is not None else (lambda seconds: None),
+        now_utc=now_utc if now_utc is not None else (lambda: "T0"),
+        new_job_id=(
+            new_job_id if new_job_id is not None else (lambda: "job0001")
+        ),
+    )
 
-    result = json.loads(list_features())
 
-    assert "features" in result
+def test_list_features_returns_feature_files(tmp_path):
+    repo_root = _make_repo_with_feature(tmp_path)
+    service = _make_service(FakeConfig(repo_root=repo_root))
+
+    result = service.list_features()
+
+    assert result["ok"] is True
     assert "features/cli/attach.feature" in result["features"]
 
 
 def test_list_features_uses_repo_root_override(tmp_path):
-    repo_root = _make_fake_repo(tmp_path)
+    repo_root = _make_repo_with_feature(
+        tmp_path, "features/cli/sample.feature"
+    )
+    service = _make_service(FakeConfig(repo_root=None))
 
-    result = json.loads(list_features(repo_root=str(repo_root)))
+    result = service.list_features(repo_root=str(repo_root))
 
     assert result["ok"] is True
     assert result["repo_root"] == str(repo_root)
     assert result["features"] == ["features/cli/sample.feature"]
 
 
-def test_list_features_rejects_invalid_repo_root(tmp_path):
-    invalid_repo = tmp_path / "invalid-root"
-    invalid_repo.mkdir()
+def test_list_features_rejects_invalid_repo_root():
+    service = _make_service(
+        FakeConfig(repo_root_error="Invalid repo_root: bad")
+    )
 
-    result = json.loads(list_features(repo_root=str(invalid_repo)))
+    result = service.list_features(repo_root="/whatever")
 
     assert result["ok"] is False
     assert "Invalid repo_root" in result["error"]
     assert result["features"] == []
 
 
-def test_start_behave_scenario_rejects_unlisted_feature(monkeypatch):
-    ACTIVE_JOBS.clear()
-    monkeypatch.setenv(
-        "UBUNTU_PRO_CLIENT_REPO", str(Path(__file__).resolve().parents[3])
-    )
+def test_start_scenario_rejects_unlisted_feature(tmp_path):
+    repo_root = _make_repo_with_feature(tmp_path)
+    service = _make_service(FakeConfig(repo_root=repo_root, log_dir=tmp_path))
 
-    result = json.loads(
-        start_behave_scenario(
-            "features/cli/does-not-exist.feature",
-            machine_types=["lxd-container"],
-        )
+    result = service.start_scenario(
+        "features/cli/does-not-exist.feature",
+        machine_types=["lxd-container"],
     )
 
     assert result["ok"] is False
     assert "Feature is not listed by list_features" in result["error"]
 
 
-def test_start_behave_scenario_accepts_normalized_listed_feature(
-    monkeypatch, tmp_path
-):
-    ACTIVE_JOBS.clear()
-    monkeypatch.setenv("MCP_LOG_DIR", str(tmp_path))
-    monkeypatch.setenv(
-        "UBUNTU_PRO_CLIENT_REPO", str(Path(__file__).resolve().parents[3])
+def test_start_scenario_accepts_normalized_listed_feature(tmp_path):
+    repo_root = _make_repo_with_feature(tmp_path)
+    launcher = FakeLauncher()
+    service = _make_service(
+        FakeConfig(repo_root=repo_root, log_dir=tmp_path), launcher=launcher
     )
 
-    class FakePopen:
-        def __init__(self, command, cwd, env, stdout, stderr, text):
-            self.returncode = None
-
-        def poll(self):
-            return self.returncode
-
-    monkeypatch.setattr(server_module.subprocess, "Popen", FakePopen)
-
-    result = json.loads(
-        start_behave_scenario(
-            "features/cli/../cli/attach.feature",
-            machine_types=["lxd-container"],
-        )
+    result = service.start_scenario(
+        "features/cli/../cli/attach.feature",
+        machine_types=["lxd-container"],
     )
 
     assert result["ok"] is True
@@ -100,195 +185,134 @@ def test_start_behave_scenario_accepts_normalized_listed_feature(
     assert result["artifacts"]["metadata"].endswith("_meta.json")
 
 
-def test_start_behave_scenario_builds_command(monkeypatch, tmp_path):
-    ACTIVE_JOBS.clear()
-    monkeypatch.setenv("MCP_LOG_DIR", str(tmp_path))
-    monkeypatch.setenv(
-        "UBUNTU_PRO_CLIENT_REPO", str(Path(__file__).resolve().parents[3])
+def test_start_scenario_builds_command(tmp_path):
+    repo_root = _make_repo_with_feature(tmp_path)
+    launcher = FakeLauncher()
+    service = _make_service(
+        FakeConfig(
+            repo_root=repo_root,
+            log_dir=tmp_path,
+            env={"UACLIENT_BEHAVE_CONTRACT_TOKEN": "token"},
+        ),
+        launcher=launcher,
     )
-    monkeypatch.setenv("UACLIENT_BEHAVE_CONTRACT_TOKEN", "token")
 
-    class FakePopen:
-        def __init__(self, command, cwd, env, stdout, stderr, text):
-            calls["command"] = command
-            calls["cwd"] = cwd
-            calls["env"] = env
-            calls["stdout"] = stdout
-            calls["stderr"] = stderr
-            calls["text"] = text
-            self.returncode = None
-
-        def poll(self):
-            return self.returncode
-
-    calls = {}
-
-    monkeypatch.setattr(server_module.subprocess, "Popen", FakePopen)
-
-    result = json.loads(
-        start_behave_scenario(
-            "features/cli/attach.feature",
-            machine_types=["lxd-container"],
-            scenario_name="attach",
-            releases=["resolute"],
-        )
+    result = service.start_scenario(
+        "features/cli/attach.feature",
+        machine_types=["lxd-container"],
+        scenario_name="attach",
+        releases=["resolute"],
     )
 
     assert result["ok"] is True
     assert "job_id" in result
-    assert calls["command"][:5] == [
+    call = launcher.calls[0]
+    assert call["command"][:5] == [
         "tox",
         "-e",
         "behave",
         "--",
         "features/cli/attach.feature",
     ]
-    assert "--name" in calls["command"]
-    assert "-f" in calls["command"]
-    assert "json" in calls["command"]
-    assert calls["cwd"] == str(Path(__file__).resolve().parents[3])
-    assert calls["env"]["UACLIENT_BEHAVE_CONTRACT_TOKEN"] == "token"
+    assert "--name" in call["command"]
+    assert "-f" in call["command"]
+    assert "json" in call["command"]
+    assert call["cwd"] == str(repo_root)
+    assert call["env"]["UACLIENT_BEHAVE_CONTRACT_TOKEN"] == "token"
 
 
-def test_start_behave_scenario_uses_repo_root_override(monkeypatch, tmp_path):
-    ACTIVE_JOBS.clear()
-    fake_repo = _make_fake_repo(tmp_path)
-    monkeypatch.setenv("MCP_LOG_DIR", str(tmp_path / "logs"))
+def test_start_scenario_uses_repo_root_override(tmp_path):
+    repo_root = _make_repo_with_feature(
+        tmp_path, "features/cli/sample.feature"
+    )
+    launcher = FakeLauncher()
+    service = _make_service(
+        FakeConfig(repo_root=None, log_dir=tmp_path), launcher=launcher
+    )
 
-    class FakePopen:
-        def __init__(self, command, cwd, env, stdout, stderr, text):
-            calls["command"] = command
-            calls["cwd"] = cwd
-            self.returncode = None
-
-        def poll(self):
-            return self.returncode
-
-    calls = {}
-    monkeypatch.setattr(server_module.subprocess, "Popen", FakePopen)
-
-    result = json.loads(
-        start_behave_scenario(
-            "features/cli/sample.feature",
-            machine_types=["lxd-container"],
-            repo_root=str(fake_repo),
-        )
+    result = service.start_scenario(
+        "features/cli/sample.feature",
+        machine_types=["lxd-container"],
+        repo_root=str(repo_root),
     )
 
     assert result["ok"] is True
-    assert calls["cwd"] == str(fake_repo)
+    assert launcher.calls[0]["cwd"] == str(repo_root)
 
 
-def test_start_behave_scenario_rejects_invalid_repo_root(tmp_path):
-    ACTIVE_JOBS.clear()
-    invalid_repo = tmp_path / "invalid-root"
-    invalid_repo.mkdir()
+def test_start_scenario_rejects_invalid_repo_root():
+    service = _make_service(
+        FakeConfig(repo_root_error="Invalid repo_root: bad")
+    )
 
-    result = json.loads(
-        start_behave_scenario(
-            "features/cli/attach.feature",
-            machine_types=["lxd-container"],
-            repo_root=str(invalid_repo),
-        )
+    result = service.start_scenario(
+        "features/cli/attach.feature",
+        machine_types=["lxd-container"],
+        repo_root="/bad",
     )
 
     assert result["ok"] is False
     assert "Invalid repo_root" in result["error"]
 
 
-def test_start_behave_scenario_requires_machine_types(monkeypatch):
-    ACTIVE_JOBS.clear()
-    monkeypatch.setenv(
-        "UBUNTU_PRO_CLIENT_REPO", str(Path(__file__).resolve().parents[3])
-    )
+def test_start_scenario_requires_machine_types(tmp_path):
+    repo_root = _make_repo_with_feature(tmp_path)
+    service = _make_service(FakeConfig(repo_root=repo_root, log_dir=tmp_path))
 
-    result = json.loads(
-        start_behave_scenario("features/cli/attach.feature", [])
-    )
+    result = service.start_scenario("features/cli/attach.feature", [])
 
     assert result["ok"] is False
     assert "machine_types is required" in result["error"]
 
 
-def test_start_behave_scenario_rejects_cloud_machine_type_by_default(
-    monkeypatch,
-):
-    ACTIVE_JOBS.clear()
-    monkeypatch.setenv(
-        "UBUNTU_PRO_CLIENT_REPO", str(Path(__file__).resolve().parents[3])
+def test_start_scenario_rejects_cloud_machine_type_by_default(tmp_path):
+    repo_root = _make_repo_with_feature(tmp_path)
+    service = _make_service(
+        FakeConfig(repo_root=repo_root, log_dir=tmp_path, allow_cloud=False)
     )
 
-    result = json.loads(
-        start_behave_scenario(
-            "features/cli/attach.feature", machine_types=["azure.generic"]
-        )
+    result = service.start_scenario(
+        "features/cli/attach.feature", machine_types=["azure.generic"]
     )
 
     assert result["ok"] is False
     assert "Cloud machine_types are disabled by default" in result["error"]
 
 
-def test_start_behave_scenario_allows_cloud_machine_type_with_toggle(
-    monkeypatch, tmp_path
-):
-    ACTIVE_JOBS.clear()
-    monkeypatch.setenv("MCP_LOG_DIR", str(tmp_path))
-    monkeypatch.setenv(
-        "UBUNTU_PRO_CLIENT_REPO", str(Path(__file__).resolve().parents[3])
+def test_start_scenario_allows_cloud_machine_type_with_toggle(tmp_path):
+    repo_root = _make_repo_with_feature(tmp_path)
+    service = _make_service(
+        FakeConfig(repo_root=repo_root, log_dir=tmp_path, allow_cloud=True)
     )
-    monkeypatch.setenv("MCP_ALLOW_CLOUD_MACHINE_TYPES", "1")
 
-    class FakePopen:
-        def __init__(self, command, cwd, env, stdout, stderr, text):
-            self.returncode = None
-
-        def poll(self):
-            return self.returncode
-
-    monkeypatch.setattr(server_module.subprocess, "Popen", FakePopen)
-
-    result = json.loads(
-        start_behave_scenario(
-            "features/cli/attach.feature",
-            machine_types=["azure.generic"],
-        )
+    result = service.start_scenario(
+        "features/cli/attach.feature", machine_types=["azure.generic"]
     )
 
     assert result["ok"] is True
 
 
-def test_start_behave_scenario_fails_fast_when_capacity_reached(
-    monkeypatch, tmp_path
-):
-    ACTIVE_JOBS.clear()
-    monkeypatch.setenv("MCP_LOG_DIR", str(tmp_path))
-    monkeypatch.setenv(
-        "UBUNTU_PRO_CLIENT_REPO", str(Path(__file__).resolve().parents[3])
+def test_start_scenario_fails_fast_when_capacity_reached(tmp_path):
+    repo_root = _make_repo_with_feature(tmp_path)
+    registry = InMemoryJobRegistry()
+    ids = iter(["job1", "job2"])
+    launcher = FakeLauncher(handle=FakeHandle(returncode=None))
+    service = _make_service(
+        FakeConfig(
+            repo_root=repo_root, log_dir=tmp_path, max_parallel=(1, None)
+        ),
+        launcher=launcher,
+        registry=registry,
+        new_job_id=lambda: next(ids),
     )
-    monkeypatch.setenv("MCP_MAX_PARALLEL_JOBS", "1")
 
-    class FakePopen:
-        def __init__(self, command, cwd, env, stdout, stderr, text):
-            self.returncode = None
-
-        def poll(self):
-            return self.returncode
-
-    monkeypatch.setattr(server_module.subprocess, "Popen", FakePopen)
-
-    first_result = json.loads(
-        start_behave_scenario(
-            "features/cli/attach.feature",
-            machine_types=["lxd-container"],
-        )
+    first_result = service.start_scenario(
+        "features/cli/attach.feature", machine_types=["lxd-container"]
     )
     assert first_result["ok"] is True
 
-    second_result = json.loads(
-        start_behave_scenario(
-            "features/cli/attach.feature",
-            machine_types=["lxd-container"],
-        )
+    second_result = service.start_scenario(
+        "features/cli/attach.feature", machine_types=["lxd-container"]
     )
     assert second_result["ok"] is False
     assert second_result["status"] == "capacity_exceeded"
@@ -296,57 +320,21 @@ def test_start_behave_scenario_fails_fast_when_capacity_reached(
     assert second_result["capacity"]["running_jobs"] == 1
 
 
-def test_start_behave_scenario_defaults_to_single_parallel_job(
-    monkeypatch, tmp_path
-):
-    ACTIVE_JOBS.clear()
-    monkeypatch.setenv("MCP_LOG_DIR", str(tmp_path))
-    monkeypatch.setenv(
-        "UBUNTU_PRO_CLIENT_REPO", str(Path(__file__).resolve().parents[3])
-    )
-    monkeypatch.delenv("MCP_MAX_PARALLEL_JOBS", raising=False)
-
-    class FakePopen:
-        def __init__(self, command, cwd, env, stdout, stderr, text):
-            self.returncode = None
-
-        def poll(self):
-            return self.returncode
-
-    monkeypatch.setattr(server_module.subprocess, "Popen", FakePopen)
-
-    first_result = json.loads(
-        start_behave_scenario(
-            "features/cli/attach.feature",
-            machine_types=["lxd-container"],
+def test_start_scenario_rejects_invalid_parallel_limit(tmp_path):
+    repo_root = _make_repo_with_feature(tmp_path)
+    service = _make_service(
+        FakeConfig(
+            repo_root=repo_root,
+            log_dir=tmp_path,
+            max_parallel=(
+                None,
+                "MCP_MAX_PARALLEL_JOBS must be a positive integer",
+            ),
         )
     )
-    assert first_result["ok"] is True
 
-    second_result = json.loads(
-        start_behave_scenario(
-            "features/cli/attach.feature",
-            machine_types=["lxd-container"],
-        )
-    )
-    assert second_result["ok"] is False
-    assert second_result["status"] == "capacity_exceeded"
-    assert second_result["capacity"]["max_parallel_jobs"] == 1
-    assert second_result["capacity"]["running_jobs"] == 1
-
-
-def test_start_behave_scenario_rejects_invalid_parallel_limit_env(monkeypatch):
-    ACTIVE_JOBS.clear()
-    monkeypatch.setenv(
-        "UBUNTU_PRO_CLIENT_REPO", str(Path(__file__).resolve().parents[3])
-    )
-    monkeypatch.setenv("MCP_MAX_PARALLEL_JOBS", "not-a-number")
-
-    result = json.loads(
-        start_behave_scenario(
-            "features/cli/attach.feature",
-            machine_types=["lxd-container"],
-        )
+    result = service.start_scenario(
+        "features/cli/attach.feature", machine_types=["lxd-container"]
     )
 
     assert result["ok"] is False
@@ -355,62 +343,68 @@ def test_start_behave_scenario_rejects_invalid_parallel_limit_env(monkeypatch):
     )
 
 
-def test_start_behave_scenario_releases_slot_when_launch_fails(
-    monkeypatch, tmp_path
-):
-    ACTIVE_JOBS.clear()
-    monkeypatch.setenv("MCP_LOG_DIR", str(tmp_path))
-    monkeypatch.setenv(
-        "UBUNTU_PRO_CLIENT_REPO", str(Path(__file__).resolve().parents[3])
+def test_start_scenario_releases_slot_when_process_start_fails(tmp_path):
+    repo_root = _make_repo_with_feature(tmp_path)
+    registry = InMemoryJobRegistry()
+    launcher = FakeLauncher(error=ProcessStartError("boom"))
+    service = _make_service(
+        FakeConfig(
+            repo_root=repo_root, log_dir=tmp_path, max_parallel=(1, None)
+        ),
+        launcher=launcher,
+        registry=registry,
+        new_job_id=lambda: "jobX",
     )
-    monkeypatch.setenv("MCP_MAX_PARALLEL_JOBS", "1")
 
-    class ExplodingPopen:
-        def __init__(self, command, cwd, env, stdout, stderr, text):
-            raise OSError("boom")
-
-    monkeypatch.setattr(server_module.subprocess, "Popen", ExplodingPopen)
-
-    failed_result = json.loads(
-        start_behave_scenario(
-            "features/cli/attach.feature",
-            machine_types=["lxd-container"],
-        )
+    result = service.start_scenario(
+        "features/cli/attach.feature", machine_types=["lxd-container"]
     )
-    assert failed_result["ok"] is False
-    assert "Failed to start behave scenario" in failed_result["error"]
-    assert ACTIVE_JOBS == {}
+
+    assert result["ok"] is False
+    assert "Failed to start behave scenario" in result["error"]
+    assert registry.get("jobX") is None
 
 
-def test_wait_for_scenario_completion_running_to_completed(
-    monkeypatch, tmp_path
-):
-    ACTIVE_JOBS.clear()
+def test_start_scenario_reports_log_open_failure(tmp_path):
+    repo_root = _make_repo_with_feature(tmp_path)
+    registry = InMemoryJobRegistry()
+    launcher = FakeLauncher(error=LogFileOpenError("denied"))
+    service = _make_service(
+        FakeConfig(
+            repo_root=repo_root, log_dir=tmp_path, max_parallel=(1, None)
+        ),
+        launcher=launcher,
+        registry=registry,
+        new_job_id=lambda: "jobLog",
+    )
+
+    result = service.start_scenario(
+        "features/cli/attach.feature", machine_types=["lxd-container"]
+    )
+
+    assert result["ok"] is False
+    assert "Failed to open log file for job_id jobLog" in result["error"]
+    assert registry.get("jobLog") is None
+
+
+def test_wait_for_completion_running_to_completed(tmp_path):
+    registry = InMemoryJobRegistry()
     job_id = "job12345"
     stdout_log = tmp_path / f"{job_id}_stdout.log"
     report = tmp_path / f"{job_id}_report.json"
+    metadata = tmp_path / f"{job_id}_meta.json"
     stdout_log.write_text("line1\nline2\n", encoding="utf-8")
-
-    class FakeLogHandle:
-        closed = False
-
-        def close(self):
-            self.closed = True
-
-    class FakePopen:
-        def __init__(self):
-            self._returncode = None
-
-        def poll(self):
-            return self._returncode
-
-    proc = FakePopen()
-    ACTIVE_JOBS[job_id] = {
-        "process": proc,
-        "json_report": report,
-        "stdout_log": stdout_log,
-        "log_file_handle": FakeLogHandle(),
-    }
+    handle = FakeHandle(returncode=None)
+    registry.register(
+        job_id,
+        Job(
+            job_id=job_id,
+            process_handle=handle,
+            stdout_log=stdout_log,
+            json_report=report,
+            metadata=metadata,
+        ),
+    )
 
     def fake_sleep(seconds):
         report.write_text(
@@ -437,80 +431,77 @@ def test_wait_for_scenario_completion_running_to_completed(
             ),
             encoding="utf-8",
         )
-        proc._returncode = 1
+        handle.returncode = 1
 
-    monkeypatch.setattr(server_module.time, "sleep", fake_sleep)
+    service = _make_service(
+        FakeConfig(repo_root=tmp_path, log_dir=tmp_path),
+        registry=registry,
+        sleep=fake_sleep,
+    )
 
-    completed = json.loads(
-        wait_for_scenario_completion(
-            job_id, max_wait_seconds=60, poll_interval_seconds=0.01
-        )
+    completed = service.wait_for_completion(
+        job_id, max_wait_seconds=60, poll_interval_seconds=0.01
     )
     assert completed["status"] == "completed"
     assert completed["ok"] is False
     assert completed["summary"]["steps"]["failed"] == 1
     assert completed["failures"][0]["step"] == "a step"
+    assert handle.closed is True
 
 
-def test_wait_for_scenario_completion_missing_report_fallback(tmp_path):
-    ACTIVE_JOBS.clear()
+def test_wait_for_completion_missing_report_fallback(tmp_path):
+    registry = InMemoryJobRegistry()
     job_id = "job54321"
     stdout_log = tmp_path / f"{job_id}_stdout.log"
     stdout_log.write_text("setup failed\n", encoding="utf-8")
+    handle = FakeHandle(returncode=2)
+    registry.register(
+        job_id,
+        Job(
+            job_id=job_id,
+            process_handle=handle,
+            stdout_log=stdout_log,
+            json_report=tmp_path / "missing.json",
+            metadata=tmp_path / f"{job_id}_meta.json",
+        ),
+    )
+    service = _make_service(
+        FakeConfig(repo_root=tmp_path, log_dir=tmp_path), registry=registry
+    )
 
-    class FakeLogHandle:
-        closed = False
-
-        def close(self):
-            self.closed = True
-
-    class FakePopen:
-        def poll(self):
-            return 2
-
-    ACTIVE_JOBS[job_id] = {
-        "process": FakePopen(),
-        "json_report": tmp_path / "missing.json",
-        "stdout_log": stdout_log,
-        "log_file_handle": FakeLogHandle(),
-    }
-
-    completed = json.loads(wait_for_scenario_completion(job_id))
+    completed = service.wait_for_completion(job_id)
     assert completed["status"] == "completed"
     assert completed["ok"] is False
     assert completed["summary"] is None
     assert "setup failed" in completed["recent_output"]
 
 
-def test_wait_for_scenario_completion_timeout(monkeypatch, tmp_path):
-    ACTIVE_JOBS.clear()
+def test_wait_for_completion_timeout(tmp_path):
+    registry = InMemoryJobRegistry()
     job_id = "jobtimeout"
     stdout_log = tmp_path / f"{job_id}_stdout.log"
     stdout_log.write_text("still running\n", encoding="utf-8")
-
-    class FakePopen:
-        def poll(self):
-            return None
-
-    ACTIVE_JOBS[job_id] = {
-        "process": FakePopen(),
-        "json_report": tmp_path / "missing.json",
-        "stdout_log": stdout_log,
-        "log_file_handle": None,
-    }
-
+    handle = FakeHandle(returncode=None)
+    registry.register(
+        job_id,
+        Job(
+            job_id=job_id,
+            process_handle=handle,
+            stdout_log=stdout_log,
+            json_report=tmp_path / "missing.json",
+            metadata=tmp_path / f"{job_id}_meta.json",
+        ),
+    )
     monotonic_values = iter([0.0, 0.1, 0.6, 1.1])
+    service = _make_service(
+        FakeConfig(repo_root=tmp_path, log_dir=tmp_path),
+        registry=registry,
+        monotonic=lambda: next(monotonic_values),
+        sleep=lambda seconds: None,
+    )
 
-    def fake_monotonic():
-        return next(monotonic_values)
-
-    monkeypatch.setattr(server_module.time, "monotonic", fake_monotonic)
-    monkeypatch.setattr(server_module.time, "sleep", lambda seconds: None)
-
-    timeout = json.loads(
-        wait_for_scenario_completion(
-            job_id, max_wait_seconds=1, poll_interval_seconds=0.01
-        )
+    timeout = service.wait_for_completion(
+        job_id, max_wait_seconds=1, poll_interval_seconds=0.01
     )
     assert timeout["ok"] is False
     assert timeout["status"] == "timeout"
@@ -518,41 +509,84 @@ def test_wait_for_scenario_completion_timeout(monkeypatch, tmp_path):
     assert "still running" in timeout["recent_output"]
 
 
-def test_get_scenario_logs_returns_tail(tmp_path):
-    ACTIVE_JOBS.clear()
+def test_completed_job_remains_in_registry_and_reemits_events(tmp_path):
+    registry = InMemoryJobRegistry()
+    job_id = "jobkeep"
+    stdout_log = tmp_path / f"{job_id}_stdout.log"
+    stdout_log.write_text("done\n", encoding="utf-8")
+    handle = FakeHandle(returncode=0)
+    registry.register(
+        job_id,
+        Job(
+            job_id=job_id,
+            process_handle=handle,
+            stdout_log=stdout_log,
+            json_report=tmp_path / f"{job_id}_report.json",
+            metadata=tmp_path / f"{job_id}_meta.json",
+        ),
+    )
+    service = _make_service(
+        FakeConfig(repo_root=tmp_path, log_dir=tmp_path), registry=registry
+    )
+
+    first = service.wait_for_completion(
+        job_id, max_wait_seconds=5, poll_interval_seconds=0.01
+    )
+    assert first["status"] == "completed"
+    assert registry.get(job_id) is not None
+
+    service.wait_for_completion(
+        job_id, max_wait_seconds=5, poll_interval_seconds=0.01
+    )
+
+    index_path = tmp_path / "index.jsonl"
+    events = [
+        json.loads(line)
+        for line in index_path.read_text(encoding="utf-8").splitlines()
+    ]
+    completed_events = [e for e in events if e.get("event") == "completed"]
+    assert len(completed_events) == 2
+
+
+def test_get_logs_returns_tail(tmp_path):
+    registry = InMemoryJobRegistry()
     job_id = "jobtail"
     stdout_log = tmp_path / f"{job_id}_stdout.log"
     stdout_log.write_text("l1\nl2\nl3\n", encoding="utf-8")
+    registry.register(
+        job_id,
+        Job(
+            job_id=job_id,
+            process_handle=None,
+            stdout_log=stdout_log,
+            json_report=tmp_path / "none.json",
+            metadata=tmp_path / f"{job_id}_meta.json",
+        ),
+    )
+    service = _make_service(
+        FakeConfig(repo_root=tmp_path, log_dir=tmp_path), registry=registry
+    )
 
-    ACTIVE_JOBS[job_id] = {
-        "process": None,
-        "json_report": tmp_path / "none.json",
-        "stdout_log": stdout_log,
-        "log_file_handle": None,
-    }
-
-    result = json.loads(get_scenario_logs(job_id, lines=2))
+    result = service.get_logs(job_id, lines=2)
     assert result["ok"] is True
     assert result["lines"] == 2
     assert result["output"] == "l2\nl3"
     assert result["output_lines"] == ["l2", "l3"]
 
 
-def test_get_scenario_logs_rejects_invalid_repo_root(tmp_path):
-    ACTIVE_JOBS.clear()
-    invalid_repo = tmp_path / "invalid-root"
-    invalid_repo.mkdir()
-
-    result = json.loads(
-        get_scenario_logs("missing-job", repo_root=str(invalid_repo))
+def test_get_logs_rejects_invalid_repo_root():
+    service = _make_service(
+        FakeConfig(repo_root_error="Invalid repo_root: bad")
     )
+
+    result = service.get_logs("missing-job", repo_root="/bad")
 
     assert result["ok"] is False
     assert "Invalid repo_root" in result["error"]
 
 
-def test_get_scenario_artifacts_returns_paths_and_metadata(tmp_path):
-    ACTIVE_JOBS.clear()
+def test_get_artifacts_returns_paths_and_metadata(tmp_path):
+    registry = InMemoryJobRegistry()
     job_id = "jobmeta01"
     stdout_log = tmp_path / f"{job_id}_stdout.log"
     json_report = tmp_path / f"{job_id}_report.json"
@@ -563,16 +597,21 @@ def test_get_scenario_artifacts_returns_paths_and_metadata(tmp_path):
         json.dumps({"job_id": job_id, "status": "started"}),
         encoding="utf-8",
     )
+    registry.register(
+        job_id,
+        Job(
+            job_id=job_id,
+            process_handle=None,
+            stdout_log=stdout_log,
+            json_report=json_report,
+            metadata=metadata,
+        ),
+    )
+    service = _make_service(
+        FakeConfig(repo_root=tmp_path, log_dir=tmp_path), registry=registry
+    )
 
-    ACTIVE_JOBS[job_id] = {
-        "process": None,
-        "json_report": json_report,
-        "stdout_log": stdout_log,
-        "metadata": metadata,
-        "log_file_handle": None,
-    }
-
-    result = json.loads(get_scenario_artifacts(job_id))
+    result = service.get_artifacts(job_id)
     assert result["ok"] is True
     assert result["exists"]["stdout_log"] is True
     assert result["exists"]["json_report"] is True
@@ -580,31 +619,12 @@ def test_get_scenario_artifacts_returns_paths_and_metadata(tmp_path):
     assert result["metadata"]["status"] == "started"
 
 
-def test_get_scenario_artifacts_rejects_invalid_repo_root(tmp_path):
-    ACTIVE_JOBS.clear()
-    invalid_repo = tmp_path / "invalid-root"
-    invalid_repo.mkdir()
-
-    result = json.loads(
-        get_scenario_artifacts("missing-job", repo_root=str(invalid_repo))
+def test_get_artifacts_rejects_invalid_repo_root():
+    service = _make_service(
+        FakeConfig(repo_root_error="Invalid repo_root: bad")
     )
+
+    result = service.get_artifacts("missing-job", repo_root="/bad")
 
     assert result["ok"] is False
     assert "Invalid repo_root" in result["error"]
-
-
-def test_main_uses_stdio_transport_by_default(monkeypatch):
-    import behave_mcp.server as server_module
-
-    monkeypatch.delenv("MCP_TRANSPORT", raising=False)
-    captured = {}
-
-    def fake_run(transport, mount_path=None):
-        captured["transport"] = transport
-        captured["mount_path"] = mount_path
-
-    monkeypatch.setattr(server_module.mcp, "run", fake_run)
-
-    server_module.main()
-
-    assert captured["transport"] == "stdio"
