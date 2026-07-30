@@ -136,8 +136,8 @@ class ArtifactStore(Protocol):
         ...
 
 
-class Config(Protocol):
-    """Resolves configuration from the environment on each call."""
+class Workspace(Protocol):
+    """Resolves repository paths and the subprocess environment at runtime."""
 
     def resolve_repo_root(self, override: str | None) -> Path:
         """Resolve the repository root, raising ValueError if invalid."""
@@ -147,18 +147,6 @@ class Config(Protocol):
         """Resolve and create the directory for job artifacts."""
         ...
 
-    def allow_cloud_machine_types(self) -> bool:
-        """Return whether cloud machine types are permitted."""
-        ...
-
-    def max_parallel_jobs(self) -> tuple[int | None, str | None]:
-        """Return (limit, None) or (None, error_message) on invalid config."""
-        ...
-
     def subprocess_env(self) -> dict[str, str]:
         """Return the environment to forward to the behave subprocess."""
-        ...
-
-    def transport(self) -> str:
-        """Return the MCP transport name."""
         ...

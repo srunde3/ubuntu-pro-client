@@ -4,10 +4,10 @@ from pathlib import Path
 import behave_mcp.adapters as adapters_module
 import pytest
 from behave_mcp.adapters import (
-    EnvConfig,
     InMemoryJobRegistry,
     LocalArtifactStore,
     LocalFeatureFileReader,
+    LocalWorkspace,
     PopenLauncher,
 )
 from behave_mcp.ports import Job, LogFileOpenError, ProcessStartError
@@ -90,7 +90,7 @@ def test_read_report_json(tmp_path):
     assert store.read_report_json(good) == [1, 2]
 
 
-# ---- EnvConfig ----
+# ---- LocalWorkspace ----
 
 
 def _make_valid_repo(base: Path) -> Path:
@@ -101,85 +101,49 @@ def _make_valid_repo(base: Path) -> Path:
 
 def test_resolve_repo_root_override(tmp_path):
     repo = _make_valid_repo(tmp_path / "repo")
-    config = EnvConfig()
-    assert config.resolve_repo_root(str(repo)) == repo.resolve()
+    workspace = LocalWorkspace()
+    assert workspace.resolve_repo_root(str(repo)) == repo.resolve()
 
 
 def test_resolve_repo_root_env(tmp_path, monkeypatch):
     repo = _make_valid_repo(tmp_path / "repo")
     monkeypatch.setenv("UBUNTU_PRO_CLIENT_REPO", str(repo))
-    config = EnvConfig()
-    assert config.resolve_repo_root(None) == repo.resolve()
+    workspace = LocalWorkspace()
+    assert workspace.resolve_repo_root(None) == repo.resolve()
 
 
 def test_resolve_repo_root_invalid(tmp_path):
     invalid = tmp_path / "invalid"
     invalid.mkdir()
-    config = EnvConfig()
+    workspace = LocalWorkspace()
     with pytest.raises(ValueError, match="Invalid repo_root"):
-        config.resolve_repo_root(str(invalid))
+        workspace.resolve_repo_root(str(invalid))
 
 
 def test_resolve_log_dir_env_and_default(tmp_path, monkeypatch):
-    config = EnvConfig()
+    workspace = LocalWorkspace()
 
     custom = tmp_path / "logs"
     monkeypatch.setenv("MCP_LOG_DIR", str(custom))
-    assert config.resolve_log_dir(tmp_path) == custom.resolve()
+    assert workspace.resolve_log_dir(tmp_path) == custom.resolve()
     assert custom.exists()
 
     monkeypatch.delenv("MCP_LOG_DIR", raising=False)
     repo = tmp_path / "repo"
     repo.mkdir()
-    default = config.resolve_log_dir(repo)
+    default = workspace.resolve_log_dir(repo)
     assert default == repo / ".mcp_behave_logs"
     assert default.exists()
 
 
-def test_allow_cloud_toggle(monkeypatch):
-    config = EnvConfig()
-    monkeypatch.delenv("MCP_ALLOW_CLOUD_MACHINE_TYPES", raising=False)
-    assert config.allow_cloud_machine_types() is False
-    monkeypatch.setenv("MCP_ALLOW_CLOUD_MACHINE_TYPES", "yes")
-    assert config.allow_cloud_machine_types() is True
-
-
-def test_max_parallel_jobs(monkeypatch):
-    config = EnvConfig()
-
-    monkeypatch.delenv("MCP_MAX_PARALLEL_JOBS", raising=False)
-    assert config.max_parallel_jobs() == (1, None)
-
-    monkeypatch.setenv("MCP_MAX_PARALLEL_JOBS", "3")
-    assert config.max_parallel_jobs() == (3, None)
-
-    monkeypatch.setenv("MCP_MAX_PARALLEL_JOBS", "0")
-    value, error = config.max_parallel_jobs()
-    assert value is None
-    assert "positive integer" in error
-
-    monkeypatch.setenv("MCP_MAX_PARALLEL_JOBS", "abc")
-    value, error = config.max_parallel_jobs()
-    assert value is None
-    assert "positive integer" in error
-
-
 def test_subprocess_env_forwards_all(monkeypatch):
-    config = EnvConfig()
+    workspace = LocalWorkspace()
     monkeypatch.setenv("MCP_TEST_PASSTHROUGH", "carried")
-    env = config.subprocess_env()
+    env = workspace.subprocess_env()
     assert env["MCP_TEST_PASSTHROUGH"] == "carried"
 
 
-def test_transport_default_and_override(monkeypatch):
-    config = EnvConfig()
-    monkeypatch.delenv("MCP_TRANSPORT", raising=False)
-    assert config.transport() == "stdio"
-    monkeypatch.setenv("MCP_TRANSPORT", "sse")
-    assert config.transport() == "sse"
-
-
-# ---- SubprocessProcessLauncher ----
+# ---- PopenLauncher ----
 
 
 class _FakeProcess:

@@ -12,6 +12,7 @@ from behave_mcp.adapters import (
     LocalArtifactStore,
     LocalFeatureFileReader,
 )
+from behave_mcp.config import Settings
 from behave_mcp.ports import Job
 from behave_mcp.service import BehaveService
 
@@ -33,7 +34,7 @@ def test_append_index_event_byte_shape(tmp_path):
     )
 
 
-class _StubConfig:
+class _StubWorkspace:
     def __init__(self, tmp_path):
         self._tmp_path = tmp_path
 
@@ -43,22 +44,21 @@ class _StubConfig:
     def resolve_log_dir(self, repo_root):
         return self._tmp_path
 
-    def allow_cloud_machine_types(self):
-        return False
-
-    def max_parallel_jobs(self):
-        return (1, None)
-
     def subprocess_env(self):
         return {}
 
-    def transport(self):
-        return "stdio"
+
+_SETTINGS = Settings(
+    allow_cloud_machine_types=False,
+    max_parallel_jobs=1,
+    transport="stdio",
+)
 
 
 def _service(tmp_path, registry) -> BehaveService:
     return BehaveService(
-        config=_StubConfig(tmp_path),
+        workspace=_StubWorkspace(tmp_path),
+        settings=_SETTINGS,
         feature_reader=LocalFeatureFileReader(),
         artifact_store=LocalArtifactStore(),
         registry=registry,
@@ -176,7 +176,8 @@ def test_timeout_key_order(tmp_path):
 
     values = iter([0.0, 1.1])
     service = BehaveService(
-        config=_StubConfig(tmp_path),
+        workspace=_StubWorkspace(tmp_path),
+        settings=_SETTINGS,
         feature_reader=LocalFeatureFileReader(),
         artifact_store=LocalArtifactStore(),
         registry=registry,

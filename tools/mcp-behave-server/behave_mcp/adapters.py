@@ -206,8 +206,8 @@ class LocalArtifactStore:
         return path.exists()
 
 
-class EnvConfig:
-    """Reads configuration from the process environment on each call."""
+class LocalWorkspace:
+    """Resolves repository paths and the subprocess environment at runtime."""
 
     def resolve_repo_root(self, override: str | None) -> Path:
         if override:
@@ -235,37 +235,8 @@ class EnvConfig:
         log_dir.mkdir(parents=True, exist_ok=True)
         return log_dir
 
-    def allow_cloud_machine_types(self) -> bool:
-        return self._env_flag_enabled(domain.ALLOW_CLOUD_MACHINE_TYPES_ENV_VAR)
-
-    def max_parallel_jobs(self) -> tuple[int | None, str | None]:
-        value = os.environ.get(domain.MAX_PARALLEL_JOBS_ENV_VAR, "").strip()
-        if not value:
-            return domain._DEFAULT_MAX_PARALLEL_JOBS, None
-
-        try:
-            parsed_value = int(value)
-        except ValueError:
-            return (
-                None,
-                f"{domain.MAX_PARALLEL_JOBS_ENV_VAR} must be a "
-                "positive integer",
-            )
-
-        if parsed_value <= 0:
-            return (
-                None,
-                f"{domain.MAX_PARALLEL_JOBS_ENV_VAR} must be a "
-                "positive integer",
-            )
-
-        return parsed_value, None
-
     def subprocess_env(self) -> dict[str, str]:
         return os.environ.copy()
-
-    def transport(self) -> str:
-        return os.environ.get("MCP_TRANSPORT", "stdio")
 
     def _validated_repo_root(self, candidate: Path) -> Path:
         resolved = candidate.resolve()
@@ -277,8 +248,3 @@ class EnvConfig:
                 "features/ and tox.ini"
             )
         return resolved
-
-    @staticmethod
-    def _env_flag_enabled(name: str) -> bool:
-        value = os.environ.get(name, "")
-        return value.strip().lower() in {"1", "true", "yes", "on"}

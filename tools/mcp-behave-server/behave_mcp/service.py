@@ -4,15 +4,16 @@ from pathlib import Path
 from typing import Any, Callable
 
 from behave_mcp import domain
+from behave_mcp.config import Settings
 from behave_mcp.ports import (
     ArtifactStore,
-    Config,
     FeatureFileReader,
     Job,
     JobRegistry,
     LogFileOpenError,
     ProcessLauncher,
     ProcessStartError,
+    Workspace,
 )
 
 
@@ -26,7 +27,8 @@ class BehaveService:
     def __init__(
         self,
         *,
-        config: Config,
+        workspace: Workspace,
+        settings: Settings,
         feature_reader: FeatureFileReader,
         artifact_store: ArtifactStore,
         registry: JobRegistry,
@@ -36,7 +38,8 @@ class BehaveService:
         now_utc: Callable[[], str],
         new_job_id: Callable[[], str],
     ) -> None:
-        self._config = config
+        self._workspace = workspace
+        self._settings = settings
         self._feature_reader = feature_reader
         self._artifact_store = artifact_store
         self._registry = registry
@@ -48,7 +51,7 @@ class BehaveService:
 
     def list_features(self, repo_root: str = "") -> dict[str, Any]:
         try:
-            resolved_repo_root = self._config.resolve_repo_root(
+            resolved_repo_root = self._workspace.resolve_repo_root(
                 repo_root or None
             )
         except ValueError as exc:
@@ -71,7 +74,7 @@ class BehaveService:
         repo_root: str = "",
     ) -> dict[str, Any]:
         try:
-            resolved_repo_root = self._config.resolve_repo_root(
+            resolved_repo_root = self._workspace.resolve_repo_root(
                 repo_root or None
             )
         except ValueError as exc:
@@ -91,20 +94,16 @@ class BehaveService:
             }
 
         machine_type_error = domain.validate_machine_types(
-            machine_types, self._config.allow_cloud_machine_types()
+            machine_types, self._settings.allow_cloud_machine_types
         )
         if machine_type_error:
             return {"ok": False, "error": machine_type_error}
 
-        log_dir = self._config.resolve_log_dir(resolved_repo_root)
+        log_dir = self._workspace.resolve_log_dir(resolved_repo_root)
         job_id = self._new_job_id()
         json_report_path = log_dir / f"{job_id}_report.json"
         stdout_path = log_dir / f"{job_id}_stdout.log"
         metadata_path = log_dir / f"{job_id}_meta.json"
-
-        max_parallel_jobs, parse_error = self._config.max_parallel_jobs()
-        if parse_error:
-            return {"ok": False, "error": parse_error}
 
         reserved_job = Job(
             job_id=job_id,
@@ -115,7 +114,7 @@ class BehaveService:
             reserved=True,
         )
         reservation = self._registry.try_reserve(
-            reserved_job, max_parallel_jobs
+            reserved_job, self._settings.max_parallel_jobs
         )
         if not reservation.reserved:
             return {
@@ -139,7 +138,7 @@ class BehaveService:
             releases,
             json_report_path,
         )
-        env = self._config.subprocess_env()
+        env = self._workspace.subprocess_env()
 
         try:
             handle = self._launcher.launch(
@@ -429,8 +428,10 @@ class BehaveService:
     def _recover_job(
         self, job_id: str, repo_root_override: str | None
     ) -> Job | None:
-        resolved_repo_root = self._config.resolve_repo_root(repo_root_override)
-        log_dir = self._config.resolve_log_dir(resolved_repo_root)
+        resolved_repo_root = self._workspace.resolve_repo_root(
+            repo_root_override
+        )
+        log_dir = self._workspace.resolve_log_dir(resolved_repo_root)
         stdout_log = log_dir / f"{job_id}_stdout.log"
         json_report = log_dir / f"{job_id}_report.json"
         metadata = log_dir / f"{job_id}_meta.json"

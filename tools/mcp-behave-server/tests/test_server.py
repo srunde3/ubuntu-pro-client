@@ -6,6 +6,7 @@ from behave_mcp.adapters import (
     LocalArtifactStore,
     LocalFeatureFileReader,
 )
+from behave_mcp.config import Settings
 from behave_mcp.ports import Job, LogFileOpenError, ProcessStartError
 from behave_mcp.service import BehaveService
 
@@ -46,24 +47,18 @@ class FakeLauncher:
         return self._handle
 
 
-class FakeConfig:
+class FakeWorkspace:
     def __init__(
         self,
         *,
         repo_root=None,
         log_dir=None,
-        allow_cloud=False,
-        max_parallel=(1, None),
         env=None,
-        transport="stdio",
         repo_root_error=None,
     ):
         self._repo_root = repo_root
         self._log_dir = log_dir
-        self._allow_cloud = allow_cloud
-        self._max_parallel = max_parallel
         self._env = env if env is not None else {}
-        self._transport = transport
         self._repo_root_error = repo_root_error
 
     def resolve_repo_root(self, override):
@@ -76,17 +71,16 @@ class FakeConfig:
     def resolve_log_dir(self, repo_root):
         return self._log_dir
 
-    def allow_cloud_machine_types(self):
-        return self._allow_cloud
-
-    def max_parallel_jobs(self):
-        return self._max_parallel
-
     def subprocess_env(self):
         return dict(self._env)
 
-    def transport(self):
-        return self._transport
+
+def _settings(*, allow_cloud=False, max_parallel_jobs=1) -> Settings:
+    return Settings(
+        allow_cloud_machine_types=allow_cloud,
+        max_parallel_jobs=max_parallel_jobs,
+        transport="stdio",
+    )
 
 
 def _make_repo_with_feature(
@@ -101,8 +95,9 @@ def _make_repo_with_feature(
 
 
 def _make_service(
-    config,
+    workspace,
     *,
+    settings=None,
     launcher=None,
     registry=None,
     monotonic=None,
@@ -111,7 +106,8 @@ def _make_service(
     new_job_id=None,
 ) -> BehaveService:
     return BehaveService(
-        config=config,
+        workspace=workspace,
+        settings=settings if settings is not None else _settings(),
         feature_reader=LocalFeatureFileReader(),
         artifact_store=LocalArtifactStore(),
         registry=registry if registry is not None else InMemoryJobRegistry(),
@@ -127,7 +123,7 @@ def _make_service(
 
 def test_list_features_returns_feature_files(tmp_path):
     repo_root = _make_repo_with_feature(tmp_path)
-    service = _make_service(FakeConfig(repo_root=repo_root))
+    service = _make_service(FakeWorkspace(repo_root=repo_root))
 
     result = service.list_features()
 
@@ -139,7 +135,7 @@ def test_list_features_uses_repo_root_override(tmp_path):
     repo_root = _make_repo_with_feature(
         tmp_path, "features/cli/sample.feature"
     )
-    service = _make_service(FakeConfig(repo_root=None))
+    service = _make_service(FakeWorkspace(repo_root=None))
 
     result = service.list_features(repo_root=str(repo_root))
 
@@ -150,7 +146,7 @@ def test_list_features_uses_repo_root_override(tmp_path):
 
 def test_list_features_rejects_invalid_repo_root():
     service = _make_service(
-        FakeConfig(repo_root_error="Invalid repo_root: bad")
+        FakeWorkspace(repo_root_error="Invalid repo_root: bad")
     )
 
     result = service.list_features(repo_root="/whatever")
@@ -162,7 +158,9 @@ def test_list_features_rejects_invalid_repo_root():
 
 def test_start_scenario_rejects_unlisted_feature(tmp_path):
     repo_root = _make_repo_with_feature(tmp_path)
-    service = _make_service(FakeConfig(repo_root=repo_root, log_dir=tmp_path))
+    service = _make_service(
+        FakeWorkspace(repo_root=repo_root, log_dir=tmp_path)
+    )
 
     result = service.start_scenario(
         "features/cli/does-not-exist.feature",
@@ -177,7 +175,8 @@ def test_start_scenario_accepts_normalized_listed_feature(tmp_path):
     repo_root = _make_repo_with_feature(tmp_path)
     launcher = FakeLauncher()
     service = _make_service(
-        FakeConfig(repo_root=repo_root, log_dir=tmp_path), launcher=launcher
+        FakeWorkspace(repo_root=repo_root, log_dir=tmp_path),
+        launcher=launcher,
     )
 
     result = service.start_scenario(
@@ -194,7 +193,7 @@ def test_start_scenario_builds_command(tmp_path):
     repo_root = _make_repo_with_feature(tmp_path)
     launcher = FakeLauncher()
     service = _make_service(
-        FakeConfig(
+        FakeWorkspace(
             repo_root=repo_root,
             log_dir=tmp_path,
             env={"UACLIENT_BEHAVE_CONTRACT_TOKEN": "token"},
@@ -232,7 +231,7 @@ def test_start_scenario_uses_repo_root_override(tmp_path):
     )
     launcher = FakeLauncher()
     service = _make_service(
-        FakeConfig(repo_root=None, log_dir=tmp_path), launcher=launcher
+        FakeWorkspace(repo_root=None, log_dir=tmp_path), launcher=launcher
     )
 
     result = service.start_scenario(
@@ -247,7 +246,7 @@ def test_start_scenario_uses_repo_root_override(tmp_path):
 
 def test_start_scenario_rejects_invalid_repo_root():
     service = _make_service(
-        FakeConfig(repo_root_error="Invalid repo_root: bad")
+        FakeWorkspace(repo_root_error="Invalid repo_root: bad")
     )
 
     result = service.start_scenario(
@@ -262,7 +261,9 @@ def test_start_scenario_rejects_invalid_repo_root():
 
 def test_start_scenario_requires_machine_types(tmp_path):
     repo_root = _make_repo_with_feature(tmp_path)
-    service = _make_service(FakeConfig(repo_root=repo_root, log_dir=tmp_path))
+    service = _make_service(
+        FakeWorkspace(repo_root=repo_root, log_dir=tmp_path)
+    )
 
     result = service.start_scenario("features/cli/attach.feature", [])
 
@@ -273,7 +274,7 @@ def test_start_scenario_requires_machine_types(tmp_path):
 def test_start_scenario_rejects_cloud_machine_type_by_default(tmp_path):
     repo_root = _make_repo_with_feature(tmp_path)
     service = _make_service(
-        FakeConfig(repo_root=repo_root, log_dir=tmp_path, allow_cloud=False)
+        FakeWorkspace(repo_root=repo_root, log_dir=tmp_path)
     )
 
     result = service.start_scenario(
@@ -287,7 +288,8 @@ def test_start_scenario_rejects_cloud_machine_type_by_default(tmp_path):
 def test_start_scenario_allows_cloud_machine_type_with_toggle(tmp_path):
     repo_root = _make_repo_with_feature(tmp_path)
     service = _make_service(
-        FakeConfig(repo_root=repo_root, log_dir=tmp_path, allow_cloud=True)
+        FakeWorkspace(repo_root=repo_root, log_dir=tmp_path),
+        settings=_settings(allow_cloud=True),
     )
 
     result = service.start_scenario(
@@ -303,9 +305,8 @@ def test_start_scenario_fails_fast_when_capacity_reached(tmp_path):
     ids = iter(["job1", "job2"])
     launcher = FakeLauncher(handle=FakeHandle(returncode=None))
     service = _make_service(
-        FakeConfig(
-            repo_root=repo_root, log_dir=tmp_path, max_parallel=(1, None)
-        ),
+        FakeWorkspace(repo_root=repo_root, log_dir=tmp_path),
+        settings=_settings(max_parallel_jobs=1),
         launcher=launcher,
         registry=registry,
         new_job_id=lambda: next(ids),
@@ -325,37 +326,12 @@ def test_start_scenario_fails_fast_when_capacity_reached(tmp_path):
     assert second_result["capacity"]["running_jobs"] == 1
 
 
-def test_start_scenario_rejects_invalid_parallel_limit(tmp_path):
-    repo_root = _make_repo_with_feature(tmp_path)
-    service = _make_service(
-        FakeConfig(
-            repo_root=repo_root,
-            log_dir=tmp_path,
-            max_parallel=(
-                None,
-                "MCP_MAX_PARALLEL_JOBS must be a positive integer",
-            ),
-        )
-    )
-
-    result = service.start_scenario(
-        "features/cli/attach.feature", machine_types=["lxd-container"]
-    )
-
-    assert result["ok"] is False
-    assert (
-        "MCP_MAX_PARALLEL_JOBS must be a positive integer" in result["error"]
-    )
-
-
 def test_start_scenario_releases_slot_when_process_start_fails(tmp_path):
     repo_root = _make_repo_with_feature(tmp_path)
     registry = InMemoryJobRegistry()
     launcher = FakeLauncher(error=ProcessStartError("boom"))
     service = _make_service(
-        FakeConfig(
-            repo_root=repo_root, log_dir=tmp_path, max_parallel=(1, None)
-        ),
+        FakeWorkspace(repo_root=repo_root, log_dir=tmp_path),
         launcher=launcher,
         registry=registry,
         new_job_id=lambda: "jobX",
@@ -375,9 +351,7 @@ def test_start_scenario_reports_log_open_failure(tmp_path):
     registry = InMemoryJobRegistry()
     launcher = FakeLauncher(error=LogFileOpenError("denied"))
     service = _make_service(
-        FakeConfig(
-            repo_root=repo_root, log_dir=tmp_path, max_parallel=(1, None)
-        ),
+        FakeWorkspace(repo_root=repo_root, log_dir=tmp_path),
         launcher=launcher,
         registry=registry,
         new_job_id=lambda: "jobLog",
@@ -439,7 +413,7 @@ def test_wait_for_completion_running_to_completed(tmp_path):
         handle.returncode = 1
 
     service = _make_service(
-        FakeConfig(repo_root=tmp_path, log_dir=tmp_path),
+        FakeWorkspace(repo_root=tmp_path, log_dir=tmp_path),
         registry=registry,
         sleep=fake_sleep,
     )
@@ -471,7 +445,8 @@ def test_wait_for_completion_missing_report_fallback(tmp_path):
         ),
     )
     service = _make_service(
-        FakeConfig(repo_root=tmp_path, log_dir=tmp_path), registry=registry
+        FakeWorkspace(repo_root=tmp_path, log_dir=tmp_path),
+        registry=registry,
     )
 
     completed = service.wait_for_completion(job_id)
@@ -499,7 +474,7 @@ def test_wait_for_completion_timeout(tmp_path):
     )
     monotonic_values = iter([0.0, 0.1, 0.6, 1.1])
     service = _make_service(
-        FakeConfig(repo_root=tmp_path, log_dir=tmp_path),
+        FakeWorkspace(repo_root=tmp_path, log_dir=tmp_path),
         registry=registry,
         monotonic=lambda: next(monotonic_values),
         sleep=lambda seconds: None,
@@ -531,7 +506,8 @@ def test_completed_job_remains_in_registry_and_reemits_events(tmp_path):
         ),
     )
     service = _make_service(
-        FakeConfig(repo_root=tmp_path, log_dir=tmp_path), registry=registry
+        FakeWorkspace(repo_root=tmp_path, log_dir=tmp_path),
+        registry=registry,
     )
 
     first = service.wait_for_completion(
@@ -569,7 +545,8 @@ def test_get_logs_returns_tail(tmp_path):
         ),
     )
     service = _make_service(
-        FakeConfig(repo_root=tmp_path, log_dir=tmp_path), registry=registry
+        FakeWorkspace(repo_root=tmp_path, log_dir=tmp_path),
+        registry=registry,
     )
 
     result = service.get_logs(job_id, lines=2)
@@ -581,7 +558,7 @@ def test_get_logs_returns_tail(tmp_path):
 
 def test_get_logs_rejects_invalid_repo_root():
     service = _make_service(
-        FakeConfig(repo_root_error="Invalid repo_root: bad")
+        FakeWorkspace(repo_root_error="Invalid repo_root: bad")
     )
 
     result = service.get_logs("missing-job", repo_root="/bad")
@@ -613,7 +590,8 @@ def test_get_artifacts_returns_paths_and_metadata(tmp_path):
         ),
     )
     service = _make_service(
-        FakeConfig(repo_root=tmp_path, log_dir=tmp_path), registry=registry
+        FakeWorkspace(repo_root=tmp_path, log_dir=tmp_path),
+        registry=registry,
     )
 
     result = service.get_artifacts(job_id)
@@ -626,7 +604,7 @@ def test_get_artifacts_returns_paths_and_metadata(tmp_path):
 
 def test_get_artifacts_rejects_invalid_repo_root():
     service = _make_service(
-        FakeConfig(repo_root_error="Invalid repo_root: bad")
+        FakeWorkspace(repo_root_error="Invalid repo_root: bad")
     )
 
     result = service.get_artifacts("missing-job", repo_root="/bad")

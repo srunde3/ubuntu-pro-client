@@ -6,12 +6,13 @@ from datetime import datetime, timezone
 
 from behave_mcp import domain
 from behave_mcp.adapters import (
-    EnvConfig,
     InMemoryJobRegistry,
     LocalArtifactStore,
     LocalFeatureFileReader,
+    LocalWorkspace,
     PopenLauncher,
 )
+from behave_mcp.config import load_settings
 from behave_mcp.service import BehaveService
 from mcp.server import FastMCP
 from starlette.responses import JSONResponse
@@ -25,13 +26,15 @@ def _utc_timestamp() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-_config = EnvConfig()
+_settings = load_settings(os.environ)
+_workspace = LocalWorkspace()
 _feature_reader = LocalFeatureFileReader()
 _artifact_store = LocalArtifactStore()
 registry = InMemoryJobRegistry()
 _launcher = PopenLauncher()
 _service = BehaveService(
-    config=_config,
+    workspace=_workspace,
+    settings=_settings,
     feature_reader=_feature_reader,
     artifact_store=_artifact_store,
     registry=registry,
@@ -131,5 +134,4 @@ def get_scenario_artifacts(job_id: str, repo_root: str = "") -> str:
 
 
 def main() -> None:
-    transport = _config.transport()
-    mcp.run(transport=transport)
+    mcp.run(transport=_settings.transport)
