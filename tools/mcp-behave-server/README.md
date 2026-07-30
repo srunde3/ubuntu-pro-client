@@ -90,9 +90,11 @@ The server will forward a small allowlist of environment variables to the behave
 The server also supports one MCP-only safety toggle:
 
 - `MCP_ALLOW_CLOUD_MACHINE_TYPES`: defaults to disabled. Set to `1` (or `true`/`yes`/`on`) to allow cloud machine types (`aws.generic`, `gcp.generic`, `azure.generic`).
+- `MCP_MAX_PARALLEL_JOBS`: positive integer limit for concurrently running behave jobs. Defaults to `1` when unset. When the limit is reached, `start_behave_scenario` fails fast with `status: capacity_exceeded`.
 
 ## Safety constraints
 
 - `feature_file` must be one of the paths returned by `list_features`.
 - `machine_types` is required.
 - Cloud machine types are blocked by default and require setting `MCP_ALLOW_CLOUD_MACHINE_TYPES=1`.
+- Parallel behave starts are capped at `1` by default, and can be adjusted with `MCP_MAX_PARALLEL_JOBS`.

@@ -257,6 +257,131 @@ def test_start_behave_scenario_allows_cloud_machine_type_with_toggle(
     assert result["ok"] is True
 
 
+def test_start_behave_scenario_fails_fast_when_capacity_reached(
+    monkeypatch, tmp_path
+):
+    ACTIVE_JOBS.clear()
+    monkeypatch.setenv("MCP_LOG_DIR", str(tmp_path))
+    monkeypatch.setenv(
+        "UBUNTU_PRO_CLIENT_REPO", str(Path(__file__).resolve().parents[3])
+    )
+    monkeypatch.setenv("MCP_MAX_PARALLEL_JOBS", "1")
+
+    class FakePopen:
+        def __init__(self, command, cwd, env, stdout, stderr, text):
+            self.returncode = None
+
+        def poll(self):
+            return self.returncode
+
+    monkeypatch.setattr(server_module.subprocess, "Popen", FakePopen)
+
+    first_result = json.loads(
+        start_behave_scenario(
+            "features/cli/attach.feature",
+            machine_types=["lxd-container"],
+        )
+    )
+    assert first_result["ok"] is True
+
+    second_result = json.loads(
+        start_behave_scenario(
+            "features/cli/attach.feature",
+            machine_types=["lxd-container"],
+        )
+    )
+    assert second_result["ok"] is False
+    assert second_result["status"] == "capacity_exceeded"
+    assert second_result["capacity"]["max_parallel_jobs"] == 1
+    assert second_result["capacity"]["running_jobs"] == 1
+
+
+def test_start_behave_scenario_defaults_to_single_parallel_job(
+    monkeypatch, tmp_path
+):
+    ACTIVE_JOBS.clear()
+    monkeypatch.setenv("MCP_LOG_DIR", str(tmp_path))
+    monkeypatch.setenv(
+        "UBUNTU_PRO_CLIENT_REPO", str(Path(__file__).resolve().parents[3])
+    )
+    monkeypatch.delenv("MCP_MAX_PARALLEL_JOBS", raising=False)
+
+    class FakePopen:
+        def __init__(self, command, cwd, env, stdout, stderr, text):
+            self.returncode = None
+
+        def poll(self):
+            return self.returncode
+
+    monkeypatch.setattr(server_module.subprocess, "Popen", FakePopen)
+
+    first_result = json.loads(
+        start_behave_scenario(
+            "features/cli/attach.feature",
+            machine_types=["lxd-container"],
+        )
+    )
+    assert first_result["ok"] is True
+
+    second_result = json.loads(
+        start_behave_scenario(
+            "features/cli/attach.feature",
+            machine_types=["lxd-container"],
+        )
+    )
+    assert second_result["ok"] is False
+    assert second_result["status"] == "capacity_exceeded"
+    assert second_result["capacity"]["max_parallel_jobs"] == 1
+    assert second_result["capacity"]["running_jobs"] == 1
+
+
+def test_start_behave_scenario_rejects_invalid_parallel_limit_env(monkeypatch):
+    ACTIVE_JOBS.clear()
+    monkeypatch.setenv(
+        "UBUNTU_PRO_CLIENT_REPO", str(Path(__file__).resolve().parents[3])
+    )
+    monkeypatch.setenv("MCP_MAX_PARALLEL_JOBS", "not-a-number")
+
+    result = json.loads(
+        start_behave_scenario(
+            "features/cli/attach.feature",
+            machine_types=["lxd-container"],
+        )
+    )
+
+    assert result["ok"] is False
+    assert (
+        "MCP_MAX_PARALLEL_JOBS must be a positive integer" in result["error"]
+    )
+
+
+def test_start_behave_scenario_releases_slot_when_launch_fails(
+    monkeypatch, tmp_path
+):
+    ACTIVE_JOBS.clear()
+    monkeypatch.setenv("MCP_LOG_DIR", str(tmp_path))
+    monkeypatch.setenv(
+        "UBUNTU_PRO_CLIENT_REPO", str(Path(__file__).resolve().parents[3])
+    )
+    monkeypatch.setenv("MCP_MAX_PARALLEL_JOBS", "1")
+
+    class ExplodingPopen:
+        def __init__(self, command, cwd, env, stdout, stderr, text):
+            raise OSError("boom")
+
+    monkeypatch.setattr(server_module.subprocess, "Popen", ExplodingPopen)
+
+    failed_result = json.loads(
+        start_behave_scenario(
+            "features/cli/attach.feature",
+            machine_types=["lxd-container"],
+        )
+    )
+    assert failed_result["ok"] is False
+    assert "Failed to start behave scenario" in failed_result["error"]
+    assert ACTIVE_JOBS == {}
+
+
 def test_wait_for_scenario_completion_running_to_completed(
     monkeypatch, tmp_path
 ):

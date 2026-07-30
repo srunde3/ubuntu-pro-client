@@ -8,7 +8,7 @@ import uuid
 from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, TypedDict
 
 from mcp.server import FastMCP
 from starlette.responses import JSONResponse
@@ -35,6 +35,7 @@ CLOUD_MACHINE_TYPES = {
     "azure.pro",
 }
 ALLOW_CLOUD_MACHINE_TYPES_ENV_VAR = "MCP_ALLOW_CLOUD_MACHINE_TYPES"
+MAX_PARALLEL_JOBS_ENV_VAR = "MCP_MAX_PARALLEL_JOBS"
 ACTIVE_JOBS: dict[str, dict[str, Any]] = {}
 _JOBS_LOCK = threading.Lock()
 _DEFAULT_RUNNING_TAIL_LINES = 12
@@ -43,6 +44,27 @@ _MAX_LOG_TAIL_LINES = 2000
 _DEFAULT_WAIT_TIMEOUT_SECONDS = 1800
 _DEFAULT_WAIT_POLL_INTERVAL_SECONDS = 5.0
 _JOB_INDEX_FILE_NAME = "index.jsonl"
+_DEFAULT_MAX_PARALLEL_JOBS = 1
+
+
+class ErrorPayload(TypedDict):
+    ok: Literal[False]
+    error: str
+
+
+class CapacityPayload(TypedDict):
+    max_parallel_jobs: int
+    running_jobs: int
+
+
+class CapacityExceededPayload(TypedDict):
+    ok: Literal[False]
+    status: Literal["capacity_exceeded"]
+    error: str
+    capacity: CapacityPayload
+
+
+CapacityReservationError = ErrorPayload | CapacityExceededPayload
 
 
 def _env_flag_enabled(name: str) -> bool:
@@ -153,6 +175,10 @@ def start_behave_scenario(
     stdout_path = log_dir / f"{job_id}_stdout.log"
     metadata_path = log_dir / f"{job_id}_meta.json"
 
+    slot_error = _try_reserve_job_slot(job_id)
+    if slot_error is not None:
+        return json.dumps(slot_error)
+
     command = ["tox", "-e", "behave", "--", feature_file]
     if scenario_name:
         command.extend(["--name", scenario_name])
@@ -162,15 +188,35 @@ def start_behave_scenario(
     command.extend(["-f", "json", "-o", str(json_report_path), "-f", "plain"])
 
     env = os.environ.copy()
-    log_file = stdout_path.open("w", encoding="utf-8")
-    process = subprocess.Popen(
-        command,
-        cwd=str(resolved_repo_root),
-        env=env,
-        stdout=log_file,
-        stderr=subprocess.STDOUT,
-        text=True,
-    )
+    try:
+        log_file = stdout_path.open("w", encoding="utf-8")
+    except OSError as exc:
+        _release_job_slot(job_id)
+        return json.dumps(
+            {
+                "ok": False,
+                "error": f"Failed to open log file for job_id {job_id}: {exc}",
+            }
+        )
+
+    try:
+        process = subprocess.Popen(
+            command,
+            cwd=str(resolved_repo_root),
+            env=env,
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+    except Exception as exc:
+        log_file.close()
+        _release_job_slot(job_id)
+        return json.dumps(
+            {
+                "ok": False,
+                "error": f"Failed to start behave scenario: {exc}",
+            }
+        )
 
     with _JOBS_LOCK:
         ACTIVE_JOBS[job_id] = {
@@ -589,6 +635,81 @@ def _recover_job_from_disk(
         "metadata": metadata,
         "log_file_handle": None,
     }
+
+
+def _try_reserve_job_slot(job_id: str) -> CapacityReservationError | None:
+    max_parallel_jobs, parse_error = _configured_max_parallel_jobs()
+    if parse_error:
+        return {"ok": False, "error": parse_error}
+
+    with _JOBS_LOCK:
+        running_jobs = _count_running_or_reserved_jobs_locked()
+        if running_jobs >= max_parallel_jobs:
+            return {
+                "ok": False,
+                "status": "capacity_exceeded",
+                "error": (
+                    "Maximum parallel behave jobs reached. "
+                    f"Set {MAX_PARALLEL_JOBS_ENV_VAR} to a higher value "
+                    "or wait for an active job to complete."
+                ),
+                "capacity": {
+                    "max_parallel_jobs": max_parallel_jobs,
+                    "running_jobs": running_jobs,
+                },
+            }
+
+        ACTIVE_JOBS[job_id] = {
+            "slot_reserved": True,
+            "reserved_at": _utc_timestamp(),
+        }
+
+    return None
+
+
+def _release_job_slot(job_id: str) -> None:
+    with _JOBS_LOCK:
+        ACTIVE_JOBS.pop(job_id, None)
+
+
+def _configured_max_parallel_jobs() -> tuple[int, str | None]:
+    value = os.environ.get(MAX_PARALLEL_JOBS_ENV_VAR, "").strip()
+    if not value:
+        return _DEFAULT_MAX_PARALLEL_JOBS, None
+
+    try:
+        parsed_value = int(value)
+    except ValueError:
+        return (
+            None,
+            f"{MAX_PARALLEL_JOBS_ENV_VAR} must be a positive integer",
+        )
+
+    if parsed_value <= 0:
+        return (
+            None,
+            f"{MAX_PARALLEL_JOBS_ENV_VAR} must be a positive integer",
+        )
+
+    return parsed_value, None
+
+
+def _count_running_or_reserved_jobs_locked() -> int:
+    running_jobs = 0
+    for job in ACTIVE_JOBS.values():
+        if job.get("slot_reserved"):
+            running_jobs += 1
+            continue
+
+        process = job.get("process")
+        if process is None:
+            continue
+
+        returncode = process.poll()
+        if returncode is None:
+            running_jobs += 1
+
+    return running_jobs
 
 
 def _job_artifacts_payload(

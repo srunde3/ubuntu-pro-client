@@ -294,4 +294,4 @@ async def test_mcp_start_rejects_cloud_machine_types():
 
     payload = _result_json(result)
     assert payload["ok"] is False
-    assert "Unsupported machine_types" in payload["error"]
+    assert "Cloud machine_types are disabled by default" in payload["error"]
