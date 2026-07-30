@@ -7,6 +7,7 @@ from behave_mcp import domain
 from behave_mcp.ports import (
     ArtifactStore,
     Config,
+    FeatureFileReader,
     Job,
     JobRegistry,
     LogFileOpenError,
@@ -26,6 +27,7 @@ class BehaveService:
         self,
         *,
         config: Config,
+        feature_reader: FeatureFileReader,
         artifact_store: ArtifactStore,
         registry: JobRegistry,
         launcher: ProcessLauncher,
@@ -35,6 +37,7 @@ class BehaveService:
         new_job_id: Callable[[], str],
     ) -> None:
         self._config = config
+        self._feature_reader = feature_reader
         self._artifact_store = artifact_store
         self._registry = registry
         self._launcher = launcher
@@ -54,7 +57,7 @@ class BehaveService:
         return {
             "ok": True,
             "repo_root": str(resolved_repo_root),
-            "features": self._artifact_store.discover_feature_files(
+            "features": self._feature_reader.discover_feature_files(
                 resolved_repo_root
             ),
         }
@@ -76,7 +79,7 @@ class BehaveService:
 
         normalized = domain.normalize_feature_file_arg(feature_file)
         allowed_features = set(
-            self._artifact_store.discover_feature_files(resolved_repo_root)
+            self._feature_reader.discover_feature_files(resolved_repo_root)
         )
         if normalized not in allowed_features:
             return {

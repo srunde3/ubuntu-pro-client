@@ -1,7 +1,11 @@
 import json
 from pathlib import Path
 
-from behave_mcp.adapters import InMemoryJobRegistry, LocalArtifactStore
+from behave_mcp.adapters import (
+    InMemoryJobRegistry,
+    LocalArtifactStore,
+    LocalFeatureFileReader,
+)
 from behave_mcp.ports import Job, LogFileOpenError, ProcessStartError
 from behave_mcp.service import BehaveService
 
@@ -108,6 +112,7 @@ def _make_service(
 ) -> BehaveService:
     return BehaveService(
         config=config,
+        feature_reader=LocalFeatureFileReader(),
         artifact_store=LocalArtifactStore(),
         registry=registry if registry is not None else InMemoryJobRegistry(),
         launcher=launcher if launcher is not None else FakeLauncher(),

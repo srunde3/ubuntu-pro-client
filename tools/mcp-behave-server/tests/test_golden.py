@@ -7,7 +7,11 @@ per-log-dir index, plus the JSON key ordering of tool response payloads.
 import json
 from pathlib import Path
 
-from behave_mcp.adapters import InMemoryJobRegistry, LocalArtifactStore
+from behave_mcp.adapters import (
+    InMemoryJobRegistry,
+    LocalArtifactStore,
+    LocalFeatureFileReader,
+)
 from behave_mcp.ports import Job
 from behave_mcp.service import BehaveService
 
@@ -55,6 +59,7 @@ class _StubConfig:
 def _service(tmp_path, registry) -> BehaveService:
     return BehaveService(
         config=_StubConfig(tmp_path),
+        feature_reader=LocalFeatureFileReader(),
         artifact_store=LocalArtifactStore(),
         registry=registry,
         launcher=None,
@@ -172,6 +177,7 @@ def test_timeout_key_order(tmp_path):
     values = iter([0.0, 1.1])
     service = BehaveService(
         config=_StubConfig(tmp_path),
+        feature_reader=LocalFeatureFileReader(),
         artifact_store=LocalArtifactStore(),
         registry=registry,
         launcher=None,

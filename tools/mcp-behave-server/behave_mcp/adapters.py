@@ -35,7 +35,7 @@ class SubprocessHandle:
         self._process.terminate()
 
 
-class SubprocessProcessLauncher:
+class PopenLauncher:
     """Launches behave via ``subprocess.Popen`` writing to a log file."""
 
     def launch(
@@ -122,8 +122,8 @@ class InMemoryJobRegistry:
         return running_jobs
 
 
-class LocalArtifactStore:
-    """Filesystem-backed artifact persistence and log tailing."""
+class LocalFeatureFileReader:
+    """Filesystem-backed reader for the repository's feature file catalog."""
 
     def discover_feature_files(self, repo_root: Path) -> list[str]:
         features_dir = repo_root / "features"
@@ -134,6 +134,10 @@ class LocalArtifactStore:
             str(path.relative_to(repo_root)).replace("\\", "/")
             for path in features_dir.rglob("*.feature")
         )
+
+
+class LocalArtifactStore:
+    """Filesystem-backed artifact persistence and log tailing."""
 
     def read_metadata(self, path: Path) -> dict[str, Any]:
         if not path.exists():

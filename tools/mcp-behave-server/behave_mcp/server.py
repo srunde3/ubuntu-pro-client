@@ -9,7 +9,8 @@ from behave_mcp.adapters import (
     EnvConfig,
     InMemoryJobRegistry,
     LocalArtifactStore,
-    SubprocessProcessLauncher,
+    LocalFeatureFileReader,
+    PopenLauncher,
 )
 from behave_mcp.service import BehaveService
 from mcp.server import FastMCP
@@ -25,11 +26,13 @@ def _utc_timestamp() -> str:
 
 
 _config = EnvConfig()
+_feature_reader = LocalFeatureFileReader()
 _artifact_store = LocalArtifactStore()
 registry = InMemoryJobRegistry()
-_launcher = SubprocessProcessLauncher()
+_launcher = PopenLauncher()
 _service = BehaveService(
     config=_config,
+    feature_reader=_feature_reader,
     artifact_store=_artifact_store,
     registry=registry,
     launcher=_launcher,

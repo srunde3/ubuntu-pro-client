@@ -7,11 +7,12 @@ from behave_mcp.adapters import (
     EnvConfig,
     InMemoryJobRegistry,
     LocalArtifactStore,
-    SubprocessProcessLauncher,
+    LocalFeatureFileReader,
+    PopenLauncher,
 )
 from behave_mcp.ports import Job, LogFileOpenError, ProcessStartError
 
-# ---- LocalArtifactStore ----
+# ---- LocalFeatureFileReader ----
 
 
 def test_discover_feature_files_sorted(tmp_path):
@@ -22,17 +23,20 @@ def test_discover_feature_files_sorted(tmp_path):
     )
     (tmp_path / "features" / "notes.txt").write_text("", encoding="utf-8")
 
-    store = LocalArtifactStore()
+    reader = LocalFeatureFileReader()
 
-    assert store.discover_feature_files(tmp_path) == [
+    assert reader.discover_feature_files(tmp_path) == [
         "features/b.feature",
         "features/cli/a.feature",
     ]
 
 
 def test_discover_feature_files_missing_dir(tmp_path):
-    store = LocalArtifactStore()
-    assert store.discover_feature_files(tmp_path) == []
+    reader = LocalFeatureFileReader()
+    assert reader.discover_feature_files(tmp_path) == []
+
+
+# ---- LocalArtifactStore ----
 
 
 def test_read_metadata_missing_or_invalid(tmp_path):
@@ -203,7 +207,7 @@ def test_launcher_success(tmp_path, monkeypatch):
         return _FakeProcess()
 
     monkeypatch.setattr(adapters_module.subprocess, "Popen", fake_popen)
-    launcher = SubprocessProcessLauncher()
+    launcher = PopenLauncher()
     log_path = tmp_path / "out.log"
 
     handle = launcher.launch(["tox"], str(tmp_path), {"A": "B"}, log_path)
@@ -221,7 +225,7 @@ def test_launcher_success(tmp_path, monkeypatch):
 
 
 def test_launcher_log_open_failure(tmp_path):
-    launcher = SubprocessProcessLauncher()
+    launcher = PopenLauncher()
     missing_dir = tmp_path / "missing" / "out.log"
     with pytest.raises(LogFileOpenError):
         launcher.launch(["tox"], str(tmp_path), {}, missing_dir)
@@ -232,7 +236,7 @@ def test_launcher_process_start_failure(tmp_path, monkeypatch):
         raise OSError("no exec")
 
     monkeypatch.setattr(adapters_module.subprocess, "Popen", boom)
-    launcher = SubprocessProcessLauncher()
+    launcher = PopenLauncher()
     log_path = tmp_path / "out.log"
 
     with pytest.raises(ProcessStartError):
