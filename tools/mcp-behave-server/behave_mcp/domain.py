@@ -6,6 +6,7 @@ also live here.
 """
 
 import posixpath
+import re
 from pathlib import Path
 from typing import Any
 
@@ -217,3 +218,234 @@ def summarize_report(report_data: list[Any]) -> dict[str, Any]:
         )
 
     return {"summary": summary, "failures": failures}
+
+
+# ---------------------------------------------------------------------------
+# Feature introspection
+#
+# These functions turn parsed behave model objects (Feature/Scenario/Example)
+# into plain, JSON-serializable dicts and provide the projections and filters
+# used by the browse/select MCP tools. They are behave-free: they only rely on
+# duck-typed attributes, so tests can pass simple fakes.
+# ---------------------------------------------------------------------------
+
+_CONFIG_TAG_PREFIX = "uses.config."
+_GIVEN_MACHINE_STEP_RE = re.compile(
+    r"a `(.*)` `(.*)` machine with ubuntu-advantage-tools installed"
+)
+
+
+def _is_placeholder(value: str) -> bool:
+    return value.startswith("<") and value.endswith(">")
+
+
+def _literal_or_none(value: str) -> str | None:
+    if not value or _is_placeholder(value):
+        return None
+    return value
+
+
+def requires_config_from_tags(tags: list[str]) -> list[str]:
+    """Return sorted config requirements from ``uses.config.*`` tags."""
+    requirements: list[str] = []
+    for tag in tags:
+        if tag.startswith(_CONFIG_TAG_PREFIX):
+            remainder = tag[len(_CONFIG_TAG_PREFIX) :]
+            if remainder and remainder not in requirements:
+                requirements.append(remainder)
+    return sorted(requirements)
+
+
+def _step_machine_override(scenario: Any) -> tuple[str | None, str | None]:
+    steps = getattr(scenario, "steps", None) or []
+    if not steps:
+        return None, None
+    match = _GIVEN_MACHINE_STEP_RE.match(getattr(steps[0], "name", "") or "")
+    if not match:
+        return None, None
+    return _literal_or_none(match.group(1)), _literal_or_none(match.group(2))
+
+
+def _add_combo(
+    combos: list[dict[str, str]],
+    seen: set[tuple[str, str]],
+    release: str | None,
+    machine_type: str | None,
+) -> None:
+    if not release or not machine_type:
+        return
+    if _is_placeholder(release) or _is_placeholder(machine_type):
+        return
+    key = (release, machine_type)
+    if key in seen:
+        return
+    seen.add(key)
+    combos.append({"release": release, "machine_type": machine_type})
+
+
+def combos_from_scenario(scenario: Any) -> list[dict[str, str]]:
+    """Return the distinct ``{release, machine_type}`` pairs for a scenario.
+
+    Combos come from Scenario Outline ``Examples`` rows, and from a hardcoded
+    first step ``Given a `<release>` `<machine_type>` machine ...`` which, when
+    literal, overrides the example values (mirroring ``environment.py``).
+    """
+    step_release, step_machine_type = _step_machine_override(scenario)
+    combos: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+
+    examples = getattr(scenario, "examples", None) or []
+    if examples:
+        for example in examples:
+            table = getattr(example, "table", None)
+            if table is None:
+                continue
+            headings = list(getattr(table, "headings", []) or [])
+            for row in getattr(table, "rows", []) or []:
+                row_map = dict(zip(headings, list(getattr(row, "cells", []))))
+                _add_combo(
+                    combos,
+                    seen,
+                    step_release or row_map.get("release"),
+                    step_machine_type or row_map.get("machine_type"),
+                )
+    else:
+        _add_combo(combos, seen, step_release, step_machine_type)
+
+    return combos
+
+
+def _example_columns(scenario: Any) -> list[str]:
+    columns: list[str] = []
+    for example in getattr(scenario, "examples", None) or []:
+        table = getattr(example, "table", None)
+        if table is None:
+            continue
+        for heading in getattr(table, "headings", []) or []:
+            if heading not in columns:
+                columns.append(heading)
+    return columns
+
+
+def summarize_feature(feature: Any) -> dict[str, Any]:
+    """Turn a parsed behave ``Feature`` into a plain metadata dict."""
+    feature_tags = list(getattr(feature, "tags", []) or [])
+    scenarios: list[dict[str, Any]] = []
+    for scenario in getattr(feature, "scenarios", []) or []:
+        scenario_tags = list(getattr(scenario, "tags", []) or [])
+        effective_tags = feature_tags + scenario_tags
+        scenarios.append(
+            {
+                "name": getattr(scenario, "name", "") or "",
+                "type": getattr(scenario, "type", "scenario"),
+                "tags": scenario_tags,
+                "requires_config": requires_config_from_tags(effective_tags),
+                "example_columns": _example_columns(scenario),
+                "combos": combos_from_scenario(scenario),
+            }
+        )
+    return {
+        "title": getattr(feature, "name", "") or "",
+        "tags": feature_tags,
+        "requires_config": requires_config_from_tags(feature_tags),
+        "scenarios": scenarios,
+    }
+
+
+def catalog_entry(feature_detail: dict[str, Any]) -> dict[str, Any]:
+    """Project a full feature detail into a lightweight catalog entry."""
+    releases: list[str] = []
+    machine_types: list[str] = []
+    requires_config = list(feature_detail.get("requires_config", []))
+    for scenario in feature_detail.get("scenarios", []):
+        for requirement in scenario.get("requires_config", []):
+            if requirement not in requires_config:
+                requires_config.append(requirement)
+        for combo in scenario.get("combos", []):
+            if combo["release"] not in releases:
+                releases.append(combo["release"])
+            if combo["machine_type"] not in machine_types:
+                machine_types.append(combo["machine_type"])
+    return {
+        "path": feature_detail.get("path", ""),
+        "title": feature_detail.get("title", ""),
+        "scenario_count": len(feature_detail.get("scenarios", [])),
+        "requires_config": sorted(requires_config),
+        "releases": sorted(releases),
+        "machine_types": sorted(machine_types),
+    }
+
+
+def filtered_combos(
+    scenario: dict[str, Any],
+    release: str | None = None,
+    machine_type: str | None = None,
+) -> list[dict[str, str]]:
+    """Return the scenario combos matching the given release/machine_type."""
+    result: list[dict[str, str]] = []
+    for combo in scenario.get("combos", []):
+        if release is not None and combo["release"] != release:
+            continue
+        if machine_type is not None and combo["machine_type"] != machine_type:
+            continue
+        result.append(combo)
+    return result
+
+
+def scenario_matches(
+    scenario: dict[str, Any],
+    feature_tags: list[str],
+    *,
+    release: str | None = None,
+    machine_type: str | None = None,
+    tag: str | None = None,
+    text: str | None = None,
+) -> bool:
+    """Return whether a scenario satisfies all provided filters."""
+    if (release is not None or machine_type is not None) and not (
+        filtered_combos(scenario, release, machine_type)
+    ):
+        return False
+    if tag is not None:
+        all_tags = set(feature_tags) | set(scenario.get("tags", []))
+        if tag not in all_tags:
+            return False
+    if text is not None:
+        if text.lower() not in scenario.get("name", "").lower():
+            return False
+    return True
+
+
+def aggregate_dimensions(
+    feature_details: list[dict[str, Any]],
+) -> dict[str, list[dict[str, Any]]]:
+    """Return distinct releases and machine_types with scenario counts.
+
+    Each scenario contributes at most once to a given release or machine_type,
+    regardless of how many example rows reference it.
+    """
+    release_counts: dict[str, int] = {}
+    machine_type_counts: dict[str, int] = {}
+    for feature_detail in feature_details:
+        for scenario in feature_detail.get("scenarios", []):
+            releases_seen: set[str] = set()
+            machine_types_seen: set[str] = set()
+            for combo in scenario.get("combos", []):
+                releases_seen.add(combo["release"])
+                machine_types_seen.add(combo["machine_type"])
+            for release in releases_seen:
+                release_counts[release] = release_counts.get(release, 0) + 1
+            for machine_type in machine_types_seen:
+                machine_type_counts[machine_type] = (
+                    machine_type_counts.get(machine_type, 0) + 1
+                )
+    return {
+        "releases": [
+            {"name": name, "scenario_count": count}
+            for name, count in sorted(release_counts.items())
+        ],
+        "machine_types": [
+            {"name": name, "scenario_count": count}
+            for name, count in sorted(machine_type_counts.items())
+        ],
+    }

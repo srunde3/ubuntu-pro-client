@@ -128,7 +128,8 @@ def test_list_features_returns_feature_files(tmp_path):
     result = service.list_features()
 
     assert result["ok"] is True
-    assert "features/cli/attach.feature" in result["features"]
+    paths = [feature["path"] for feature in result["features"]]
+    assert "features/cli/attach.feature" in paths
 
 
 def test_list_features_uses_repo_root_override(tmp_path):
@@ -141,7 +142,9 @@ def test_list_features_uses_repo_root_override(tmp_path):
 
     assert result["ok"] is True
     assert result["repo_root"] == str(repo_root)
-    assert result["features"] == ["features/cli/sample.feature"]
+    assert [feature["path"] for feature in result["features"]] == [
+        "features/cli/sample.feature"
+    ]
 
 
 def test_list_features_rejects_invalid_repo_root():
@@ -154,6 +157,135 @@ def test_list_features_rejects_invalid_repo_root():
     assert result["ok"] is False
     assert "Invalid repo_root" in result["error"]
     assert result["features"] == []
+
+
+_OUTLINE_FEATURE = """\
+@uses.config.contract_token
+Feature: Attach things
+
+  Scenario Outline: Attach on a machine
+    Given a `<release>` `<machine_type>` machine with ubuntu-advantage-tools installed
+    When I attach
+
+    Examples: ubuntu release
+      | release  | machine_type  |
+      | jammy    | lxd-container |
+      | resolute | lxd-vm        |
+
+  @arm64
+  Scenario Outline: Attach invalid token
+    Given a `<release>` `<machine_type>` machine with ubuntu-advantage-tools installed
+    When I attach INVALID
+
+    Examples: ubuntu release
+      | release | machine_type  |
+      | jammy   | lxd-container |
+"""
+
+
+def _make_repo_with_outline(tmp_path) -> Path:
+    repo_root = tmp_path / "repo"
+    feature_path = repo_root / "features" / "cli" / "attach.feature"
+    feature_path.parent.mkdir(parents=True, exist_ok=True)
+    (repo_root / "tox.ini").write_text("[tox]\n", encoding="utf-8")
+    feature_path.write_text(_OUTLINE_FEATURE, encoding="utf-8")
+    return repo_root
+
+
+def test_list_features_returns_catalog_entry(tmp_path):
+    repo_root = _make_repo_with_outline(tmp_path)
+    service = _make_service(FakeWorkspace(repo_root=repo_root))
+
+    result = service.list_features()
+
+    entry = result["features"][0]
+    assert entry["path"] == "features/cli/attach.feature"
+    assert entry["title"] == "Attach things"
+    assert entry["scenario_count"] == 2
+    assert entry["requires_config"] == ["contract_token"]
+    assert entry["releases"] == ["jammy", "resolute"]
+    assert entry["machine_types"] == ["lxd-container", "lxd-vm"]
+
+
+def test_list_features_filters_by_release_and_machine_type(tmp_path):
+    repo_root = _make_repo_with_outline(tmp_path)
+    service = _make_service(FakeWorkspace(repo_root=repo_root))
+
+    match = service.list_features(release="resolute", machine_type="lxd-vm")
+    assert len(match["features"]) == 1
+
+    no_match = service.list_features(
+        release="resolute", machine_type="lxd-container"
+    )
+    assert no_match["features"] == []
+
+
+def test_describe_feature_returns_scenarios(tmp_path):
+    repo_root = _make_repo_with_outline(tmp_path)
+    service = _make_service(FakeWorkspace(repo_root=repo_root))
+
+    result = service.describe_feature("features/cli/attach.feature")
+
+    assert result["ok"] is True
+    assert result["requires_config"] == ["contract_token"]
+    scenario = result["scenarios"][0]
+    assert scenario["name"] == "Attach on a machine"
+    assert scenario["type"] == "scenario_outline"
+    assert scenario["example_columns"] == ["release", "machine_type"]
+    assert scenario["combos"] == [
+        {"release": "jammy", "machine_type": "lxd-container"},
+        {"release": "resolute", "machine_type": "lxd-vm"},
+    ]
+
+
+def test_describe_feature_rejects_unlisted_feature(tmp_path):
+    repo_root = _make_repo_with_outline(tmp_path)
+    service = _make_service(FakeWorkspace(repo_root=repo_root))
+
+    result = service.describe_feature("features/cli/missing.feature")
+
+    assert result["ok"] is False
+    assert "Feature is not listed by list_features" in result["error"]
+
+
+def test_list_dimensions_counts_scenarios(tmp_path):
+    repo_root = _make_repo_with_outline(tmp_path)
+    service = _make_service(FakeWorkspace(repo_root=repo_root))
+
+    result = service.list_dimensions()
+
+    assert result["releases"] == [
+        {"name": "jammy", "scenario_count": 2},
+        {"name": "resolute", "scenario_count": 1},
+    ]
+    assert result["machine_types"] == [
+        {"name": "lxd-container", "scenario_count": 2},
+        {"name": "lxd-vm", "scenario_count": 1},
+    ]
+
+
+def test_find_scenarios_filters_by_tag(tmp_path):
+    repo_root = _make_repo_with_outline(tmp_path)
+    service = _make_service(FakeWorkspace(repo_root=repo_root))
+
+    result = service.find_scenarios(tag="arm64")
+
+    assert len(result["matches"]) == 1
+    match = result["matches"][0]
+    assert match["scenario_name"] == "Attach invalid token"
+    assert match["feature_file"] == "features/cli/attach.feature"
+
+
+def test_find_scenarios_filters_combos_by_machine_type(tmp_path):
+    repo_root = _make_repo_with_outline(tmp_path)
+    service = _make_service(FakeWorkspace(repo_root=repo_root))
+
+    result = service.find_scenarios(machine_type="lxd-vm")
+
+    assert len(result["matches"]) == 1
+    assert result["matches"][0]["combos"] == [
+        {"release": "resolute", "machine_type": "lxd-vm"}
+    ]
 
 
 def test_start_scenario_rejects_unlisted_feature(tmp_path):

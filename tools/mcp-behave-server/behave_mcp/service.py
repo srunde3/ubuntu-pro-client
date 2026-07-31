@@ -49,7 +49,14 @@ class BehaveService:
         self._now_utc = now_utc
         self._new_job_id = new_job_id
 
-    def list_features(self, repo_root: str = "") -> dict[str, Any]:
+    def list_features(
+        self,
+        release: str | None = None,
+        machine_type: str | None = None,
+        tag: str | None = None,
+        text: str | None = None,
+        repo_root: str = "",
+    ) -> dict[str, Any]:
         try:
             resolved_repo_root = self._workspace.resolve_repo_root(
                 repo_root or None
@@ -57,13 +64,155 @@ class BehaveService:
         except ValueError as exc:
             return {"ok": False, "error": str(exc), "features": []}
 
+        details = self._feature_reader.discover_feature_details(
+            resolved_repo_root
+        )
+        features = [
+            domain.catalog_entry(detail)
+            for detail in details
+            if self._feature_has_match(
+                detail,
+                release=release,
+                machine_type=machine_type,
+                tag=tag,
+                text=text,
+            )
+        ]
+
         return {
             "ok": True,
             "repo_root": str(resolved_repo_root),
-            "features": self._feature_reader.discover_feature_files(
-                resolved_repo_root
+            "features": features,
+        }
+
+    def describe_feature(
+        self, feature_file: str, repo_root: str = ""
+    ) -> dict[str, Any]:
+        try:
+            resolved_repo_root = self._workspace.resolve_repo_root(
+                repo_root or None
+            )
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+
+        normalized = domain.normalize_feature_file_arg(feature_file)
+        details = self._feature_reader.discover_feature_details(
+            resolved_repo_root
+        )
+        for detail in details:
+            if detail["path"] == normalized:
+                return {
+                    "ok": True,
+                    "feature_file": detail["path"],
+                    "title": detail.get("title", ""),
+                    "tags": detail.get("tags", []),
+                    "requires_config": detail.get("requires_config", []),
+                    "scenarios": detail.get("scenarios", []),
+                }
+
+        return {
+            "ok": False,
+            "error": (
+                "Feature is not listed by list_features: " f"{feature_file}"
             ),
         }
+
+    def list_dimensions(self, repo_root: str = "") -> dict[str, Any]:
+        try:
+            resolved_repo_root = self._workspace.resolve_repo_root(
+                repo_root or None
+            )
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+
+        details = self._feature_reader.discover_feature_details(
+            resolved_repo_root
+        )
+        dimensions = domain.aggregate_dimensions(details)
+        return {
+            "ok": True,
+            "repo_root": str(resolved_repo_root),
+            "releases": dimensions["releases"],
+            "machine_types": dimensions["machine_types"],
+        }
+
+    def find_scenarios(
+        self,
+        release: str | None = None,
+        machine_type: str | None = None,
+        tag: str | None = None,
+        text: str | None = None,
+        repo_root: str = "",
+    ) -> dict[str, Any]:
+        try:
+            resolved_repo_root = self._workspace.resolve_repo_root(
+                repo_root or None
+            )
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc), "matches": []}
+
+        details = self._feature_reader.discover_feature_details(
+            resolved_repo_root
+        )
+        matches: list[dict[str, Any]] = []
+        for detail in details:
+            feature_tags = detail.get("tags", [])
+            for scenario in detail.get("scenarios", []):
+                if not domain.scenario_matches(
+                    scenario,
+                    feature_tags,
+                    release=release,
+                    machine_type=machine_type,
+                    tag=tag,
+                    text=text,
+                ):
+                    continue
+                matches.append(
+                    {
+                        "feature_file": detail["path"],
+                        "scenario_name": scenario.get("name", ""),
+                        "type": scenario.get("type", "scenario"),
+                        "requires_config": scenario.get("requires_config", []),
+                        "combos": domain.filtered_combos(
+                            scenario, release, machine_type
+                        ),
+                    }
+                )
+
+        return {
+            "ok": True,
+            "repo_root": str(resolved_repo_root),
+            "matches": matches,
+        }
+
+    @staticmethod
+    def _feature_has_match(
+        feature_detail: dict[str, Any],
+        *,
+        release: str | None,
+        machine_type: str | None,
+        tag: str | None,
+        text: str | None,
+    ) -> bool:
+        if (
+            release is None
+            and machine_type is None
+            and tag is None
+            and text is None
+        ):
+            return True
+        feature_tags = feature_detail.get("tags", [])
+        return any(
+            domain.scenario_matches(
+                scenario,
+                feature_tags,
+                release=release,
+                machine_type=machine_type,
+                tag=tag,
+                text=text,
+            )
+            for scenario in feature_detail.get("scenarios", [])
+        )
 
     def start_scenario(
         self,

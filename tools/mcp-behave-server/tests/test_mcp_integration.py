@@ -79,6 +79,9 @@ async def test_mcp_lists_expected_tools():
 
     tools = {tool.name: tool for tool in result.tools}
     assert "list_features" in tools
+    assert "describe_feature" in tools
+    assert "list_dimensions" in tools
+    assert "find_scenarios" in tools
     assert "start_behave_scenario" in tools
     assert "wait_for_scenario_completion" in tools
     assert "get_scenario_logs" in tools
@@ -96,7 +99,8 @@ async def test_mcp_list_features_returns_json(monkeypatch):
 
     payload = _result_json(result)
     assert "features" in payload
-    assert "features/cli/attach.feature" in payload["features"]
+    paths = [feature["path"] for feature in payload["features"]]
+    assert "features/cli/attach.feature" in paths
 
 
 @pytest.mark.asyncio
@@ -111,7 +115,9 @@ async def test_mcp_list_features_uses_repo_root_override(tmp_path):
     payload = _result_json(result)
     assert payload["ok"] is True
     assert payload["repo_root"] == str(fake_repo)
-    assert payload["features"] == ["features/cli/sample.feature"]
+    assert [feature["path"] for feature in payload["features"]] == [
+        "features/cli/sample.feature"
+    ]
 
 
 @pytest.mark.asyncio

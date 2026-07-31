@@ -8,6 +8,7 @@ from collections import deque
 from pathlib import Path
 from typing import Any
 
+from behave.parser import parse_file
 from behave_mcp import domain
 from behave_mcp.ports import (
     Job,
@@ -125,6 +126,11 @@ class InMemoryJobRegistry:
 class LocalFeatureFileReader:
     """Filesystem-backed reader for the repository's feature file catalog."""
 
+    def __init__(self) -> None:
+        # Cache parsed feature summaries keyed by absolute path, invalidated by
+        # file mtime so all browse tools share a single parse pass.
+        self._detail_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+
     def discover_feature_files(self, repo_root: Path) -> list[str]:
         features_dir = repo_root / "features"
         if not features_dir.exists():
@@ -134,6 +140,45 @@ class LocalFeatureFileReader:
             str(path.relative_to(repo_root)).replace("\\", "/")
             for path in features_dir.rglob("*.feature")
         )
+
+    def discover_feature_details(
+        self, repo_root: Path
+    ) -> list[dict[str, Any]]:
+        features_dir = repo_root / "features"
+        if not features_dir.exists():
+            return []
+
+        details: list[dict[str, Any]] = []
+        for path in sorted(features_dir.rglob("*.feature")):
+            summary = self._read_feature_detail(path)
+            if summary is None:
+                continue
+            rel_path = str(path.relative_to(repo_root)).replace("\\", "/")
+            details.append({"path": rel_path, **summary})
+        return sorted(details, key=lambda detail: detail["path"])
+
+    def _read_feature_detail(self, path: Path) -> dict[str, Any] | None:
+        try:
+            mtime = path.stat().st_mtime
+        except OSError:
+            return None
+
+        cache_key = str(path)
+        cached = self._detail_cache.get(cache_key)
+        if cached is not None and cached[0] == mtime:
+            return cached[1]
+
+        try:
+            feature = parse_file(str(path))
+        except Exception:
+            # A single unparseable feature must not break the whole catalog.
+            return None
+        if feature is None:
+            return None
+
+        summary = domain.summarize_feature(feature)
+        self._detail_cache[cache_key] = (mtime, summary)
+        return summary
 
 
 class LocalArtifactStore:

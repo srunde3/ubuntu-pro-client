@@ -103,6 +103,17 @@ class FeatureFileReader(Protocol):
         """Return repo-relative paths of every ``*.feature`` file, sorted."""
         ...
 
+    def discover_feature_details(
+        self, repo_root: Path
+    ) -> list[dict[str, Any]]:
+        """Return parsed metadata for every feature file, sorted by path.
+
+        Each entry contains ``path`` plus the summarized feature fields
+        (``title``, ``tags``, ``requires_config``, ``scenarios``). Files that
+        fail to parse are skipped.
+        """
+        ...
+
 
 class ArtifactStore(Protocol):
     """Filesystem persistence for job logs, metadata, and reports."""

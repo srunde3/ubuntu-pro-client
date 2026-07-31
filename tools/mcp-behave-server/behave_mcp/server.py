@@ -54,11 +54,81 @@ async def healthcheck(request):
 @mcp.tool(
     description=(
         "List feature files available in the repository so an agent can "
-        "choose an allowed behave scenario."
+        "choose an allowed behave scenario. Returns a lightweight catalog "
+        "entry per feature (path, title, scenario_count, requires_config, and "
+        "the releases and machine_types it covers). Optional release, "
+        "machine_type, tag, and text filters keep only features with at least "
+        "one matching scenario. Use describe_feature for full per-scenario "
+        "detail."
     )
 )
-def list_features(repo_root: str = "") -> str:
-    return json.dumps(_service.list_features(repo_root))
+def list_features(
+    release: str = "",
+    machine_type: str = "",
+    tag: str = "",
+    text: str = "",
+    repo_root: str = "",
+) -> str:
+    return json.dumps(
+        _service.list_features(
+            release=release or None,
+            machine_type=machine_type or None,
+            tag=tag or None,
+            text=text or None,
+            repo_root=repo_root,
+        )
+    )
+
+
+@mcp.tool(
+    description=(
+        "Return full detail for a single feature file: its title, tags, "
+        "required config, and every scenario with name, type, tags, required "
+        "config, Examples column names, and the distinct (release, "
+        "machine_type) combos it supports. feature_file must be a path "
+        "returned by list_features."
+    )
+)
+def describe_feature(feature_file: str, repo_root: str = "") -> str:
+    return json.dumps(_service.describe_feature(feature_file, repo_root))
+
+
+@mcp.tool(
+    description=(
+        "List every distinct release and machine_type (substrate) used across "
+        "the whole suite, each with a count of scenarios that reference it. "
+        "Use this to discover valid values before filtering with "
+        "list_features or find_scenarios."
+    )
+)
+def list_dimensions(repo_root: str = "") -> str:
+    return json.dumps(_service.list_dimensions(repo_root))
+
+
+@mcp.tool(
+    description=(
+        "Find scenarios across all features matching optional release, "
+        "machine_type, tag, and text (scenario-name substring) filters. "
+        "Returns matching feature_file, scenario_name, type, required config, "
+        "and the combos that satisfy the release/machine_type filters."
+    )
+)
+def find_scenarios(
+    release: str = "",
+    machine_type: str = "",
+    tag: str = "",
+    text: str = "",
+    repo_root: str = "",
+) -> str:
+    return json.dumps(
+        _service.find_scenarios(
+            release=release or None,
+            machine_type=machine_type or None,
+            tag=tag or None,
+            text=text or None,
+            repo_root=repo_root,
+        )
+    )
 
 
 @mcp.tool(
