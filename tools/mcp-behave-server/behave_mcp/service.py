@@ -11,7 +11,6 @@ from behave_mcp.messages import (
     CapacityExceededResponse,
     CompletedResponse,
     DescribeFeatureResponse,
-    ErrorResponse,
     ExistsFlags,
     FeatureDetail,
     FindScenariosResponse,
@@ -21,7 +20,9 @@ from behave_mcp.messages import (
     RunningResponse,
     ScenarioMatch,
     StartScenarioResponse,
+    StartScenarioResult,
     TimeoutResponse,
+    WaitForCompletionResult,
 )
 from behave_mcp.ports import (
     ArtifactStore,
@@ -33,6 +34,15 @@ from behave_mcp.ports import (
     ProcessStartError,
     Workspace,
 )
+
+
+class BehaveServiceError(Exception):
+    """Raised for expected, user-facing failures (bad input, unknown job, etc.).
+
+    FastMCP catches any exception raised from a tool function and reports it
+    to the MCP client as ``isError: true`` with this message as the text
+    content.
+    """
 
 
 class BehaveService:
@@ -74,13 +84,13 @@ class BehaveService:
         tag: str | None = None,
         text: str | None = None,
         repo_root: str = "",
-    ) -> ListFeaturesResponse | ErrorResponse:
+    ) -> ListFeaturesResponse:
         try:
             resolved_repo_root = self._workspace.resolve_repo_root(
                 repo_root or None
             )
         except ValueError as exc:
-            return ErrorResponse(error=str(exc))
+            raise BehaveServiceError(str(exc)) from exc
 
         details = self._feature_reader.discover_feature_details(
             resolved_repo_root
@@ -104,13 +114,13 @@ class BehaveService:
 
     def describe_feature(
         self, feature_file: str, repo_root: str = ""
-    ) -> DescribeFeatureResponse | ErrorResponse:
+    ) -> DescribeFeatureResponse:
         try:
             resolved_repo_root = self._workspace.resolve_repo_root(
                 repo_root or None
             )
         except ValueError as exc:
-            return ErrorResponse(error=str(exc))
+            raise BehaveServiceError(str(exc)) from exc
 
         normalized = domain.normalize_feature_file_arg(feature_file)
         details = self._feature_reader.discover_feature_details(
@@ -126,21 +136,17 @@ class BehaveService:
                     scenarios=detail.scenarios,
                 )
 
-        return ErrorResponse(
-            error=(
-                "Feature is not listed by list_features: " f"{feature_file}"
-            ),
+        raise BehaveServiceError(
+            f"Feature is not listed by list_features: {feature_file}"
         )
 
-    def list_dimensions(
-        self, repo_root: str = ""
-    ) -> ListDimensionsResponse | ErrorResponse:
+    def list_dimensions(self, repo_root: str = "") -> ListDimensionsResponse:
         try:
             resolved_repo_root = self._workspace.resolve_repo_root(
                 repo_root or None
             )
         except ValueError as exc:
-            return ErrorResponse(error=str(exc))
+            raise BehaveServiceError(str(exc)) from exc
 
         details = self._feature_reader.discover_feature_details(
             resolved_repo_root
@@ -159,13 +165,13 @@ class BehaveService:
         tag: str | None = None,
         text: str | None = None,
         repo_root: str = "",
-    ) -> FindScenariosResponse | ErrorResponse:
+    ) -> FindScenariosResponse:
         try:
             resolved_repo_root = self._workspace.resolve_repo_root(
                 repo_root or None
             )
         except ValueError as exc:
-            return ErrorResponse(error=str(exc))
+            raise BehaveServiceError(str(exc)) from exc
 
         details = self._feature_reader.discover_feature_details(
             resolved_repo_root
@@ -234,31 +240,28 @@ class BehaveService:
         scenario_name: str = "",
         releases: list[str] | None = None,
         repo_root: str = "",
-    ) -> StartScenarioResponse | CapacityExceededResponse | ErrorResponse:
+    ) -> StartScenarioResult:
         try:
             resolved_repo_root = self._workspace.resolve_repo_root(
                 repo_root or None
             )
         except ValueError as exc:
-            return ErrorResponse(error=str(exc))
+            raise BehaveServiceError(str(exc)) from exc
 
         normalized = domain.normalize_feature_file_arg(feature_file)
         allowed_features = set(
             self._feature_reader.discover_feature_files(resolved_repo_root)
         )
         if normalized not in allowed_features:
-            return ErrorResponse(
-                error=(
-                    "Feature is not listed by list_features: "
-                    f"{feature_file}"
-                ),
+            raise BehaveServiceError(
+                f"Feature is not listed by list_features: {feature_file}"
             )
 
         machine_type_error = domain.validate_machine_types(
             machine_types, self._settings.allow_cloud_machine_types
         )
         if machine_type_error:
-            return ErrorResponse(error=machine_type_error)
+            raise BehaveServiceError(machine_type_error)
 
         log_dir = self._workspace.resolve_log_dir(resolved_repo_root)
         job_id = self._new_job_id()
@@ -305,14 +308,14 @@ class BehaveService:
             )
         except LogFileOpenError as exc:
             self._registry.release(job_id)
-            return ErrorResponse(
-                error=f"Failed to open log file for job_id {job_id}: {exc}",
-            )
+            raise BehaveServiceError(
+                f"Failed to open log file for job_id {job_id}: {exc}"
+            ) from exc
         except ProcessStartError as exc:
             self._registry.release(job_id)
-            return ErrorResponse(
-                error=f"Failed to start behave scenario: {exc}",
-            )
+            raise BehaveServiceError(
+                f"Failed to start behave scenario: {exc}"
+            ) from exc
 
         self._registry.register(
             job_id,
@@ -364,7 +367,6 @@ class BehaveService:
 
         return StartScenarioResponse(
             job_id=job_id,
-            status="started",
             message="Test started. Call wait_for_scenario_completion.",
             artifacts=artifacts,
         )
@@ -377,22 +379,18 @@ class BehaveService:
             domain._DEFAULT_WAIT_POLL_INTERVAL_SECONDS
         ),
         repo_root: str = "",
-    ) -> CompletedResponse | TimeoutResponse | ErrorResponse:
+    ) -> WaitForCompletionResult:
         if max_wait_seconds <= 0:
-            return ErrorResponse(
-                error="max_wait_seconds must be greater than 0",
-            )
+            raise BehaveServiceError("max_wait_seconds must be greater than 0")
         if poll_interval_seconds <= 0:
-            return ErrorResponse(
-                error="poll_interval_seconds must be greater than 0",
+            raise BehaveServiceError(
+                "poll_interval_seconds must be greater than 0"
             )
 
         deadline = self._monotonic() + max_wait_seconds
 
         while True:
             payload = self._status_payload(job_id, repo_root or None)
-            if isinstance(payload, ErrorResponse):
-                return payload
 
             if isinstance(payload, CompletedResponse):
                 return payload
@@ -414,7 +412,7 @@ class BehaveService:
         job_id: str,
         lines: int = domain._DEFAULT_LOG_TAIL_LINES,
         repo_root: str = "",
-    ) -> LogsResponse | ErrorResponse:
+    ) -> LogsResponse:
         lines = max(1, min(lines, domain._MAX_LOG_TAIL_LINES))
 
         job = self._registry.get(job_id)
@@ -422,17 +420,17 @@ class BehaveService:
             try:
                 job = self._recover_job(job_id, repo_root or None)
             except ValueError as exc:
-                return ErrorResponse(error=str(exc))
+                raise BehaveServiceError(str(exc)) from exc
             if job is None:
-                return ErrorResponse(error=f"Unknown job_id: {job_id}")
+                raise BehaveServiceError(f"Unknown job_id: {job_id}")
 
         stdout_log = job.stdout_log
         json_report = job.json_report
         metadata = job.metadata
         log_dir = stdout_log.parent
         if not self._artifact_store.exists(stdout_log):
-            return ErrorResponse(
-                error=f"No log file exists for job_id: {job_id}",
+            raise BehaveServiceError(
+                f"No log file exists for job_id: {job_id}"
             )
 
         return LogsResponse(
@@ -450,15 +448,15 @@ class BehaveService:
 
     def get_artifacts(
         self, job_id: str, repo_root: str = ""
-    ) -> ArtifactsResponse | ErrorResponse:
+    ) -> ArtifactsResponse:
         job = self._registry.get(job_id)
         if job is None:
             try:
                 job = self._recover_job(job_id, repo_root or None)
             except ValueError as exc:
-                return ErrorResponse(error=str(exc))
+                raise BehaveServiceError(str(exc)) from exc
             if job is None:
-                return ErrorResponse(error=f"Unknown job_id: {job_id}")
+                raise BehaveServiceError(f"Unknown job_id: {job_id}")
 
         stdout_log = job.stdout_log
         json_report = job.json_report
@@ -483,15 +481,15 @@ class BehaveService:
 
     def _status_payload(
         self, job_id: str, repo_root_override: str | None
-    ) -> RunningResponse | CompletedResponse | ErrorResponse:
+    ) -> RunningResponse | CompletedResponse:
         job = self._registry.get(job_id)
         if job is None:
             try:
                 job = self._recover_job(job_id, repo_root_override)
             except ValueError as exc:
-                return ErrorResponse(error=str(exc))
+                raise BehaveServiceError(str(exc)) from exc
             if job is None:
-                return ErrorResponse(error=f"Unknown job_id: {job_id}")
+                raise BehaveServiceError(f"Unknown job_id: {job_id}")
 
         handle = job.process_handle
         stdout_log = job.stdout_log

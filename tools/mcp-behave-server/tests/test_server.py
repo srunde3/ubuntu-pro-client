@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 
+import pytest
 from behave_mcp.adapters import (
     InMemoryJobRegistry,
     LocalArtifactStore,
@@ -8,7 +9,7 @@ from behave_mcp.adapters import (
 )
 from behave_mcp.config import Settings
 from behave_mcp.ports import Job, LogFileOpenError, ProcessStartError
-from behave_mcp.service import BehaveService
+from behave_mcp.service import BehaveService, BehaveServiceError
 
 
 class FakeHandle:
@@ -127,7 +128,6 @@ def test_list_features_returns_feature_files(tmp_path):
 
     result = service.list_features().model_dump(mode="json")
 
-    assert result["ok"] is True
     paths = [feature["path"] for feature in result["features"]]
     assert "features/cli/attach.feature" in paths
 
@@ -142,7 +142,6 @@ def test_list_features_uses_repo_root_override(tmp_path):
         mode="json"
     )
 
-    assert result["ok"] is True
     assert result["repo_root"] == str(repo_root)
     assert [feature["path"] for feature in result["features"]] == [
         "features/cli/sample.feature"
@@ -154,12 +153,8 @@ def test_list_features_rejects_invalid_repo_root():
         FakeWorkspace(repo_root_error="Invalid repo_root: bad")
     )
 
-    result = service.list_features(repo_root="/whatever").model_dump(
-        mode="json"
-    )
-
-    assert result["ok"] is False
-    assert "Invalid repo_root" in result["error"]
+    with pytest.raises(BehaveServiceError, match="Invalid repo_root"):
+        service.list_features(repo_root="/whatever")
 
 
 _OUTLINE_FEATURE = """\
@@ -233,7 +228,6 @@ def test_describe_feature_returns_scenarios(tmp_path):
         "features/cli/attach.feature"
     ).model_dump(mode="json")
 
-    assert result["ok"] is True
     assert result["requires_config"] == ["contract_token"]
     scenario = result["scenarios"][0]
     assert scenario["name"] == "Attach on a machine"
@@ -249,12 +243,10 @@ def test_describe_feature_rejects_unlisted_feature(tmp_path):
     repo_root = _make_repo_with_outline(tmp_path)
     service = _make_service(FakeWorkspace(repo_root=repo_root))
 
-    result = service.describe_feature(
-        "features/cli/missing.feature"
-    ).model_dump(mode="json")
-
-    assert result["ok"] is False
-    assert "Feature is not listed by list_features" in result["error"]
+    with pytest.raises(
+        BehaveServiceError, match="Feature is not listed by list_features"
+    ):
+        service.describe_feature("features/cli/missing.feature")
 
 
 def test_list_dimensions_counts_scenarios(tmp_path):
@@ -305,13 +297,13 @@ def test_start_scenario_rejects_unlisted_feature(tmp_path):
         FakeWorkspace(repo_root=repo_root, log_dir=tmp_path)
     )
 
-    result = service.start_scenario(
-        "features/cli/does-not-exist.feature",
-        machine_types=["lxd-container"],
-    ).model_dump(mode="json")
-
-    assert result["ok"] is False
-    assert "Feature is not listed by list_features" in result["error"]
+    with pytest.raises(
+        BehaveServiceError, match="Feature is not listed by list_features"
+    ):
+        service.start_scenario(
+            "features/cli/does-not-exist.feature",
+            machine_types=["lxd-container"],
+        )
 
 
 def test_start_scenario_accepts_normalized_listed_feature(tmp_path):
@@ -392,14 +384,12 @@ def test_start_scenario_rejects_invalid_repo_root():
         FakeWorkspace(repo_root_error="Invalid repo_root: bad")
     )
 
-    result = service.start_scenario(
-        "features/cli/attach.feature",
-        machine_types=["lxd-container"],
-        repo_root="/bad",
-    ).model_dump(mode="json")
-
-    assert result["ok"] is False
-    assert "Invalid repo_root" in result["error"]
+    with pytest.raises(BehaveServiceError, match="Invalid repo_root"):
+        service.start_scenario(
+            "features/cli/attach.feature",
+            machine_types=["lxd-container"],
+            repo_root="/bad",
+        )
 
 
 def test_start_scenario_requires_machine_types(tmp_path):
@@ -408,12 +398,8 @@ def test_start_scenario_requires_machine_types(tmp_path):
         FakeWorkspace(repo_root=repo_root, log_dir=tmp_path)
     )
 
-    result = service.start_scenario(
-        "features/cli/attach.feature", []
-    ).model_dump(mode="json")
-
-    assert result["ok"] is False
-    assert "machine_types is required" in result["error"]
+    with pytest.raises(BehaveServiceError, match="machine_types is required"):
+        service.start_scenario("features/cli/attach.feature", [])
 
 
 def test_start_scenario_rejects_cloud_machine_type_by_default(tmp_path):
@@ -422,12 +408,13 @@ def test_start_scenario_rejects_cloud_machine_type_by_default(tmp_path):
         FakeWorkspace(repo_root=repo_root, log_dir=tmp_path)
     )
 
-    result = service.start_scenario(
-        "features/cli/attach.feature", machine_types=["azure.generic"]
-    ).model_dump(mode="json")
-
-    assert result["ok"] is False
-    assert "Cloud machine_types are disabled by default" in result["error"]
+    with pytest.raises(
+        BehaveServiceError,
+        match="Cloud machine_types are disabled by default",
+    ):
+        service.start_scenario(
+            "features/cli/attach.feature", machine_types=["azure.generic"]
+        )
 
 
 def test_start_scenario_allows_cloud_machine_type_with_toggle(tmp_path):
@@ -482,12 +469,12 @@ def test_start_scenario_releases_slot_when_process_start_fails(tmp_path):
         new_job_id=lambda: "jobX",
     )
 
-    result = service.start_scenario(
-        "features/cli/attach.feature", machine_types=["lxd-container"]
-    ).model_dump(mode="json")
-
-    assert result["ok"] is False
-    assert "Failed to start behave scenario" in result["error"]
+    with pytest.raises(
+        BehaveServiceError, match="Failed to start behave scenario"
+    ):
+        service.start_scenario(
+            "features/cli/attach.feature", machine_types=["lxd-container"]
+        )
     assert registry.get("jobX") is None
 
 
@@ -502,12 +489,13 @@ def test_start_scenario_reports_log_open_failure(tmp_path):
         new_job_id=lambda: "jobLog",
     )
 
-    result = service.start_scenario(
-        "features/cli/attach.feature", machine_types=["lxd-container"]
-    ).model_dump(mode="json")
-
-    assert result["ok"] is False
-    assert "Failed to open log file for job_id jobLog" in result["error"]
+    with pytest.raises(
+        BehaveServiceError,
+        match="Failed to open log file for job_id jobLog",
+    ):
+        service.start_scenario(
+            "features/cli/attach.feature", machine_types=["lxd-container"]
+        )
     assert registry.get("jobLog") is None
 
 
@@ -695,7 +683,6 @@ def test_get_logs_returns_tail(tmp_path):
     )
 
     result = service.get_logs(job_id, lines=2).model_dump(mode="json")
-    assert result["ok"] is True
     assert result["lines"] == 2
     assert result["output"] == "l2\nl3"
     assert result["output_lines"] == ["l2", "l3"]
@@ -706,12 +693,8 @@ def test_get_logs_rejects_invalid_repo_root():
         FakeWorkspace(repo_root_error="Invalid repo_root: bad")
     )
 
-    result = service.get_logs("missing-job", repo_root="/bad").model_dump(
-        mode="json"
-    )
-
-    assert result["ok"] is False
-    assert "Invalid repo_root" in result["error"]
+    with pytest.raises(BehaveServiceError, match="Invalid repo_root"):
+        service.get_logs("missing-job", repo_root="/bad")
 
 
 def test_get_artifacts_returns_paths_and_metadata(tmp_path):
@@ -742,7 +725,6 @@ def test_get_artifacts_returns_paths_and_metadata(tmp_path):
     )
 
     result = service.get_artifacts(job_id).model_dump(mode="json")
-    assert result["ok"] is True
     assert result["exists"]["stdout_log"] is True
     assert result["exists"]["json_report"] is True
     assert result["exists"]["metadata"] is True
@@ -754,9 +736,5 @@ def test_get_artifacts_rejects_invalid_repo_root():
         FakeWorkspace(repo_root_error="Invalid repo_root: bad")
     )
 
-    result = service.get_artifacts("missing-job", repo_root="/bad").model_dump(
-        mode="json"
-    )
-
-    assert result["ok"] is False
-    assert "Invalid repo_root" in result["error"]
+    with pytest.raises(BehaveServiceError, match="Invalid repo_root"):
+        service.get_artifacts("missing-job", repo_root="/bad")

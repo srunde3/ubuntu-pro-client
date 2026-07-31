@@ -1,19 +1,9 @@
 """Typed request/response DTOs for the behave MCP server.
-
-Every value the service returns is one of the pydantic models defined here
-rather than an ad-hoc dict, so field names and types are validated. The only
-places that remain plain dicts are genuinely dynamic payloads: the behave
-report status-count maps and the persisted job metadata.
-
-Each response is serialized at the MCP tool boundary via pydantic's own
-``model_dump_json()`` / ``model_dump(mode="json")`` - no custom serialization
-code. Field declaration order is the wire order, so ``ok`` is declared first
-on every response.
 """
 
-from typing import Any
+from typing import Annotated, Any, Literal, Union
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 # ---------------------------------------------------------------------------
 # Shared data DTOs
@@ -128,26 +118,12 @@ class ExistsFlags(BaseModel):
     metadata: bool
 
 
-# ---------------------------------------------------------------------------
-# Response DTOs
-# ---------------------------------------------------------------------------
-
-
-class ErrorResponse(BaseModel):
-    """Generic failure response carried by every endpoint's return union."""
-
-    ok: bool = False
-    error: str = ""
-
-
 class ListFeaturesResponse(BaseModel):
-    ok: bool = True
     repo_root: str = ""
     features: list[FeatureCatalogEntry] = []
 
 
 class DescribeFeatureResponse(BaseModel):
-    ok: bool = True
     feature_file: str = ""
     title: str = ""
     tags: list[str] = []
@@ -156,51 +132,57 @@ class DescribeFeatureResponse(BaseModel):
 
 
 class ListDimensionsResponse(BaseModel):
-    ok: bool = True
     repo_root: str = ""
     releases: list[DimensionValue] = []
     machine_types: list[DimensionValue] = []
 
 
 class FindScenariosResponse(BaseModel):
-    ok: bool = True
     repo_root: str = ""
     matches: list[ScenarioMatch] = []
 
 
 class StartScenarioResponse(BaseModel):
+    status: Literal["started"] = "started"
     ok: bool = True
     job_id: str = ""
-    status: str = "started"
     message: str = ""
     artifacts: Artifacts | None = None
 
 
 class CapacityExceededResponse(BaseModel):
+    status: Literal["capacity_exceeded"] = "capacity_exceeded"
     ok: bool = False
-    status: str = "capacity_exceeded"
     error: str = ""
     capacity: Capacity | None = None
 
 
+StartScenarioResult = Annotated[
+    Union[StartScenarioResponse, CapacityExceededResponse],
+    Field(discriminator="status"),
+]
+
+
 class RunningResponse(BaseModel):
+    """Internal: a job still in progress. Never returned at the MCP boundary."""
+
+    status: Literal["running"] = "running"
     ok: bool = True
-    status: str = "running"
     job_id: str = ""
     recent_output: str = ""
     artifacts: Artifacts | None = None
 
 
 class CompletedResponse(BaseModel):
-    """Completed job. ``ok`` varies with the return code, so it has no default.
+    """Completed job. ``ok`` reflects the behave return code, not call success.
 
     ``summary`` is ``None`` when no parseable JSON report was produced;
     ``recent_output`` is populated only in that same fallback case, and is
     ``None`` (present, but null) otherwise.
     """
 
+    status: Literal["completed"] = "completed"
     ok: bool
-    status: str = "completed"
     job_id: str
     returncode: int | None
     artifacts: Artifacts
@@ -210,8 +192,8 @@ class CompletedResponse(BaseModel):
 
 
 class TimeoutResponse(BaseModel):
+    status: Literal["timeout"] = "timeout"
     ok: bool = False
-    status: str = "timeout"
     job_id: str = ""
     max_wait_seconds: int = 0
     poll_interval_seconds: float = 0.0
@@ -220,8 +202,13 @@ class TimeoutResponse(BaseModel):
     artifacts: Artifacts | None = None
 
 
+WaitForCompletionResult = Annotated[
+    Union[CompletedResponse, TimeoutResponse],
+    Field(discriminator="status"),
+]
+
+
 class LogsResponse(BaseModel):
-    ok: bool = True
     job_id: str = ""
     lines: int = 0
     output: str = ""
@@ -230,7 +217,6 @@ class LogsResponse(BaseModel):
 
 
 class ArtifactsResponse(BaseModel):
-    ok: bool = True
     job_id: str = ""
     artifacts: Artifacts | None = None
     metadata: dict[str, Any] = {}

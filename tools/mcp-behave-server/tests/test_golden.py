@@ -138,8 +138,8 @@ def test_completed_with_summary_key_order(tmp_path):
     )
 
     assert list(payload.keys()) == [
-        "ok",
         "status",
+        "ok",
         "job_id",
         "returncode",
         "artifacts",
@@ -165,8 +165,8 @@ def test_completed_fallback_key_order(tmp_path):
     )
 
     assert list(payload.keys()) == [
-        "ok",
         "status",
+        "ok",
         "job_id",
         "returncode",
         "artifacts",
@@ -203,8 +203,8 @@ def test_timeout_key_order(tmp_path):
     ).model_dump(mode="json")
 
     assert list(payload.keys()) == [
-        "ok",
         "status",
+        "ok",
         "job_id",
         "max_wait_seconds",
         "poll_interval_seconds",

@@ -24,6 +24,15 @@ def _result_json(result):
     raise AssertionError("Expected text content block in tool result")
 
 
+def _result_error_text(result):
+    """Text content of a failed tool call - MCP's own isError signal."""
+    assert result.isError is True
+    for block in result.content:
+        if hasattr(block, "text"):
+            return block.text
+    raise AssertionError("Expected text content block in tool error result")
+
+
 def _make_fake_repo(tmp_path: Path) -> Path:
     repo_root = tmp_path / "fake-repo"
     (repo_root / "features" / "cli").mkdir(parents=True)
@@ -113,7 +122,6 @@ async def test_mcp_list_features_uses_repo_root_override(tmp_path):
         )
 
     payload = _result_json(result)
-    assert payload["ok"] is True
     assert payload["repo_root"] == str(fake_repo)
     assert [feature["path"] for feature in payload["features"]] == [
         "features/cli/sample.feature"
@@ -130,9 +138,8 @@ async def test_mcp_list_features_rejects_invalid_repo_root(tmp_path):
             "list_features", {"repo_root": str(invalid_repo)}
         )
 
-    payload = _result_json(result)
-    assert payload["ok"] is False
-    assert "Invalid repo_root" in payload["error"]
+    error_text = _result_error_text(result)
+    assert "Invalid repo_root" in error_text
 
 
 @pytest.mark.asyncio
@@ -183,7 +190,6 @@ async def test_mcp_start_wait_and_log_flow(monkeypatch, tmp_path):
             "get_scenario_logs", {"job_id": job_id, "lines": 2}
         )
         logs_payload = _result_json(logs_result)
-        assert logs_payload["ok"] is True
         assert logs_payload["output"] == "line2\nline3"
         assert logs_payload["output_lines"] == ["line2", "line3"]
 
@@ -191,7 +197,6 @@ async def test_mcp_start_wait_and_log_flow(monkeypatch, tmp_path):
             "get_scenario_artifacts", {"job_id": job_id}
         )
         artifacts_payload = _result_json(artifacts_result)
-        assert artifacts_payload["ok"] is True
         assert artifacts_payload["exists"]["stdout_log"] is True
 
 
@@ -261,9 +266,8 @@ async def test_mcp_start_requires_machine_types():
             },
         )
 
-    payload = _result_json(result)
-    assert payload["ok"] is False
-    assert "machine_types is required" in payload["error"]
+    error_text = _result_error_text(result)
+    assert "machine_types is required" in error_text
 
 
 @pytest.mark.asyncio
@@ -277,9 +281,8 @@ async def test_mcp_start_rejects_unlisted_feature():
             },
         )
 
-    payload = _result_json(result)
-    assert payload["ok"] is False
-    assert "Feature is not listed by list_features" in payload["error"]
+    error_text = _result_error_text(result)
+    assert "Feature is not listed by list_features" in error_text
 
 
 @pytest.mark.asyncio
@@ -299,9 +302,8 @@ async def test_mcp_start_rejects_cloud_machine_types():
             },
         )
 
-    payload = _result_json(result)
-    assert payload["ok"] is False
-    assert "Cloud machine_types are disabled by default" in payload["error"]
+    error_text = _result_error_text(result)
+    assert "Cloud machine_types are disabled by default" in error_text
 
 
 def test_main_uses_stdio_transport_by_default(monkeypatch):
