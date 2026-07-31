@@ -129,8 +129,12 @@ def test_completed_with_summary_key_order(tmp_path):
     )
     _register(registry, tmp_path, job_id, _Handle(0), report=report)
 
-    payload = _service(tmp_path, registry).wait_for_completion(
-        job_id, max_wait_seconds=5, poll_interval_seconds=0.01
+    payload = (
+        _service(tmp_path, registry)
+        .wait_for_completion(
+            job_id, max_wait_seconds=5, poll_interval_seconds=0.01
+        )
+        .model_dump(mode="json")
     )
 
     assert list(payload.keys()) == [
@@ -141,7 +145,9 @@ def test_completed_with_summary_key_order(tmp_path):
         "artifacts",
         "summary",
         "failures",
+        "recent_output",
     ]
+    assert payload["recent_output"] is None
 
 
 def test_completed_fallback_key_order(tmp_path):
@@ -150,8 +156,12 @@ def test_completed_fallback_key_order(tmp_path):
     (tmp_path / f"{job_id}_stdout.log").write_text("boom\n", encoding="utf-8")
     _register(registry, tmp_path, job_id, _Handle(2))
 
-    payload = _service(tmp_path, registry).wait_for_completion(
-        job_id, max_wait_seconds=5, poll_interval_seconds=0.01
+    payload = (
+        _service(tmp_path, registry)
+        .wait_for_completion(
+            job_id, max_wait_seconds=5, poll_interval_seconds=0.01
+        )
+        .model_dump(mode="json")
     )
 
     assert list(payload.keys()) == [
@@ -190,7 +200,7 @@ def test_timeout_key_order(tmp_path):
 
     payload = service.wait_for_completion(
         job_id, max_wait_seconds=1, poll_interval_seconds=0.01
-    )
+    ).model_dump(mode="json")
 
     assert list(payload.keys()) == [
         "ok",

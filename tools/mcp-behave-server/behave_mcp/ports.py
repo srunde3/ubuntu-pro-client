@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
+from behave_mcp.messages import FeatureDetail
+
 
 class LogFileOpenError(Exception):
     """Raised by a ProcessLauncher when the stdout log cannot be opened."""
@@ -103,14 +105,11 @@ class FeatureFileReader(Protocol):
         """Return repo-relative paths of every ``*.feature`` file, sorted."""
         ...
 
-    def discover_feature_details(
-        self, repo_root: Path
-    ) -> list[dict[str, Any]]:
+    def discover_feature_details(self, repo_root: Path) -> list[FeatureDetail]:
         """Return parsed metadata for every feature file, sorted by path.
 
-        Each entry contains ``path`` plus the summarized feature fields
-        (``title``, ``tags``, ``requires_config``, ``scenarios``). Files that
-        fail to parse are skipped.
+        Each entry is a ``FeatureDetail`` whose ``path`` is set to the
+        repo-relative feature path. Files that fail to parse are skipped.
         """
         ...
 

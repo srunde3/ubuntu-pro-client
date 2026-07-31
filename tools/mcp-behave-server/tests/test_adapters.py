@@ -63,11 +63,11 @@ def test_discover_feature_details_parses_scenarios(tmp_path):
 
     assert len(details) == 1
     detail = details[0]
-    assert detail["path"] == "features/cli/sample.feature"
-    assert detail["title"] == "Sample feature"
-    assert detail["requires_config"] == ["contract_token"]
-    scenario = detail["scenarios"][0]
-    assert scenario["combos"] == [
+    assert detail.path == "features/cli/sample.feature"
+    assert detail.title == "Sample feature"
+    assert detail.requires_config == ["contract_token"]
+    scenario = detail.scenarios[0]
+    assert [c.model_dump() for c in scenario.combos] == [
         {"release": "jammy", "machine_type": "lxd-container"},
         {"release": "resolute", "machine_type": "lxd-vm"},
     ]
@@ -100,14 +100,14 @@ def test_discover_feature_details_uses_mtime_cache(tmp_path):
     reader = LocalFeatureFileReader()
 
     first = reader.discover_feature_details(tmp_path)
-    assert first[0]["title"] == "Sample feature"
+    assert first[0].title == "Sample feature"
 
     # Same mtime -> cached result returned even if content changes underneath.
     stat = feature_path.stat()
     feature_path.write_text("Feature: Changed\n", encoding="utf-8")
     os.utime(feature_path, (stat.st_atime, stat.st_mtime))
     cached = reader.discover_feature_details(tmp_path)
-    assert cached[0]["title"] == "Sample feature"
+    assert cached[0].title == "Sample feature"
 
 
 # ---- LocalArtifactStore ----

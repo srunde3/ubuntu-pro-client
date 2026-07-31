@@ -1,10 +1,28 @@
 """Application service orchestrating behave jobs via injected ports."""
 
 from pathlib import Path
-from typing import Any, Callable
+from typing import Callable
 
 from behave_mcp import domain
 from behave_mcp.config import Settings
+from behave_mcp.messages import (
+    ArtifactsResponse,
+    Capacity,
+    CapacityExceededResponse,
+    CompletedResponse,
+    DescribeFeatureResponse,
+    ErrorResponse,
+    ExistsFlags,
+    FeatureDetail,
+    FindScenariosResponse,
+    ListDimensionsResponse,
+    ListFeaturesResponse,
+    LogsResponse,
+    RunningResponse,
+    ScenarioMatch,
+    StartScenarioResponse,
+    TimeoutResponse,
+)
 from behave_mcp.ports import (
     ArtifactStore,
     FeatureFileReader,
@@ -56,13 +74,13 @@ class BehaveService:
         tag: str | None = None,
         text: str | None = None,
         repo_root: str = "",
-    ) -> dict[str, Any]:
+    ) -> ListFeaturesResponse | ErrorResponse:
         try:
             resolved_repo_root = self._workspace.resolve_repo_root(
                 repo_root or None
             )
         except ValueError as exc:
-            return {"ok": False, "error": str(exc), "features": []}
+            return ErrorResponse(error=str(exc))
 
         details = self._feature_reader.discover_feature_details(
             resolved_repo_root
@@ -79,62 +97,60 @@ class BehaveService:
             )
         ]
 
-        return {
-            "ok": True,
-            "repo_root": str(resolved_repo_root),
-            "features": features,
-        }
+        return ListFeaturesResponse(
+            repo_root=str(resolved_repo_root),
+            features=features,
+        )
 
     def describe_feature(
         self, feature_file: str, repo_root: str = ""
-    ) -> dict[str, Any]:
+    ) -> DescribeFeatureResponse | ErrorResponse:
         try:
             resolved_repo_root = self._workspace.resolve_repo_root(
                 repo_root or None
             )
         except ValueError as exc:
-            return {"ok": False, "error": str(exc)}
+            return ErrorResponse(error=str(exc))
 
         normalized = domain.normalize_feature_file_arg(feature_file)
         details = self._feature_reader.discover_feature_details(
             resolved_repo_root
         )
         for detail in details:
-            if detail["path"] == normalized:
-                return {
-                    "ok": True,
-                    "feature_file": detail["path"],
-                    "title": detail.get("title", ""),
-                    "tags": detail.get("tags", []),
-                    "requires_config": detail.get("requires_config", []),
-                    "scenarios": detail.get("scenarios", []),
-                }
+            if detail.path == normalized:
+                return DescribeFeatureResponse(
+                    feature_file=detail.path,
+                    title=detail.title,
+                    tags=detail.tags,
+                    requires_config=detail.requires_config,
+                    scenarios=detail.scenarios,
+                )
 
-        return {
-            "ok": False,
-            "error": (
+        return ErrorResponse(
+            error=(
                 "Feature is not listed by list_features: " f"{feature_file}"
             ),
-        }
+        )
 
-    def list_dimensions(self, repo_root: str = "") -> dict[str, Any]:
+    def list_dimensions(
+        self, repo_root: str = ""
+    ) -> ListDimensionsResponse | ErrorResponse:
         try:
             resolved_repo_root = self._workspace.resolve_repo_root(
                 repo_root or None
             )
         except ValueError as exc:
-            return {"ok": False, "error": str(exc)}
+            return ErrorResponse(error=str(exc))
 
         details = self._feature_reader.discover_feature_details(
             resolved_repo_root
         )
         dimensions = domain.aggregate_dimensions(details)
-        return {
-            "ok": True,
-            "repo_root": str(resolved_repo_root),
-            "releases": dimensions["releases"],
-            "machine_types": dimensions["machine_types"],
-        }
+        return ListDimensionsResponse(
+            repo_root=str(resolved_repo_root),
+            releases=dimensions.releases,
+            machine_types=dimensions.machine_types,
+        )
 
     def find_scenarios(
         self,
@@ -143,24 +159,23 @@ class BehaveService:
         tag: str | None = None,
         text: str | None = None,
         repo_root: str = "",
-    ) -> dict[str, Any]:
+    ) -> FindScenariosResponse | ErrorResponse:
         try:
             resolved_repo_root = self._workspace.resolve_repo_root(
                 repo_root or None
             )
         except ValueError as exc:
-            return {"ok": False, "error": str(exc), "matches": []}
+            return ErrorResponse(error=str(exc))
 
         details = self._feature_reader.discover_feature_details(
             resolved_repo_root
         )
-        matches: list[dict[str, Any]] = []
+        matches: list[ScenarioMatch] = []
         for detail in details:
-            feature_tags = detail.get("tags", [])
-            for scenario in detail.get("scenarios", []):
+            for scenario in detail.scenarios:
                 if not domain.scenario_matches(
                     scenario,
-                    feature_tags,
+                    detail.tags,
                     release=release,
                     machine_type=machine_type,
                     tag=tag,
@@ -168,26 +183,25 @@ class BehaveService:
                 ):
                     continue
                 matches.append(
-                    {
-                        "feature_file": detail["path"],
-                        "scenario_name": scenario.get("name", ""),
-                        "type": scenario.get("type", "scenario"),
-                        "requires_config": scenario.get("requires_config", []),
-                        "combos": domain.filtered_combos(
+                    ScenarioMatch(
+                        feature_file=detail.path,
+                        scenario_name=scenario.name,
+                        type=scenario.type,
+                        requires_config=scenario.requires_config,
+                        combos=domain.filtered_combos(
                             scenario, release, machine_type
                         ),
-                    }
+                    )
                 )
 
-        return {
-            "ok": True,
-            "repo_root": str(resolved_repo_root),
-            "matches": matches,
-        }
+        return FindScenariosResponse(
+            repo_root=str(resolved_repo_root),
+            matches=matches,
+        )
 
     @staticmethod
     def _feature_has_match(
-        feature_detail: dict[str, Any],
+        feature_detail: FeatureDetail,
         *,
         release: str | None,
         machine_type: str | None,
@@ -201,17 +215,16 @@ class BehaveService:
             and text is None
         ):
             return True
-        feature_tags = feature_detail.get("tags", [])
         return any(
             domain.scenario_matches(
                 scenario,
-                feature_tags,
+                feature_detail.tags,
                 release=release,
                 machine_type=machine_type,
                 tag=tag,
                 text=text,
             )
-            for scenario in feature_detail.get("scenarios", [])
+            for scenario in feature_detail.scenarios
         )
 
     def start_scenario(
@@ -221,32 +234,31 @@ class BehaveService:
         scenario_name: str = "",
         releases: list[str] | None = None,
         repo_root: str = "",
-    ) -> dict[str, Any]:
+    ) -> StartScenarioResponse | CapacityExceededResponse | ErrorResponse:
         try:
             resolved_repo_root = self._workspace.resolve_repo_root(
                 repo_root or None
             )
         except ValueError as exc:
-            return {"ok": False, "error": str(exc)}
+            return ErrorResponse(error=str(exc))
 
         normalized = domain.normalize_feature_file_arg(feature_file)
         allowed_features = set(
             self._feature_reader.discover_feature_files(resolved_repo_root)
         )
         if normalized not in allowed_features:
-            return {
-                "ok": False,
-                "error": (
+            return ErrorResponse(
+                error=(
                     "Feature is not listed by list_features: "
                     f"{feature_file}"
                 ),
-            }
+            )
 
         machine_type_error = domain.validate_machine_types(
             machine_types, self._settings.allow_cloud_machine_types
         )
         if machine_type_error:
-            return {"ok": False, "error": machine_type_error}
+            return ErrorResponse(error=machine_type_error)
 
         log_dir = self._workspace.resolve_log_dir(resolved_repo_root)
         job_id = self._new_job_id()
@@ -266,19 +278,17 @@ class BehaveService:
             reserved_job, self._settings.max_parallel_jobs
         )
         if not reservation.reserved:
-            return {
-                "ok": False,
-                "status": "capacity_exceeded",
-                "error": (
+            return CapacityExceededResponse(
+                error=(
                     "Maximum parallel behave jobs reached. "
                     f"Set {domain.MAX_PARALLEL_JOBS_ENV_VAR} to a "
                     "higher value or wait for an active job to complete."
                 ),
-                "capacity": {
-                    "max_parallel_jobs": reservation.max_parallel,
-                    "running_jobs": reservation.running_jobs,
-                },
-            }
+                capacity=Capacity(
+                    max_parallel_jobs=reservation.max_parallel,
+                    running_jobs=reservation.running_jobs,
+                ),
+            )
 
         command = domain.build_command(
             feature_file,
@@ -295,16 +305,14 @@ class BehaveService:
             )
         except LogFileOpenError as exc:
             self._registry.release(job_id)
-            return {
-                "ok": False,
-                "error": f"Failed to open log file for job_id {job_id}: {exc}",
-            }
+            return ErrorResponse(
+                error=f"Failed to open log file for job_id {job_id}: {exc}",
+            )
         except ProcessStartError as exc:
             self._registry.release(job_id)
-            return {
-                "ok": False,
-                "error": f"Failed to start behave scenario: {exc}",
-            }
+            return ErrorResponse(
+                error=f"Failed to start behave scenario: {exc}",
+            )
 
         self._registry.register(
             job_id,
@@ -324,6 +332,7 @@ class BehaveService:
             json_report=json_report_path,
             metadata=metadata_path,
         )
+        artifacts_dict = artifacts.model_dump(mode="json")
         self._artifact_store.write_metadata(
             metadata_path,
             {
@@ -336,7 +345,7 @@ class BehaveService:
                 "releases": releases or [],
                 "command": command,
                 "repo_root": str(resolved_repo_root),
-                "artifacts": artifacts,
+                "artifacts": artifacts_dict,
             },
         )
         self._artifact_store.append_index_event(
@@ -349,17 +358,16 @@ class BehaveService:
                 "scenario_name": scenario_name,
                 "machine_types": machine_types,
                 "releases": releases or [],
-                "artifacts": artifacts,
+                "artifacts": artifacts_dict,
             },
         )
 
-        return {
-            "ok": True,
-            "job_id": job_id,
-            "status": "started",
-            "message": "Test started. Call wait_for_scenario_completion.",
-            "artifacts": artifacts,
-        }
+        return StartScenarioResponse(
+            job_id=job_id,
+            status="started",
+            message="Test started. Call wait_for_scenario_completion.",
+            artifacts=artifacts,
+        )
 
     def wait_for_completion(
         self,
@@ -369,39 +377,35 @@ class BehaveService:
             domain._DEFAULT_WAIT_POLL_INTERVAL_SECONDS
         ),
         repo_root: str = "",
-    ) -> dict[str, Any]:
+    ) -> CompletedResponse | TimeoutResponse | ErrorResponse:
         if max_wait_seconds <= 0:
-            return {
-                "ok": False,
-                "error": "max_wait_seconds must be greater than 0",
-            }
+            return ErrorResponse(
+                error="max_wait_seconds must be greater than 0",
+            )
         if poll_interval_seconds <= 0:
-            return {
-                "ok": False,
-                "error": "poll_interval_seconds must be greater than 0",
-            }
+            return ErrorResponse(
+                error="poll_interval_seconds must be greater than 0",
+            )
 
         deadline = self._monotonic() + max_wait_seconds
 
         while True:
             payload = self._status_payload(job_id, repo_root or None)
-            if payload.get("ok") is False:
+            if isinstance(payload, ErrorResponse):
                 return payload
 
-            if payload.get("status") == "completed":
+            if isinstance(payload, CompletedResponse):
                 return payload
 
             if self._monotonic() >= deadline:
-                return {
-                    "ok": False,
-                    "status": "timeout",
-                    "job_id": job_id,
-                    "max_wait_seconds": max_wait_seconds,
-                    "poll_interval_seconds": poll_interval_seconds,
-                    "last_status": "running",
-                    "recent_output": payload.get("recent_output", ""),
-                    "artifacts": payload.get("artifacts"),
-                }
+                return TimeoutResponse(
+                    job_id=job_id,
+                    max_wait_seconds=max_wait_seconds,
+                    poll_interval_seconds=poll_interval_seconds,
+                    last_status="running",
+                    recent_output=payload.recent_output,
+                    artifacts=payload.artifacts,
+                )
 
             self._sleep(poll_interval_seconds)
 
@@ -410,7 +414,7 @@ class BehaveService:
         job_id: str,
         lines: int = domain._DEFAULT_LOG_TAIL_LINES,
         repo_root: str = "",
-    ) -> dict[str, Any]:
+    ) -> LogsResponse | ErrorResponse:
         lines = max(1, min(lines, domain._MAX_LOG_TAIL_LINES))
 
         job = self._registry.get(job_id)
@@ -418,79 +422,76 @@ class BehaveService:
             try:
                 job = self._recover_job(job_id, repo_root or None)
             except ValueError as exc:
-                return {"ok": False, "error": str(exc)}
+                return ErrorResponse(error=str(exc))
             if job is None:
-                return {"ok": False, "error": f"Unknown job_id: {job_id}"}
+                return ErrorResponse(error=f"Unknown job_id: {job_id}")
 
         stdout_log = job.stdout_log
         json_report = job.json_report
         metadata = job.metadata
         log_dir = stdout_log.parent
         if not self._artifact_store.exists(stdout_log):
-            return {
-                "ok": False,
-                "error": f"No log file exists for job_id: {job_id}",
-            }
+            return ErrorResponse(
+                error=f"No log file exists for job_id: {job_id}",
+            )
 
-        return {
-            "ok": True,
-            "job_id": job_id,
-            "lines": lines,
-            "output": self._artifact_store.tail_file(stdout_log, lines),
-            "output_lines": self._artifact_store.tail_lines(stdout_log, lines),
-            "artifacts": domain.artifacts_payload(
+        return LogsResponse(
+            job_id=job_id,
+            lines=lines,
+            output=self._artifact_store.tail_file(stdout_log, lines),
+            output_lines=self._artifact_store.tail_lines(stdout_log, lines),
+            artifacts=domain.artifacts_payload(
                 log_dir=log_dir,
                 stdout_log=stdout_log,
                 json_report=json_report,
                 metadata=metadata,
             ),
-        }
+        )
 
     def get_artifacts(
         self, job_id: str, repo_root: str = ""
-    ) -> dict[str, Any]:
+    ) -> ArtifactsResponse | ErrorResponse:
         job = self._registry.get(job_id)
         if job is None:
             try:
                 job = self._recover_job(job_id, repo_root or None)
             except ValueError as exc:
-                return {"ok": False, "error": str(exc)}
+                return ErrorResponse(error=str(exc))
             if job is None:
-                return {"ok": False, "error": f"Unknown job_id: {job_id}"}
+                return ErrorResponse(error=f"Unknown job_id: {job_id}")
 
         stdout_log = job.stdout_log
         json_report = job.json_report
         metadata = job.metadata
         log_dir = stdout_log.parent
 
-        return {
-            "ok": True,
-            "job_id": job_id,
-            "artifacts": domain.artifacts_payload(
+        return ArtifactsResponse(
+            job_id=job_id,
+            artifacts=domain.artifacts_payload(
                 log_dir=log_dir,
                 stdout_log=stdout_log,
                 json_report=json_report,
                 metadata=metadata,
             ),
-            "metadata": self._artifact_store.read_metadata(metadata),
-            "exists": {
-                "stdout_log": self._artifact_store.exists(stdout_log),
-                "json_report": self._artifact_store.exists(json_report),
-                "metadata": self._artifact_store.exists(metadata),
-            },
-        }
+            metadata=self._artifact_store.read_metadata(metadata),
+            exists=ExistsFlags(
+                stdout_log=self._artifact_store.exists(stdout_log),
+                json_report=self._artifact_store.exists(json_report),
+                metadata=self._artifact_store.exists(metadata),
+            ),
+        )
 
     def _status_payload(
         self, job_id: str, repo_root_override: str | None
-    ) -> dict[str, Any]:
+    ) -> RunningResponse | CompletedResponse | ErrorResponse:
         job = self._registry.get(job_id)
         if job is None:
             try:
                 job = self._recover_job(job_id, repo_root_override)
             except ValueError as exc:
-                return {"ok": False, "error": str(exc)}
+                return ErrorResponse(error=str(exc))
             if job is None:
-                return {"ok": False, "error": f"Unknown job_id: {job_id}"}
+                return ErrorResponse(error=f"Unknown job_id: {job_id}")
 
         handle = job.process_handle
         stdout_log = job.stdout_log
@@ -501,20 +502,18 @@ class BehaveService:
         if handle is not None:
             returncode = handle.poll()
             if returncode is None:
-                return {
-                    "ok": True,
-                    "status": "running",
-                    "job_id": job_id,
-                    "recent_output": self._artifact_store.tail_file(
+                return RunningResponse(
+                    job_id=job_id,
+                    recent_output=self._artifact_store.tail_file(
                         stdout_log, domain._DEFAULT_RUNNING_TAIL_LINES
                     ),
-                    "artifacts": domain.artifacts_payload(
+                    artifacts=domain.artifacts_payload(
                         log_dir=log_dir,
                         stdout_log=stdout_log,
                         json_report=json_report,
                         metadata=metadata,
                     ),
-                }
+                )
         else:
             returncode = None
 
@@ -522,32 +521,41 @@ class BehaveService:
             handle.close()
 
         report_data = self._artifact_store.read_report_json(json_report)
-        summary_payload = (
+        report = (
             domain.summarize_report(report_data)
             if report_data is not None
             else None
         )
-        response: dict[str, Any] = {
-            "ok": returncode == 0 if returncode is not None else False,
-            "status": "completed",
-            "job_id": job_id,
-            "returncode": returncode,
-            "artifacts": domain.artifacts_payload(
-                log_dir=log_dir,
-                stdout_log=stdout_log,
-                json_report=json_report,
-                metadata=metadata,
-            ),
-        }
-        if summary_payload is None:
-            response["summary"] = None
-            response["failures"] = []
-            response["recent_output"] = self._artifact_store.tail_file(
-                stdout_log, domain._DEFAULT_RUNNING_TAIL_LINES
+        ok_value = returncode == 0 if returncode is not None else False
+        artifacts = domain.artifacts_payload(
+            log_dir=log_dir,
+            stdout_log=stdout_log,
+            json_report=json_report,
+            metadata=metadata,
+        )
+        if report is None:
+            response = CompletedResponse(
+                ok=ok_value,
+                job_id=job_id,
+                returncode=returncode,
+                artifacts=artifacts,
+                summary=None,
+                failures=[],
+                recent_output=self._artifact_store.tail_file(
+                    stdout_log, domain._DEFAULT_RUNNING_TAIL_LINES
+                ),
             )
         else:
-            response.update(summary_payload)
+            response = CompletedResponse(
+                ok=ok_value,
+                job_id=job_id,
+                returncode=returncode,
+                artifacts=artifacts,
+                summary=report.summary,
+                failures=report.failures,
+            )
 
+        artifacts_dict = artifacts.model_dump(mode="json")
         existing_metadata = self._artifact_store.read_metadata(metadata)
         existing_metadata.update(
             {
@@ -555,8 +563,8 @@ class BehaveService:
                 "status": "completed",
                 "completed_at": self._now_utc(),
                 "returncode": returncode,
-                "ok": response["ok"],
-                "artifacts": response["artifacts"],
+                "ok": ok_value,
+                "artifacts": artifacts_dict,
             }
         )
         self._artifact_store.write_metadata(metadata, existing_metadata)
@@ -566,9 +574,9 @@ class BehaveService:
                 "event": "completed",
                 "timestamp": self._now_utc(),
                 "job_id": job_id,
-                "ok": response["ok"],
+                "ok": ok_value,
                 "returncode": returncode,
-                "artifacts": response["artifacts"],
+                "artifacts": artifacts_dict,
             },
         )
 

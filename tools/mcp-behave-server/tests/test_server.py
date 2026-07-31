@@ -125,7 +125,7 @@ def test_list_features_returns_feature_files(tmp_path):
     repo_root = _make_repo_with_feature(tmp_path)
     service = _make_service(FakeWorkspace(repo_root=repo_root))
 
-    result = service.list_features()
+    result = service.list_features().model_dump(mode="json")
 
     assert result["ok"] is True
     paths = [feature["path"] for feature in result["features"]]
@@ -138,7 +138,9 @@ def test_list_features_uses_repo_root_override(tmp_path):
     )
     service = _make_service(FakeWorkspace(repo_root=None))
 
-    result = service.list_features(repo_root=str(repo_root))
+    result = service.list_features(repo_root=str(repo_root)).model_dump(
+        mode="json"
+    )
 
     assert result["ok"] is True
     assert result["repo_root"] == str(repo_root)
@@ -152,11 +154,12 @@ def test_list_features_rejects_invalid_repo_root():
         FakeWorkspace(repo_root_error="Invalid repo_root: bad")
     )
 
-    result = service.list_features(repo_root="/whatever")
+    result = service.list_features(repo_root="/whatever").model_dump(
+        mode="json"
+    )
 
     assert result["ok"] is False
     assert "Invalid repo_root" in result["error"]
-    assert result["features"] == []
 
 
 _OUTLINE_FEATURE = """\
@@ -196,7 +199,7 @@ def test_list_features_returns_catalog_entry(tmp_path):
     repo_root = _make_repo_with_outline(tmp_path)
     service = _make_service(FakeWorkspace(repo_root=repo_root))
 
-    result = service.list_features()
+    result = service.list_features().model_dump(mode="json")
 
     entry = result["features"][0]
     assert entry["path"] == "features/cli/attach.feature"
@@ -211,12 +214,14 @@ def test_list_features_filters_by_release_and_machine_type(tmp_path):
     repo_root = _make_repo_with_outline(tmp_path)
     service = _make_service(FakeWorkspace(repo_root=repo_root))
 
-    match = service.list_features(release="resolute", machine_type="lxd-vm")
+    match = service.list_features(
+        release="resolute", machine_type="lxd-vm"
+    ).model_dump(mode="json")
     assert len(match["features"]) == 1
 
     no_match = service.list_features(
         release="resolute", machine_type="lxd-container"
-    )
+    ).model_dump(mode="json")
     assert no_match["features"] == []
 
 
@@ -224,7 +229,9 @@ def test_describe_feature_returns_scenarios(tmp_path):
     repo_root = _make_repo_with_outline(tmp_path)
     service = _make_service(FakeWorkspace(repo_root=repo_root))
 
-    result = service.describe_feature("features/cli/attach.feature")
+    result = service.describe_feature(
+        "features/cli/attach.feature"
+    ).model_dump(mode="json")
 
     assert result["ok"] is True
     assert result["requires_config"] == ["contract_token"]
@@ -242,7 +249,9 @@ def test_describe_feature_rejects_unlisted_feature(tmp_path):
     repo_root = _make_repo_with_outline(tmp_path)
     service = _make_service(FakeWorkspace(repo_root=repo_root))
 
-    result = service.describe_feature("features/cli/missing.feature")
+    result = service.describe_feature(
+        "features/cli/missing.feature"
+    ).model_dump(mode="json")
 
     assert result["ok"] is False
     assert "Feature is not listed by list_features" in result["error"]
@@ -252,7 +261,7 @@ def test_list_dimensions_counts_scenarios(tmp_path):
     repo_root = _make_repo_with_outline(tmp_path)
     service = _make_service(FakeWorkspace(repo_root=repo_root))
 
-    result = service.list_dimensions()
+    result = service.list_dimensions().model_dump(mode="json")
 
     assert result["releases"] == [
         {"name": "jammy", "scenario_count": 2},
@@ -268,7 +277,7 @@ def test_find_scenarios_filters_by_tag(tmp_path):
     repo_root = _make_repo_with_outline(tmp_path)
     service = _make_service(FakeWorkspace(repo_root=repo_root))
 
-    result = service.find_scenarios(tag="arm64")
+    result = service.find_scenarios(tag="arm64").model_dump(mode="json")
 
     assert len(result["matches"]) == 1
     match = result["matches"][0]
@@ -280,7 +289,9 @@ def test_find_scenarios_filters_combos_by_machine_type(tmp_path):
     repo_root = _make_repo_with_outline(tmp_path)
     service = _make_service(FakeWorkspace(repo_root=repo_root))
 
-    result = service.find_scenarios(machine_type="lxd-vm")
+    result = service.find_scenarios(machine_type="lxd-vm").model_dump(
+        mode="json"
+    )
 
     assert len(result["matches"]) == 1
     assert result["matches"][0]["combos"] == [
@@ -297,7 +308,7 @@ def test_start_scenario_rejects_unlisted_feature(tmp_path):
     result = service.start_scenario(
         "features/cli/does-not-exist.feature",
         machine_types=["lxd-container"],
-    )
+    ).model_dump(mode="json")
 
     assert result["ok"] is False
     assert "Feature is not listed by list_features" in result["error"]
@@ -314,7 +325,7 @@ def test_start_scenario_accepts_normalized_listed_feature(tmp_path):
     result = service.start_scenario(
         "features/cli/../cli/attach.feature",
         machine_types=["lxd-container"],
-    )
+    ).model_dump(mode="json")
 
     assert result["ok"] is True
     assert "artifacts" in result
@@ -338,7 +349,7 @@ def test_start_scenario_builds_command(tmp_path):
         machine_types=["lxd-container"],
         scenario_name="attach",
         releases=["resolute"],
-    )
+    ).model_dump(mode="json")
 
     assert result["ok"] is True
     assert "job_id" in result
@@ -370,7 +381,7 @@ def test_start_scenario_uses_repo_root_override(tmp_path):
         "features/cli/sample.feature",
         machine_types=["lxd-container"],
         repo_root=str(repo_root),
-    )
+    ).model_dump(mode="json")
 
     assert result["ok"] is True
     assert launcher.calls[0]["cwd"] == str(repo_root)
@@ -385,7 +396,7 @@ def test_start_scenario_rejects_invalid_repo_root():
         "features/cli/attach.feature",
         machine_types=["lxd-container"],
         repo_root="/bad",
-    )
+    ).model_dump(mode="json")
 
     assert result["ok"] is False
     assert "Invalid repo_root" in result["error"]
@@ -397,7 +408,9 @@ def test_start_scenario_requires_machine_types(tmp_path):
         FakeWorkspace(repo_root=repo_root, log_dir=tmp_path)
     )
 
-    result = service.start_scenario("features/cli/attach.feature", [])
+    result = service.start_scenario(
+        "features/cli/attach.feature", []
+    ).model_dump(mode="json")
 
     assert result["ok"] is False
     assert "machine_types is required" in result["error"]
@@ -411,7 +424,7 @@ def test_start_scenario_rejects_cloud_machine_type_by_default(tmp_path):
 
     result = service.start_scenario(
         "features/cli/attach.feature", machine_types=["azure.generic"]
-    )
+    ).model_dump(mode="json")
 
     assert result["ok"] is False
     assert "Cloud machine_types are disabled by default" in result["error"]
@@ -426,7 +439,7 @@ def test_start_scenario_allows_cloud_machine_type_with_toggle(tmp_path):
 
     result = service.start_scenario(
         "features/cli/attach.feature", machine_types=["azure.generic"]
-    )
+    ).model_dump(mode="json")
 
     assert result["ok"] is True
 
@@ -446,12 +459,12 @@ def test_start_scenario_fails_fast_when_capacity_reached(tmp_path):
 
     first_result = service.start_scenario(
         "features/cli/attach.feature", machine_types=["lxd-container"]
-    )
+    ).model_dump(mode="json")
     assert first_result["ok"] is True
 
     second_result = service.start_scenario(
         "features/cli/attach.feature", machine_types=["lxd-container"]
-    )
+    ).model_dump(mode="json")
     assert second_result["ok"] is False
     assert second_result["status"] == "capacity_exceeded"
     assert second_result["capacity"]["max_parallel_jobs"] == 1
@@ -471,7 +484,7 @@ def test_start_scenario_releases_slot_when_process_start_fails(tmp_path):
 
     result = service.start_scenario(
         "features/cli/attach.feature", machine_types=["lxd-container"]
-    )
+    ).model_dump(mode="json")
 
     assert result["ok"] is False
     assert "Failed to start behave scenario" in result["error"]
@@ -491,7 +504,7 @@ def test_start_scenario_reports_log_open_failure(tmp_path):
 
     result = service.start_scenario(
         "features/cli/attach.feature", machine_types=["lxd-container"]
-    )
+    ).model_dump(mode="json")
 
     assert result["ok"] is False
     assert "Failed to open log file for job_id jobLog" in result["error"]
@@ -552,7 +565,7 @@ def test_wait_for_completion_running_to_completed(tmp_path):
 
     completed = service.wait_for_completion(
         job_id, max_wait_seconds=60, poll_interval_seconds=0.01
-    )
+    ).model_dump(mode="json")
     assert completed["status"] == "completed"
     assert completed["ok"] is False
     assert completed["summary"]["steps"]["failed"] == 1
@@ -581,7 +594,7 @@ def test_wait_for_completion_missing_report_fallback(tmp_path):
         registry=registry,
     )
 
-    completed = service.wait_for_completion(job_id)
+    completed = service.wait_for_completion(job_id).model_dump(mode="json")
     assert completed["status"] == "completed"
     assert completed["ok"] is False
     assert completed["summary"] is None
@@ -614,7 +627,7 @@ def test_wait_for_completion_timeout(tmp_path):
 
     timeout = service.wait_for_completion(
         job_id, max_wait_seconds=1, poll_interval_seconds=0.01
-    )
+    ).model_dump(mode="json")
     assert timeout["ok"] is False
     assert timeout["status"] == "timeout"
     assert timeout["last_status"] == "running"
@@ -644,7 +657,7 @@ def test_completed_job_remains_in_registry_and_reemits_events(tmp_path):
 
     first = service.wait_for_completion(
         job_id, max_wait_seconds=5, poll_interval_seconds=0.01
-    )
+    ).model_dump(mode="json")
     assert first["status"] == "completed"
     assert registry.get(job_id) is not None
 
@@ -681,7 +694,7 @@ def test_get_logs_returns_tail(tmp_path):
         registry=registry,
     )
 
-    result = service.get_logs(job_id, lines=2)
+    result = service.get_logs(job_id, lines=2).model_dump(mode="json")
     assert result["ok"] is True
     assert result["lines"] == 2
     assert result["output"] == "l2\nl3"
@@ -693,7 +706,9 @@ def test_get_logs_rejects_invalid_repo_root():
         FakeWorkspace(repo_root_error="Invalid repo_root: bad")
     )
 
-    result = service.get_logs("missing-job", repo_root="/bad")
+    result = service.get_logs("missing-job", repo_root="/bad").model_dump(
+        mode="json"
+    )
 
     assert result["ok"] is False
     assert "Invalid repo_root" in result["error"]
@@ -726,7 +741,7 @@ def test_get_artifacts_returns_paths_and_metadata(tmp_path):
         registry=registry,
     )
 
-    result = service.get_artifacts(job_id)
+    result = service.get_artifacts(job_id).model_dump(mode="json")
     assert result["ok"] is True
     assert result["exists"]["stdout_log"] is True
     assert result["exists"]["json_report"] is True
@@ -739,7 +754,9 @@ def test_get_artifacts_rejects_invalid_repo_root():
         FakeWorkspace(repo_root_error="Invalid repo_root: bad")
     )
 
-    result = service.get_artifacts("missing-job", repo_root="/bad")
+    result = service.get_artifacts("missing-job", repo_root="/bad").model_dump(
+        mode="json"
+    )
 
     assert result["ok"] is False
     assert "Invalid repo_root" in result["error"]

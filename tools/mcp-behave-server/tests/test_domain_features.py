@@ -5,6 +5,7 @@ projection and filtering logic can be verified without parsing real files.
 """
 
 from behave_mcp import domain
+from behave_mcp.messages import Combo, FeatureDetail, ScenarioSummary
 
 
 class _Step:
@@ -88,7 +89,8 @@ def test_combos_from_outline_examples():
         ["release", "machine_type"],
         [["jammy", "lxd-container"], ["resolute", "lxd-vm"]],
     )
-    assert domain.combos_from_scenario(scenario) == [
+    combos = domain.combos_from_scenario(scenario)
+    assert [c.model_dump() for c in combos] == [
         {"release": "jammy", "machine_type": "lxd-container"},
         {"release": "resolute", "machine_type": "lxd-vm"},
     ]
@@ -103,7 +105,8 @@ def test_combos_deduplicates_and_ignores_extra_columns():
             ["jammy", "lxd-container", "b"],
         ],
     )
-    assert domain.combos_from_scenario(scenario) == [
+    combos = domain.combos_from_scenario(scenario)
+    assert [c.model_dump() for c in combos] == [
         {"release": "jammy", "machine_type": "lxd-container"}
     ]
 
@@ -118,7 +121,8 @@ def test_combos_from_hardcoded_step_without_examples():
             " ubuntu-advantage-tools installed"
         ],
     )
-    assert domain.combos_from_scenario(scenario) == [
+    combos = domain.combos_from_scenario(scenario)
+    assert [c.model_dump() for c in combos] == [
         {"release": "jammy", "machine_type": "lxd-container"}
     ]
 
@@ -135,7 +139,8 @@ def test_hardcoded_step_overrides_example_release():
         [_Example(["release", "machine_type"], [["noble", "lxd-vm"]])],
     )
     # Literal release from the step wins; machine_type still from the row.
-    assert domain.combos_from_scenario(scenario) == [
+    combos = domain.combos_from_scenario(scenario)
+    assert [c.model_dump() for c in combos] == [
         {"release": "jammy", "machine_type": "lxd-vm"}
     ]
 
@@ -165,7 +170,7 @@ def test_summarize_feature_shapes_scenarios():
             )
         ],
     )
-    summary = domain.summarize_feature(feature)
+    summary = domain.summarize_feature(feature).model_dump()
     assert summary["title"] == "CLI attach"
     assert summary["requires_config"] == ["contract_token"]
     scenario = summary["scenarios"][0]
@@ -188,29 +193,37 @@ def test_summarize_feature_shapes_scenarios():
 
 
 def test_catalog_entry_aggregates_scenarios():
-    detail = {
-        "path": "features/cli/attach.feature",
-        "title": "CLI attach",
-        "tags": ["uses.config.contract_token"],
-        "requires_config": ["contract_token"],
-        "scenarios": [
-            {
-                "requires_config": ["contract_token"],
-                "combos": [
-                    {"release": "resolute", "machine_type": "lxd-vm"},
-                    {"release": "jammy", "machine_type": "lxd-container"},
+    detail = FeatureDetail(
+        path="features/cli/attach.feature",
+        title="CLI attach",
+        tags=["uses.config.contract_token"],
+        requires_config=["contract_token"],
+        scenarios=[
+            ScenarioSummary(
+                name="Attach on a machine",
+                type="scenario_outline",
+                tags=[],
+                requires_config=["contract_token"],
+                example_columns=[],
+                combos=[
+                    Combo(release="resolute", machine_type="lxd-vm"),
+                    Combo(release="jammy", machine_type="lxd-container"),
                 ],
-            },
-            {
-                "requires_config": ["contract_token_staging_expired"],
-                "combos": [
-                    {"release": "jammy", "machine_type": "lxd-container"}
+            ),
+            ScenarioSummary(
+                name="Attach invalid token",
+                type="scenario_outline",
+                tags=[],
+                requires_config=["contract_token_staging_expired"],
+                example_columns=[],
+                combos=[
+                    Combo(release="jammy", machine_type="lxd-container"),
                 ],
-            },
+            ),
         ],
-    }
+    )
     entry = domain.catalog_entry(detail)
-    assert entry == {
+    assert entry.model_dump() == {
         "path": "features/cli/attach.feature",
         "title": "CLI attach",
         "scenario_count": 2,
@@ -227,19 +240,23 @@ def test_catalog_entry_aggregates_scenarios():
 
 
 def _scenario_summary():
-    return {
-        "name": "Attach on a machine",
-        "tags": ["arm64"],
-        "combos": [
-            {"release": "jammy", "machine_type": "lxd-container"},
-            {"release": "resolute", "machine_type": "lxd-vm"},
+    return ScenarioSummary(
+        name="Attach on a machine",
+        type="scenario",
+        tags=["arm64"],
+        requires_config=[],
+        example_columns=[],
+        combos=[
+            Combo(release="jammy", machine_type="lxd-container"),
+            Combo(release="resolute", machine_type="lxd-vm"),
         ],
-    }
+    )
 
 
 def test_filtered_combos_by_release_and_machine_type():
     scenario = _scenario_summary()
-    assert domain.filtered_combos(scenario, "resolute", None) == [
+    combos = domain.filtered_combos(scenario, "resolute", None)
+    assert [c.model_dump() for c in combos] == [
         {"release": "resolute", "machine_type": "lxd-vm"}
     ]
     assert domain.filtered_combos(scenario, "resolute", "lxd-container") == []
@@ -281,23 +298,37 @@ def test_scenario_matches_no_filters_is_true():
 
 def test_aggregate_dimensions_counts_scenarios_once_per_value():
     details = [
-        {
-            "scenarios": [
-                {
-                    "combos": [
-                        {"release": "jammy", "machine_type": "lxd-container"},
-                        {"release": "jammy", "machine_type": "lxd-vm"},
-                    ]
-                },
-                {
-                    "combos": [
-                        {"release": "resolute", "machine_type": "lxd-vm"}
-                    ]
-                },
-            ]
-        }
+        FeatureDetail(
+            path="features/cli/attach.feature",
+            title="CLI attach",
+            tags=[],
+            requires_config=[],
+            scenarios=[
+                ScenarioSummary(
+                    name="Attach on a machine",
+                    type="scenario",
+                    tags=[],
+                    requires_config=[],
+                    example_columns=[],
+                    combos=[
+                        Combo(release="jammy", machine_type="lxd-container"),
+                        Combo(release="jammy", machine_type="lxd-vm"),
+                    ],
+                ),
+                ScenarioSummary(
+                    name="Detach",
+                    type="scenario",
+                    tags=[],
+                    requires_config=[],
+                    example_columns=[],
+                    combos=[
+                        Combo(release="resolute", machine_type="lxd-vm"),
+                    ],
+                ),
+            ],
+        )
     ]
-    dimensions = domain.aggregate_dimensions(details)
+    dimensions = domain.aggregate_dimensions(details).model_dump()
     assert dimensions["releases"] == [
         {"name": "jammy", "scenario_count": 1},
         {"name": "resolute", "scenario_count": 1},

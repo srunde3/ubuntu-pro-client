@@ -10,6 +10,7 @@ from typing import Any
 
 from behave.parser import parse_file
 from behave_mcp import domain
+from behave_mcp.messages import FeatureDetail
 from behave_mcp.ports import (
     Job,
     LogFileOpenError,
@@ -129,7 +130,7 @@ class LocalFeatureFileReader:
     def __init__(self) -> None:
         # Cache parsed feature summaries keyed by absolute path, invalidated by
         # file mtime so all browse tools share a single parse pass.
-        self._detail_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+        self._detail_cache: dict[str, tuple[float, FeatureDetail]] = {}
 
     def discover_feature_files(self, repo_root: Path) -> list[str]:
         features_dir = repo_root / "features"
@@ -141,23 +142,21 @@ class LocalFeatureFileReader:
             for path in features_dir.rglob("*.feature")
         )
 
-    def discover_feature_details(
-        self, repo_root: Path
-    ) -> list[dict[str, Any]]:
+    def discover_feature_details(self, repo_root: Path) -> list[FeatureDetail]:
         features_dir = repo_root / "features"
         if not features_dir.exists():
             return []
 
-        details: list[dict[str, Any]] = []
+        details: list[FeatureDetail] = []
         for path in sorted(features_dir.rglob("*.feature")):
             summary = self._read_feature_detail(path)
             if summary is None:
                 continue
             rel_path = str(path.relative_to(repo_root)).replace("\\", "/")
-            details.append({"path": rel_path, **summary})
-        return sorted(details, key=lambda detail: detail["path"])
+            details.append(summary.model_copy(update={"path": rel_path}))
+        return sorted(details, key=lambda detail: detail.path)
 
-    def _read_feature_detail(self, path: Path) -> dict[str, Any] | None:
+    def _read_feature_detail(self, path: Path) -> FeatureDetail | None:
         try:
             mtime = path.stat().st_mtime
         except OSError:

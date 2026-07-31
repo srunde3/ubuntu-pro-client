@@ -1,4 +1,3 @@
-import json
 import os
 import time
 import uuid
@@ -69,15 +68,13 @@ def list_features(
     text: str = "",
     repo_root: str = "",
 ) -> str:
-    return json.dumps(
-        _service.list_features(
-            release=release or None,
-            machine_type=machine_type or None,
-            tag=tag or None,
-            text=text or None,
-            repo_root=repo_root,
-        )
-    )
+    return _service.list_features(
+        release=release or None,
+        machine_type=machine_type or None,
+        tag=tag or None,
+        text=text or None,
+        repo_root=repo_root,
+    ).model_dump_json()
 
 
 @mcp.tool(
@@ -90,7 +87,7 @@ def list_features(
     )
 )
 def describe_feature(feature_file: str, repo_root: str = "") -> str:
-    return json.dumps(_service.describe_feature(feature_file, repo_root))
+    return _service.describe_feature(feature_file, repo_root).model_dump_json()
 
 
 @mcp.tool(
@@ -102,7 +99,7 @@ def describe_feature(feature_file: str, repo_root: str = "") -> str:
     )
 )
 def list_dimensions(repo_root: str = "") -> str:
-    return json.dumps(_service.list_dimensions(repo_root))
+    return _service.list_dimensions(repo_root).model_dump_json()
 
 
 @mcp.tool(
@@ -120,15 +117,13 @@ def find_scenarios(
     text: str = "",
     repo_root: str = "",
 ) -> str:
-    return json.dumps(
-        _service.find_scenarios(
-            release=release or None,
-            machine_type=machine_type or None,
-            tag=tag or None,
-            text=text or None,
-            repo_root=repo_root,
-        )
-    )
+    return _service.find_scenarios(
+        release=release or None,
+        machine_type=machine_type or None,
+        tag=tag or None,
+        text=text or None,
+        repo_root=repo_root,
+    ).model_dump_json()
 
 
 @mcp.tool(
@@ -145,15 +140,13 @@ def start_behave_scenario(
     releases: list[str] | None = None,
     repo_root: str = "",
 ) -> str:
-    return json.dumps(
-        _service.start_scenario(
-            feature_file,
-            machine_types,
-            scenario_name,
-            releases,
-            repo_root,
-        )
-    )
+    return _service.start_scenario(
+        feature_file,
+        machine_types,
+        scenario_name,
+        releases,
+        repo_root,
+    ).model_dump_json()
 
 
 @mcp.tool(
@@ -169,14 +162,12 @@ def wait_for_scenario_completion(
     poll_interval_seconds: float = domain._DEFAULT_WAIT_POLL_INTERVAL_SECONDS,
     repo_root: str = "",
 ) -> str:
-    return json.dumps(
-        _service.wait_for_completion(
-            job_id,
-            max_wait_seconds,
-            poll_interval_seconds,
-            repo_root,
-        )
-    )
+    return _service.wait_for_completion(
+        job_id,
+        max_wait_seconds,
+        poll_interval_seconds,
+        repo_root,
+    ).model_dump_json()
 
 
 @mcp.tool(
@@ -190,7 +181,7 @@ def get_scenario_logs(
     lines: int = domain._DEFAULT_LOG_TAIL_LINES,
     repo_root: str = "",
 ) -> str:
-    return json.dumps(_service.get_logs(job_id, lines, repo_root))
+    return _service.get_logs(job_id, lines, repo_root).model_dump_json()
 
 
 @mcp.tool(
@@ -200,7 +191,7 @@ def get_scenario_logs(
     )
 )
 def get_scenario_artifacts(job_id: str, repo_root: str = "") -> str:
-    return json.dumps(_service.get_artifacts(job_id, repo_root))
+    return _service.get_artifacts(job_id, repo_root).model_dump_json()
 
 
 def main() -> None:
