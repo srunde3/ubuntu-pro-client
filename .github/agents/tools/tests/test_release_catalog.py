@@ -1,6 +1,6 @@
 import os
-import shutil
 import sys
+from datetime import date
 
 import pytest
 
@@ -10,56 +10,86 @@ import release_catalog  # noqa: E402
 from release_catalog import (  # noqa: E402
     Release,
     ReleaseCatalog,
-    load_csv_metadata,
+    load_csv_rows,
 )
 
-# A small, chronologically-ordered sample mirroring distro-info output.
-CODENAMES = [
-    "xenial",
-    "bionic",
-    "focal",
-    "jammy",
-    "noble",
-    "questing",
-    "resolute",
-    "stonking",
-]
-SUPPORTED = ["jammy", "noble", "resolute", "stonking"]
-SUPPORTED_ESM = ["bionic", "focal", "jammy", "noble", "resolute"]
-DEVEL = ["stonking"]
+# A small, chronologically-ordered sample mirroring ubuntu.csv rows.
+# All status math below is relative to TODAY.
+TODAY = date(2026, 8, 1)
 
-METADATA = {
-    "xenial": {
+ROWS = [
+    {
+        "series": "xenial",
         "version": "16.04 LTS",
         "created": "2015-10-22",
         "release": "2016-04-21",
         "eol": "2021-04-30",
-        "eol-esm": "2026-04-23",
+        "eol-esm": "2026-04-23",  # already past TODAY -> not esm
     },
-    "resolute": {
+    {
+        "series": "bionic",
+        "version": "18.04 LTS",
+        "created": "2017-10-19",
+        "release": "2018-04-26",
+        "eol": "2023-05-31",
+        "eol-esm": "2028-04-26",
+    },
+    {
+        "series": "focal",
+        "version": "20.04 LTS",
+        "created": "2019-10-17",
+        "release": "2020-04-23",
+        "eol": "2025-05-29",
+        "eol-esm": "2030-04-23",
+    },
+    {
+        "series": "jammy",
+        "version": "22.04 LTS",
+        "created": "2021-10-14",
+        "release": "2022-04-21",
+        "eol": "2027-06-01",
+        "eol-esm": "2032-04-21",
+    },
+    {
+        "series": "noble",
+        "version": "24.04 LTS",
+        "created": "2023-10-12",
+        "release": "2024-04-25",
+        "eol": "2029-05-31",
+        "eol-esm": "2034-04-25",
+    },
+    {
+        "series": "questing",
+        "version": "25.10",
+        "created": "2025-04-17",
+        "release": "2025-10-09",
+        "eol": "2026-07-09",  # before TODAY -> eol
+    },
+    {
+        "series": "resolute",
         "version": "26.04 LTS",
         "created": "2025-10-09",
         "release": "2026-04-23",
         "eol": "2031-05-29",
         "eol-esm": "2036-04-23",
     },
-    "stonking": {
+    {
+        "series": "stonking",
         "version": "26.10",
         "created": "2026-04-24",
-        "release": "2026-10-15",
+        "release": "2026-10-15",  # after TODAY -> devel
         "eol": "2027-07-15",
     },
-}
+]
+CODENAMES = [row["series"] for row in ROWS]
 
 
 @pytest.fixture
 def catalog():
-    return ReleaseCatalog.from_data(
-        CODENAMES, SUPPORTED, SUPPORTED_ESM, DEVEL, METADATA
-    )
+    return ReleaseCatalog.from_rows(ROWS, today=TODAY)
 
 
-class TestFromData:
+class TestFromRows:
     def test_preserves_chronological_order(self, catalog):
         assert [r.series for r in catalog.ordered] == CODENAMES
 
@@ -73,30 +103,27 @@ class TestFromData:
         assert catalog.get("bionic").status == "esm"
         assert catalog.get("jammy").status == "supported"
         assert catalog.get("resolute").status == "supported"
+        assert catalog.get("questing").status == "eol"
         assert catalog.get("stonking").status == "devel"
 
     def test_lts_detection(self, catalog):
         assert catalog.get("resolute").is_lts is True
         assert catalog.get("stonking").is_lts is False
 
-    def test_dates_from_metadata(self, catalog):
+    def test_dates_from_rows(self, catalog):
         resolute = catalog.get("resolute")
         assert resolute.released == "2026-04-23"
         assert resolute.eol_esm == "2036-04-23"
 
-    def test_missing_metadata_leaves_dates_none(self, catalog):
-        # jammy has no metadata row in the sample.
-        jammy = catalog.get("jammy")
-        assert jammy.version == ""
-        assert jammy.released is None
-        assert jammy.is_lts is False
-
-    def test_empty_metadata_is_optional(self):
-        catalog = ReleaseCatalog.from_data(
-            CODENAMES, SUPPORTED, SUPPORTED_ESM, DEVEL
+    def test_missing_optional_fields_leave_dates_none(self):
+        catalog = ReleaseCatalog.from_rows(
+            [{"series": "mystery"}], today=TODAY
         )
-        assert catalog.get("resolute").version == ""
-        assert catalog.get("stonking").status == "devel"
+        mystery = catalog.get("mystery")
+        assert mystery.version == ""
+        assert mystery.released is None
+        assert mystery.is_lts is False
+        assert mystery.status == "eol"
 
 
 class TestLookups:
@@ -128,55 +155,44 @@ class TestLookups:
         ]
 
 
-class TestLoadCsvMetadata:
-    def test_reads_and_keys_by_series(self, tmp_path):
+class TestLoadCsvRows:
+    def test_reads_rows_in_order(self, tmp_path):
         csv_file = tmp_path / "ubuntu.csv"
         csv_file.write_text(
             "version,codename,series,created,release,eol,"
-            "eol-server,eol-esm\n"
+            "eol-server,eol-esm,eol-legacy\n"
+            "16.04 LTS,Xenial Xerus,xenial,2015-10-22,2016-04-21,"
+            "2021-04-30,2021-04-30,2026-04-23,2031-04-30\n"
             "26.04 LTS,Resolute Raccoon,resolute,2025-10-09,"
-            "2026-04-23,2031-05-29,2031-05-29,2036-04-23\n"
+            "2026-04-23,2031-05-29,2031-05-29,2036-04-23,2041-04-30\n"
         )
-        metadata = load_csv_metadata(str(csv_file))
-        assert set(metadata) == {"resolute"}
-        assert metadata["resolute"]["version"] == "26.04 LTS"
-        assert metadata["resolute"]["eol-esm"] == "2036-04-23"
+        rows = load_csv_rows(str(csv_file))
+        assert [row["series"] for row in rows] == ["xenial", "resolute"]
+        assert rows[1]["version"] == "26.04 LTS"
+        assert rows[1]["eol-esm"] == "2036-04-23"
+        assert rows[1]["eol-legacy"] == "2041-04-30"
 
-    def test_missing_file_returns_empty(self, tmp_path):
-        assert load_csv_metadata(str(tmp_path / "nope.csv")) == {}
+    def test_missing_file_raises(self, tmp_path):
+        with pytest.raises(FileNotFoundError):
+            load_csv_rows(str(tmp_path / "nope.csv"))
 
 
-class TestFromDistroInfo:
-    def test_wires_distro_info_queries(self, monkeypatch):
-        calls = []
-        responses = {
-            ("--all", "-c"): CODENAMES,
-            ("--supported",): SUPPORTED,
-            ("--supported-esm",): SUPPORTED_ESM,
-            ("--devel",): DEVEL,
-        }
-
-        def fake_run(args):
-            calls.append(tuple(args))
-            return list(responses[tuple(args)])
-
-        monkeypatch.setattr(release_catalog, "run_distro_info", fake_run)
-        monkeypatch.setattr(
-            release_catalog, "load_csv_metadata", lambda path: METADATA
+class TestFromCsv:
+    def test_reads_csv_and_computes_status(self, tmp_path):
+        csv_file = tmp_path / "ubuntu.csv"
+        csv_file.write_text(
+            "version,codename,series,created,release,eol,"
+            "eol-server,eol-esm,eol-legacy\n"
+            "22.04 LTS,Jammy Jellyfish,jammy,2021-10-14,2022-04-21,"
+            "2027-06-01,2027-06-01,2032-04-21,2037-04-30\n"
         )
-
-        catalog = ReleaseCatalog.from_distro_info()
-
-        assert ("--all", "-c") in calls
-        assert ("--supported-esm",) in calls
-        assert [r.series for r in catalog.ordered] == CODENAMES
-        assert catalog.get("stonking").status == "devel"
+        catalog = ReleaseCatalog.from_csv(str(csv_file), today=TODAY)
+        assert catalog.get("jammy").status == "supported"
 
 
 class TestStatusProperty:
     def test_priority_ordering(self):
-        # A devel release is also reported as supported by distro-info;
-        # devel must win.
+        # devel must win over every other flag.
         release = Release(
             "x", 0, supported=True, supported_esm=True, devel=True
         )
@@ -185,16 +201,62 @@ class TestStatusProperty:
     def test_esm_only(self):
         assert Release("x", 0, supported_esm=True).status == "esm"
 
+    def test_esm_beats_legacy(self):
+        release = Release("x", 0, supported_esm=True, supported_legacy=True)
+        assert release.status == "esm"
+
+    def test_legacy_only(self):
+        assert Release("x", 0, supported_legacy=True).status == "legacy"
+
     def test_eol_when_no_flags(self):
         assert Release("x", 0).status == "eol"
 
 
+class TestLegacySupportWindow:
+    """Legacy add-on support has no distro-info equivalent; it's derived
+    from the eol-esm -> eol-legacy dates in ubuntu.csv."""
+
+    ROW = {
+        "series": "trusty",
+        "version": "14.04 LTS",
+        "eol": "2019-04-25",
+        "eol-esm": "2024-04-25",
+        "eol-legacy": "2029-04-26",
+    }
+
+    def _catalog(self, today):
+        return ReleaseCatalog.from_rows([self.ROW], today=today)
+
+    def test_legacy_when_esm_ended_but_legacy_window_open(self):
+        trusty = self._catalog(today=date(2026, 8, 1)).get("trusty")
+        assert trusty.supported_legacy is True
+        assert trusty.status == "legacy"
+
+    def test_not_legacy_while_still_in_esm(self):
+        trusty = self._catalog(today=date(2024, 1, 1)).get("trusty")
+        assert trusty.supported_legacy is False
+        assert trusty.status == "esm"
+
+    def test_eol_after_legacy_window_ends(self):
+        trusty = self._catalog(today=date(2030, 1, 1)).get("trusty")
+        assert trusty.supported_legacy is False
+        assert trusty.status == "eol"
+
+    def test_no_eol_legacy_data_is_not_legacy(self):
+        catalog = ReleaseCatalog.from_rows(ROWS, today=TODAY)
+        assert catalog.get("xenial").supported_legacy is False
+
+    def test_legacy_is_relevant(self):
+        catalog = self._catalog(today=date(2026, 8, 1))
+        assert "trusty" in [r.series for r in catalog.relevant()]
+
+
 @pytest.mark.skipif(
-    shutil.which("distro-info") is None,
-    reason="distro-info is not installed",
+    not os.path.exists(release_catalog.UBUNTU_CSV),
+    reason="ubuntu.csv is not installed",
 )
-class TestIntegrationRealDistroInfo:
-    """Exercises the real ``distro-info`` binary end to end.
+class TestIntegrationRealCsv:
+    """Exercises the real ``ubuntu.csv`` database end to end.
 
     Assertions are intentionally date- and machine-independent so the
     test stays stable as releases come and go.
@@ -202,7 +264,7 @@ class TestIntegrationRealDistroInfo:
 
     @pytest.fixture(scope="class")
     def catalog(self):
-        return ReleaseCatalog.from_distro_info()
+        return ReleaseCatalog.from_csv()
 
     def test_catalog_is_non_empty(self, catalog):
         assert catalog.ordered
@@ -228,8 +290,5 @@ class TestIntegrationRealDistroInfo:
     def test_has_at_least_one_supported_release(self, catalog):
         assert any(r.status == "supported" for r in catalog.ordered)
 
-    def test_metadata_is_populated_when_csv_present(self, catalog):
-        # If the CSV database exists, at least one release should carry a
-        # version string parsed from it.
-        if os.path.exists(release_catalog.UBUNTU_CSV):
-            assert any(r.version for r in catalog.ordered)
+    def test_metadata_is_populated(self, catalog):
+        assert any(r.version for r in catalog.ordered)

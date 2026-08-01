@@ -1,22 +1,19 @@
 #!/usr/bin/env python3
-"""Tool 1: authoritative Ubuntu release catalog, backed by ``distro-info``.
+"""Authoritative Ubuntu release catalog, backed by ``ubuntu.csv``.
 
 This tool answers a single question for the rest of the feature-test
 maintenance workflow: *what are the Ubuntu releases, in order, and what is
-each release's support status right now?* It is the source of truth that
-the coverage extractor (Tool 2) and the agent layer reason against.
+each release's support status right now?*
 
-Everything is derived from ``distro-info`` (the Ubuntu release database):
+Everything is derived from a single file, the ``distro-info-data``
+package's ``ubuntu.csv``. Support status is computed by comparing those
+dates to today:
 
-* chronological ordering and release membership -> ``distro-info --all -c``
-* standard support (incl. devel)                -> ``distro-info --supported``
-* ESM-supported stable releases                 -> ``--supported-esm``
-* the current development release                -> ``distro-info --devel``
-* per-release metadata (version, dates, LTS)     -> ``ubuntu.csv`` database
-
-The I/O (subprocess + CSV read) is deliberately separated from the pure
-catalog construction (:meth:`ReleaseCatalog.from_data`) so the logic is
-testable without ``distro-info`` installed.
+* devel     -> created <= today < release
+* supported -> today <= eol (covers devel too, since eol is already set)
+* esm       -> eol < today <= eol-esm
+* legacy    -> eol-esm < today <= eol-legacy (the Legacy add-on window)
+* eol       -> none of the above
 
 Usage::
 
@@ -27,17 +24,15 @@ Usage::
 import argparse
 import csv
 import json
-import os
-import subprocess
 import sys
 from dataclasses import asdict, dataclass
+from datetime import date
 from typing import Dict, List, Optional, Sequence
 
-DISTRO_INFO = "distro-info"
 UBUNTU_CSV = "/usr/share/distro-info/ubuntu.csv"
 
 #: Statuses that count as "currently relevant" for gap analysis.
-RELEVANT_STATUSES = ("devel", "supported", "esm")
+RELEVANT_STATUSES = ("devel", "supported", "esm", "legacy")
 
 
 @dataclass
@@ -50,19 +45,23 @@ class Release:
     released: Optional[str] = None
     eol: Optional[str] = None
     eol_esm: Optional[str] = None
-    supported: bool = False  # standard support (distro-info includes devel)
+    eol_legacy: Optional[str] = None
+    supported: bool = False  # standard support (includes devel)
     supported_esm: bool = False
+    supported_legacy: bool = False
     devel: bool = False
 
     @property
     def status(self) -> str:
-        """Coarse support status: devel > supported > esm > eol."""
+        """Coarse support status: devel > supported > esm > legacy > eol."""
         if self.devel:
             return "devel"
         if self.supported:
             return "supported"
         if self.supported_esm:
             return "esm"
+        if self.supported_legacy:
+            return "legacy"
         return "eol"
 
     @property
@@ -100,98 +99,100 @@ class ReleaseCatalog:
 
     # -- constructors -----------------------------------------------------
     @classmethod
-    def from_data(
+    def from_rows(
         cls,
-        codenames: Sequence[str],
-        supported: Sequence[str],
-        supported_esm: Sequence[str],
-        devel: Sequence[str],
-        metadata: Optional[Dict[str, Dict[str, str]]] = None,
+        rows: Sequence[Dict[str, str]],
+        today: Optional[date] = None,
     ) -> "ReleaseCatalog":
-        """Build a catalog from already-gathered ``distro-info`` data.
+        """Build a catalog from ``ubuntu.csv`` rows.
 
-        ``codenames`` must be in chronological (oldest-first) order, as
-        produced by ``distro-info --all -c``; that order is the catalog's
-        canonical ordering. ``metadata`` maps a series codename to a row
-        of the ``ubuntu.csv`` database.
+        ``rows`` must be in chronological (oldest-first) order, as they
+        appear in ``ubuntu.csv``; that order is the catalog's canonical
+        ordering. Support status is computed from each row's dates
+        relative to ``today`` (defaults to the real current date).
         """
-        metadata = metadata or {}
-        supported_set = set(supported)
-        esm_set = set(supported_esm)
-        devel_set = set(devel)
+        today = today or date.today()
 
         releases: List[Release] = []
-        for order, series in enumerate(codenames):
-            row = metadata.get(series, {})
-            version = row.get("version", "")
+        for order, row in enumerate(rows):
+            version = row.get("version") or ""
+            created = row.get("created") or None
+            released = row.get("release") or None
+            eol = row.get("eol") or None
+            eol_esm = row.get("eol-esm") or None
+            eol_legacy = row.get("eol-legacy") or None
+
+            created_d = _parse_date(created)
+            released_d = _parse_date(released)
+            eol_d = _parse_date(eol)
+            eol_esm_d = _parse_date(eol_esm)
+            eol_legacy_d = _parse_date(eol_legacy)
+
+            devel = (
+                released_d is not None
+                and today < released_d
+                and (created_d is None or today >= created_d)
+            )
+            supported = devel or (eol_d is not None and today <= eol_d)
+            supported_esm = (
+                not supported and eol_esm_d is not None and today <= eol_esm_d
+            )
+            supported_legacy = (
+                not supported
+                and not supported_esm
+                and eol_legacy_d is not None
+                and today <= eol_legacy_d
+            )
+
             releases.append(
                 Release(
-                    series=series,
+                    series=row.get("series", ""),
                     order=order,
                     version=version,
                     is_lts="LTS" in version,
-                    created=row.get("created") or None,
-                    released=row.get("release") or None,
-                    eol=row.get("eol") or None,
-                    eol_esm=row.get("eol-esm") or None,
-                    supported=series in supported_set,
-                    supported_esm=series in esm_set,
-                    devel=series in devel_set,
+                    created=created,
+                    released=released,
+                    eol=eol,
+                    eol_esm=eol_esm,
+                    eol_legacy=eol_legacy,
+                    supported=supported,
+                    supported_esm=supported_esm,
+                    supported_legacy=supported_legacy,
+                    devel=devel,
                 )
             )
         return cls(releases)
 
     @classmethod
-    def from_distro_info(cls, csv_path: str = UBUNTU_CSV) -> "ReleaseCatalog":
-        """Build a catalog by querying the ``distro-info`` binary."""
-        return cls.from_data(
-            codenames=run_distro_info(["--all", "-c"]),
-            supported=run_distro_info(["--supported"]),
-            supported_esm=run_distro_info(["--supported-esm"]),
-            devel=run_distro_info(["--devel"]),
-            metadata=load_csv_metadata(csv_path),
-        )
+    def from_csv(
+        cls, csv_path: str = UBUNTU_CSV, today: Optional[date] = None
+    ) -> "ReleaseCatalog":
+        """Build a catalog by reading the ``ubuntu.csv`` database."""
+        return cls.from_rows(load_csv_rows(csv_path), today=today)
+
+
+def _parse_date(value: Optional[str]) -> Optional[date]:
+    """Parse an ISO ``YYYY-MM-DD`` date, tolerating blank/missing values."""
+    if not value:
+        return None
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        return None
 
 
 # ---------------------------------------------------------------------------
 # I/O helpers (kept thin and separate from the pure catalog logic)
 # ---------------------------------------------------------------------------
-def run_distro_info(args: List[str]) -> List[str]:
-    """Return the non-empty output lines of ``distro-info <args>``."""
-    try:
-        output = subprocess.check_output(
-            [DISTRO_INFO] + args, stderr=subprocess.STDOUT
-        )
-    except FileNotFoundError:
-        raise SystemExit(
-            "error: `distro-info` not found. Install the `distro-info` "
-            "package (it ships the authoritative Ubuntu release database)."
-        )
-    except subprocess.CalledProcessError as exc:
-        raise SystemExit(
-            "error: `distro-info {}` failed:\n{}".format(
-                " ".join(args), exc.output.decode("utf-8", "replace")
-            )
-        )
-    lines = output.decode("utf-8").splitlines()
-    return [line.strip() for line in lines if line.strip()]
+def load_csv_rows(csv_path: str) -> List[Dict[str, str]]:
+    """Read the ``distro-info`` CSV database, in on-disk (chronological)
+    order.
 
-
-def load_csv_metadata(csv_path: str) -> Dict[str, Dict[str, str]]:
-    """Read the ``distro-info`` CSV database, keyed by series codename.
-
-    Returns an empty mapping if the file is unavailable, so the catalog
-    still builds (without version/date metadata) from the binary alone.
+    Raises if the file is missing: this is the catalog's only data
+    source, so there is nothing useful to fall back to.
     """
-    if not os.path.exists(csv_path):
-        return {}
-    metadata: Dict[str, Dict[str, str]] = {}
     with open(csv_path, encoding="utf-8") as handle:
-        for row in csv.DictReader(handle):
-            series = row.get("series")
-            if series:
-                metadata[series] = row
-    return metadata
+        return [row for row in csv.DictReader(handle) if row.get("series")]
 
 
 # ---------------------------------------------------------------------------
@@ -242,7 +243,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = parse_args(argv)
-    catalog = ReleaseCatalog.from_distro_info(args.csv_path)
+    catalog = ReleaseCatalog.from_csv(args.csv_path)
     if args.format == "json":
         print(render_json(catalog))
     else:
