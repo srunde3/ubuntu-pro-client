@@ -85,36 +85,17 @@ parameterization, not a goal to abstract toward. If a helper's only
 justification is "this keeps the table smaller," that's a sign a real
 difference is being hidden rather than genuinely abstracted away.
 
-## Release categories
+## Release categories and explicit skips
 
-Every release currently on `main` falls into exactly one category (see
-`.github/agents/tools/release_catalog.py`):
-
-- `devel` -- in development, not yet released.
-- `active_lts` -- an LTS release in standard support.
-- `active_interim` -- a non-LTS release in standard support.
-- `esm` -- past standard support, in Extended Security Maintenance.
-- `legacy` -- fully EOL, no ESM. Should not persist on `main` -- see
-  Retirement, below.
-
-`active_lts`, `active_interim`, and `devel` are single forward-looking
-targets: is the newest release in the category covered? `esm` is an
-existence invariant over the whole set: has any currently-ESM release lost
-coverage, not just whether the newest one has it?
-
-## Explicit skip records
-
-A scenario may deliberately have no row for a release that's otherwise a
-target. This is recorded, not inferred:
-
-- One record per `(feature_file, scenario_name, release)`.
-- Records are append-only. A changed decision is a **new** record with a
-  later `confirmed_on` date, not an edit -- the most recent record for a
-  given key wins.
-- A record only ever asserts something about the one release it names. It
-  never implies anything about later releases on the same track, and it
-  never "expires" on its own -- if a release's eligibility changes, that's a
-  new record, not a stale one silently overridden.
+Superseded by
+[the release coverage model](../../../dev-docs/explanation/release_coverage_model.md)
+and [the tag encoding reference](../../../dev-docs/reference/release_coverage_tags.md):
+what releases a scenario must cover is declared via `@releases.*` tags
+(`tracks`/`since`/`until`/`machine_types`), and deliberate holes are
+`@releases.skip.*` exceptions in the same file -- not a category lookup
+against `release_catalog.py` (now at `tools/release_catalog.py`) plus a
+separate skip-record log. Parsing and gap derivation live in
+`tools/release_tags.py` and `tools/coverage_gaps.py`.
 
 ## Update scenarios
 

@@ -1,0 +1,32 @@
+{
+  "feature_file": "features/legacy.feature",
+  "scenarios": [
+    {
+      "name": "Attached enable of ESM Legacy services in a ubuntu machine",
+      "type": "scenario_outline",
+      "tags": [],
+      "example_columns": ["release", "machine_type", "infra-pkg"],
+      "combos": [
+        {"release": "xenial", "machine_type": "lxd-container"}
+      ]
+    },
+    {
+      "name": "Attached status with legacy contract in a ubuntu machine",
+      "type": "scenario_outline",
+      "tags": ["uses.config.contract_token", "arm64"],
+      "example_columns": ["release", "machine_type"],
+      "combos": [
+        {"release": "xenial", "machine_type": "lxd-container"}
+      ]
+    },
+    {
+      "name": "Simulate status in a ubuntu machine",
+      "type": "scenario_outline",
+      "tags": ["uses.config.contract_token_legacy"],
+      "example_columns": ["release", "machine_type"],
+      "combos": [
+        {"release": "xenial", "machine_type": "lxd-container"}
+      ]
+    }
+  ]
+}

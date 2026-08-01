@@ -1,0 +1,65 @@
+{
+  "feature_file": "features/_version.feature",
+  "scenarios": [
+    {
+      "name": "Check pro version",
+      "type": "scenario_outline",
+      "tags": ["uses.config.check_version"],
+      "example_columns": ["release", "machine_type"],
+      "combos": [
+        {"release": "xenial", "machine_type": "lxd-container"},
+        {"release": "bionic", "machine_type": "lxd-container"},
+        {"release": "focal", "machine_type": "lxd-container"},
+        {"release": "jammy", "machine_type": "lxd-container"},
+        {"release": "noble", "machine_type": "lxd-container"},
+        {"release": "questing", "machine_type": "lxd-container"},
+        {"release": "resolute", "machine_type": "lxd-container"}
+      ]
+    },
+    {
+      "name": "Check pro version",
+      "type": "scenario_outline",
+      "tags": ["uses.config.check_version", "upgrade"],
+      "example_columns": ["release", "machine_type"],
+      "combos": [
+        {"release": "xenial", "machine_type": "lxd-container"},
+        {"release": "bionic", "machine_type": "lxd-container"},
+        {"release": "focal", "machine_type": "lxd-container"},
+        {"release": "jammy", "machine_type": "lxd-container"},
+        {"release": "noble", "machine_type": "lxd-container"},
+        {"release": "questing", "machine_type": "lxd-container"},
+        {"release": "resolute", "machine_type": "lxd-container"}
+      ]
+    },
+    {
+      "name": "Attached show version in a ubuntu machine",
+      "type": "scenario_outline",
+      "tags": ["uses.config.contract_token"],
+      "example_columns": ["release", "machine_type"],
+      "combos": [
+        {"release": "bionic", "machine_type": "lxd-container"},
+        {"release": "focal", "machine_type": "lxd-container"},
+        {"release": "xenial", "machine_type": "lxd-container"},
+        {"release": "jammy", "machine_type": "lxd-container"},
+        {"release": "noble", "machine_type": "lxd-container"},
+        {"release": "questing", "machine_type": "lxd-container"},
+        {"release": "resolute", "machine_type": "lxd-container"}
+      ]
+    },
+    {
+      "name": "Check for newer versions of the client in an ubuntu machine",
+      "type": "scenario_outline",
+      "tags": ["arm64"],
+      "example_columns": ["release", "machine_type"],
+      "combos": [
+        {"release": "xenial", "machine_type": "lxd-container"},
+        {"release": "bionic", "machine_type": "lxd-container"},
+        {"release": "focal", "machine_type": "lxd-container"},
+        {"release": "jammy", "machine_type": "lxd-container"},
+        {"release": "noble", "machine_type": "lxd-container"},
+        {"release": "questing", "machine_type": "lxd-container"},
+        {"release": "resolute", "machine_type": "lxd-container"}
+      ]
+    }
+  ]
+}

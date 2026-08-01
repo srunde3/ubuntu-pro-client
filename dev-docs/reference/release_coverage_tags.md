@@ -1,9 +1,11 @@
-# Encoding the Coverage Information Model in Behave
+# Release coverage tags reference
 
-How `coverage-information-model.md`'s fields (`tracks`, `since`/`until`,
-`machine_types`, `exceptions`) get expressed in actual `.feature` files.
-The model came first and is syntax-independent by design; this is where we
-compromise for what Gherkin can actually carry.
+How the [release coverage model](../explanation/release_coverage_model.md)'s
+fields (`tracks`, `since`/`until`, `machine_types`, `exceptions`) are
+expressed as `@releases.*` tags in `.feature` files. The model is
+syntax-independent; this is where it compromises for what Gherkin can
+actually carry. `tools/release_tags.py` implements this vocabulary; keep
+it in sync with this document when either changes.
 
 ## Why tags, not comments or the Examples table
 
@@ -191,17 +193,14 @@ grow):
 
 ## Open items
 
-- `coverage_gaps.py` needs a tag-parsing layer that turns
+- Parsing and validation are implemented: `tools/release_tags.py` turns
   `ScenarioSummary.tags` into `tracks`/`since`/`until`/`machine_types`/
-  `exceptions` per the vocabulary above, applied *after* the existing
-  aggregation-by-name step (aggregation still happens on raw
-  `describe_feature` output; the consistency check across aggregated
-  nodes' tags happens once, on the merged record).
-- No validation yet for malformed or conflicting tags (e.g. both
-  `@releases.fixed` and `@releases.lts.supported` on the same scenario,
-  or mismatched tags across aggregated nodes). Worth a lint pass before
-  this is relied on, not designed here.
+  `exceptions` per the vocabulary above and rejects malformed or
+  conflicting tags (unknown tokens, `@releases.fixed` co-occurring with a
+  `@releases.<line>.<status>` tag, an unresolvable `since`/`until`
+  release). `tools/coverage_gaps.py` applies this after aggregation-by-name
+  and additionally checks that every node sharing a scenario name carries
+  identical `@releases.*` tags.
 - Migration (tagging the ~180 existing scenario behaviors) is a separate,
-  bounded task -- see the auto-suggestion idea from the evaluator
-  discussion (a scenario's own historical `combos` strongly suggest its
-  `tracks` value in most cases).
+  bounded task -- a scenario's own historical `combos` strongly suggest its
+  `tracks` value in most cases, which could seed a first pass.

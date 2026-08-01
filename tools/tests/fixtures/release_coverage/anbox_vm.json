@@ -1,0 +1,15 @@
+{
+  "feature_file": "features/anbox.feature",
+  "scenarios": [
+    {
+      "name": "Enable Anbox cloud service in a VM",
+      "type": "scenario_outline",
+      "tags": [],
+      "example_columns": ["release", "machine_type"],
+      "combos": [
+        {"release": "jammy", "machine_type": "lxd-vm"},
+        {"release": "noble", "machine_type": "lxd-vm"}
+      ]
+    }
+  ]
+}

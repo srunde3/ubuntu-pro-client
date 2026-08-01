@@ -1,0 +1,24 @@
+{
+  "feature_file": "features/fix.feature",
+  "scenarios": [
+    {
+      "name": "Fix command on a machine without security/updates source lists",
+      "type": "scenario_outline",
+      "tags": [],
+      "example_columns": ["release", "machine_type"],
+      "combos": [
+        {"release": "bionic", "machine_type": "lxd-container"},
+        {"release": "bionic", "machine_type": "lxd-vm"}
+      ]
+    },
+    {
+      "name": "Fix command on a machine without security/updates source lists",
+      "type": "scenario_outline",
+      "tags": [],
+      "example_columns": ["release", "machine_type"],
+      "combos": [
+        {"release": "bionic", "machine_type": "wsl"}
+      ]
+    }
+  ]
+}

@@ -1,11 +1,10 @@
-# Coverage Information Model
+# Release coverage model
 
-Syntax-independent. This defines what facts must be knowable about a
-scenario to deterministically compute "which (release, machine_type) pairs
-should this cover, and which of those are missing." How these facts get
-expressed in Gherkin is a separate, later decision -- see
-`feature-test-coverage-model.md` for the golden test structure this
-composes with.
+This defines what facts must be knowable about a behave scenario to
+deterministically compute "which (release, machine_type) pairs should this
+cover, and which of those are missing." The model is syntax-independent;
+see [release_coverage_tags.md](../reference/release_coverage_tags.md) for
+how these facts are encoded as Gherkin tags.
 
 ## Fields, per scenario `S`
 
@@ -67,8 +66,8 @@ model exists to avoid, and any default (empty, full, or inferred from
 existing coverage) would either suppress the most valuable check or
 silently degrade over time as releases age between statuses (a scenario
 that happens to cover a release which later ages into ESM would start
-being checked against ESM with no decision ever having been made -- see
-the evaluator log's Iteration 1). So absence is its own visible state.
+being checked against ESM with no decision ever having been made). So
+absence is its own visible state.
 `since`/`until` and `machine_types` default towards *not* flagging when
 unstated, because a missed flag is far cheaper than the false-positive
 floods both "assume broadly" defaults produced empirically.

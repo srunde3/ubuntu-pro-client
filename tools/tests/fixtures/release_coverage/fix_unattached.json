@@ -1,0 +1,35 @@
+{
+  "feature_file": "features/fix.feature",
+  "scenarios": [
+    {
+      "name": "Fix command on an unattached machine",
+      "type": "scenario_outline",
+      "tags": [],
+      "example_columns": ["release", "machine_type"],
+      "combos": [
+        {"release": "focal", "machine_type": "lxd-container"},
+        {"release": "focal", "machine_type": "wsl"}
+      ]
+    },
+    {
+      "name": "Fix command on an unattached machine",
+      "type": "scenario_outline",
+      "tags": ["uses.config.contract_token"],
+      "example_columns": ["release", "machine_type"],
+      "combos": [
+        {"release": "xenial", "machine_type": "lxd-container"},
+        {"release": "xenial", "machine_type": "lxd-vm"}
+      ]
+    },
+    {
+      "name": "Fix command on an unattached machine",
+      "type": "scenario_outline",
+      "tags": [],
+      "example_columns": ["release", "machine_type"],
+      "combos": [
+        {"release": "bionic", "machine_type": "lxd-container"},
+        {"release": "bionic", "machine_type": "wsl"}
+      ]
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "feature_file": "features/daemon.feature",
+  "scenarios": [
+    {
+      "name": "daemon does not start on gcp,azure generic non lts",
+      "type": "scenario_outline",
+      "tags": ["uses.config.contract_token"],
+      "example_columns": ["release", "machine_type"],
+      "combos": [
+        {"release": "questing", "machine_type": "azure.generic"},
+        {"release": "questing", "machine_type": "gcp.generic"}
+      ]
+    }
+  ]
+}
