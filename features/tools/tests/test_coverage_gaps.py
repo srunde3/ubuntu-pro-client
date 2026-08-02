@@ -10,13 +10,16 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 
+from coverage_gaps import scenario_coverage_from_feature_detail  # noqa: E402
 from coverage_gaps import (  # noqa: E402
     Finding,
     GapStatus,
     ScenarioCoverage,
     aggregate_scenarios,
     find_gaps,
-    scenario_coverage_from_feature_detail,
+)
+from coverage_gaps import (  # noqa: E402
+    load_scenario_coverage as load_scenario_coverage_from_repo_root,
 )
 from release_catalog import ReleaseCatalog  # noqa: E402
 
@@ -200,7 +203,7 @@ class TestAnboxContainer:
             payload,
             {
                 "Enable Anbox cloud service in a container": [
-                    "@releases.lts.supported"
+                    "releases.lts.supported"
                 ]
             },
         )
@@ -217,11 +220,7 @@ class TestAnboxVm:
         payload, _ = _load("anbox_vm.json")
         annotated = _with_tags(
             payload,
-            {
-                "Enable Anbox cloud service in a VM": [
-                    "@releases.lts.supported"
-                ]
-            },
+            {"Enable Anbox cloud service in a VM": ["releases.lts.supported"]},
         )
         findings = find_gaps(
             catalog, load_scenario_coverage(annotated), today=TODAY
@@ -266,7 +265,7 @@ class TestFixUnattachedAggregation:
             payload,
             {
                 "Fix command on an unattached machine": [
-                    "@releases.lts.supported"
+                    "releases.lts.supported"
                 ]
             },
         )
@@ -283,8 +282,8 @@ class TestFixUnattachedAggregation:
         # is a data hygiene bug, flagged rather than silently resolved.
         payload, _ = _load("fix_unattached.json")
         annotated = copy.deepcopy(payload)
-        annotated["scenarios"][0]["tags"] = ["@releases.lts.supported"]
-        annotated["scenarios"][1]["tags"] = ["@releases.lts.esm"]
+        annotated["scenarios"][0]["tags"] = ["releases.lts.supported"]
+        annotated["scenarios"][1]["tags"] = ["releases.lts.esm"]
         findings = find_gaps(
             catalog, load_scenario_coverage(annotated), today=TODAY
         )
@@ -301,7 +300,7 @@ class TestFixLifecycle:
         payload, _ = _load("fix_lifecycle.json")
         name = "Fix command on a machine without security/updates source lists"
         annotated = _with_tags(
-            payload, {name: ["@releases.lts.supported", "@releases.lts.esm"]}
+            payload, {name: ["releases.lts.supported", "releases.lts.esm"]}
         )
         findings = find_gaps(
             catalog, load_scenario_coverage(annotated), today=TODAY
@@ -322,9 +321,7 @@ class TestDaemonInterimOnly:
         # release) -- correctly zero findings, not an error.
         payload, _ = _load("daemon_interim.json")
         name = "daemon does not start on gcp,azure generic non lts"
-        annotated = _with_tags(
-            payload, {name: ["@releases.interim.supported"]}
-        )
+        annotated = _with_tags(payload, {name: ["releases.interim.supported"]})
         findings = find_gaps(
             catalog, load_scenario_coverage(annotated), today=TODAY
         )
@@ -335,11 +332,60 @@ class TestLegacyStatus:
     def test_annotated_legacy_tier_is_fully_covered(self, catalog):
         payload, _ = _load("legacy_status.json")
         name = "Attached status with legacy contract in a ubuntu machine"
-        annotated = _with_tags(payload, {name: ["@releases.lts.legacy"]})
+        annotated = _with_tags(payload, {name: ["releases.lts.legacy"]})
         findings = find_gaps(
             catalog, load_scenario_coverage(annotated), today=TODAY
         )
         assert findings == []
+
+
+# ---------------------------------------------------------------------------
+# Real Gherkin source text, written to a temp .feature file and read through
+# behave_features.discover_feature_details -- the actual production path,
+# not a hand-built ScenarioCoverage/FeatureDetail. Every other test in this
+# file constructs its tags as plain Python strings, which previously masked
+# a real bug: behave strips the leading `@` from parsed tags (Tag.name has
+# no `@`), but release_tags.TAG_PREFIX was defined *with* one, so every
+# real, on-disk `@releases.*` tag was silently ignored -- scenarios came
+# back UNCLASSIFIED regardless of what was actually written in the file.
+# This test exercises real parsing specifically so that class of mismatch
+# can't reappear unnoticed.
+# ---------------------------------------------------------------------------
+class TestRealGherkinSourceTags:
+    def test_a_real_at_prefixed_tag_is_recognized(self, tmp_path, catalog):
+        (tmp_path / "features").mkdir()
+        (tmp_path / "features" / "sample.feature").write_text(
+            "Feature: Sample\n"
+            "\n"
+            "  @releases.lts.supported\n"
+            "  Scenario Outline: Attach on a machine\n"
+            "    Given a `<release>` `<machine_type>` machine with"
+            " ubuntu-advantage-tools installed\n"
+            "    When I attach\n"
+            "\n"
+            "    Examples: ubuntu release\n"
+            "      | release | machine_type  |\n"
+            "      | jammy   | lxd-container |\n"
+            "      | noble   | lxd-container |\n",
+            encoding="utf-8",
+        )
+
+        scenarios = load_scenario_coverage_from_repo_root(tmp_path)
+        findings = find_gaps(catalog, scenarios, today=TODAY)
+
+        # Must not be UNCLASSIFIED -- the tag was real and should have been
+        # read. resolute is currently supported and missing from the
+        # Examples table above, so this should come back as exactly one GAP.
+        assert findings == [
+            Finding(
+                "features/sample.feature",
+                "Attach on a machine",
+                GapStatus.GAP,
+                release="resolute",
+                machine_type="lxd-container",
+                bucket="lts.supported",
+            )
+        ]
 
 
 # ---------------------------------------------------------------------------
@@ -354,7 +400,7 @@ class TestWorkedExamplesStandalone:
         # supported LTS.
         scenario = _scenario(
             combos={("jammy", "lxd-container"), ("noble", "lxd-container")},
-            tags=["@releases.lts.supported", "@releases.until.lts.resolute"],
+            tags=["releases.lts.supported", "releases.until.lts.resolute"],
         )
         findings = find_gaps(catalog, [scenario], today=TODAY)
         assert {(f.release, f.machine_type) for f in findings} == {
@@ -364,7 +410,7 @@ class TestWorkedExamplesStandalone:
     def test_until_bound_excludes_a_release_newer_than_it(self, catalog):
         scenario = _scenario(
             combos={("jammy", "lxd-container")},
-            tags=["@releases.lts.supported", "@releases.until.lts.jammy"],
+            tags=["releases.lts.supported", "releases.until.lts.jammy"],
         )
         findings = find_gaps(catalog, [scenario], today=TODAY)
         assert (
@@ -379,9 +425,9 @@ class TestWorkedExamplesStandalone:
         scenario = _scenario(
             combos={("jammy", "aws.pro")},
             tags=[
-                "@releases.lts.supported",
-                "@releases.machine_types:aws.pro",
-                "@releases.machine_types:azure.pro",
+                "releases.lts.supported",
+                "releases.machine_types:aws.pro",
+                "releases.machine_types:azure.pro",
             ],
         )
         findings = find_gaps(catalog, [scenario], today=TODAY)
@@ -402,9 +448,9 @@ class TestWorkedExamplesStandalone:
         scenario = _scenario(
             combos={("bionic", "lxd-container")},
             tags=[
-                "@releases.lts.supported",
-                "@releases.lts.esm",
-                "@releases.skip.noble.until.2026-08-15",
+                "releases.lts.supported",
+                "releases.lts.esm",
+                "releases.skip.noble.until.2026-08-15",
             ],
         )
         findings = find_gaps(catalog, [scenario], today=TODAY)
@@ -415,9 +461,9 @@ class TestWorkedExamplesStandalone:
         scenario = _scenario(
             combos={("bionic", "lxd-container")},
             tags=[
-                "@releases.lts.supported",
-                "@releases.lts.esm",
-                "@releases.skip.noble.until.2026-01-01",
+                "releases.lts.supported",
+                "releases.lts.esm",
+                "releases.skip.noble.until.2026-01-01",
             ],
         )
         findings = find_gaps(catalog, [scenario], today=TODAY)
@@ -428,9 +474,9 @@ class TestWorkedExamplesStandalone:
         scenario = _scenario(
             combos={("bionic", "lxd-container")},
             tags=[
-                "@releases.lts.supported",
-                "@releases.lts.esm",
-                "@releases.skip.noble",
+                "releases.lts.supported",
+                "releases.lts.esm",
+                "releases.skip.noble",
             ],
         )
         findings = find_gaps(catalog, [scenario], today=TODAY)
@@ -444,9 +490,9 @@ class TestWorkedExamplesStandalone:
         scenario = _scenario(
             combos=set(),
             tags=[
-                "@releases.lts.supported",
-                "@releases.lts.esm",
-                "@releases.machine_types:lxd-container",
+                "releases.lts.supported",
+                "releases.lts.esm",
+                "releases.machine_types:lxd-container",
             ],
         )
         findings = find_gaps(catalog, [scenario], today=TODAY)
@@ -465,10 +511,10 @@ class TestWorkedExamplesStandalone:
         scenario = _scenario(
             combos=set(),
             tags=[
-                "@releases.lts.supported",
-                "@releases.lts.esm",
-                "@releases.since.lts.jammy",
-                "@releases.machine_types:lxd-container",
+                "releases.lts.supported",
+                "releases.lts.esm",
+                "releases.since.lts.jammy",
+                "releases.machine_types:lxd-container",
             ],
         )
         findings = find_gaps(catalog, [scenario], today=TODAY)
@@ -476,7 +522,7 @@ class TestWorkedExamplesStandalone:
 
     def test_deliberately_fixed_never_flags_anything(self, catalog):
         # Worked example #10.
-        scenario = _scenario(combos=set(), tags=["@releases.fixed"])
+        scenario = _scenario(combos=set(), tags=["releases.fixed"])
         assert find_gaps(catalog, [scenario], today=TODAY) == []
 
     def test_unclassified_scenario_is_flagged_not_guessed(self, catalog):
@@ -495,7 +541,7 @@ class TestErrorPaths:
     def test_unknown_release_in_since_bound_is_a_tag_error(self, catalog):
         scenario = _scenario(
             combos={("jammy", "lxd-container")},
-            tags=["@releases.lts.supported", "@releases.since.lts.warty"],
+            tags=["releases.lts.supported", "releases.since.lts.warty"],
         )
         findings = find_gaps(catalog, [scenario], today=TODAY)
         assert len(findings) == 1
@@ -503,7 +549,7 @@ class TestErrorPaths:
         assert "warty" in findings[0].detail
 
     def test_malformed_tag_is_a_tag_error_not_a_crash(self, catalog):
-        scenario = _scenario(combos=set(), tags=["@releases.lts.bogus"])
+        scenario = _scenario(combos=set(), tags=["releases.lts.bogus"])
         findings = find_gaps(catalog, [scenario], today=TODAY)
         assert len(findings) == 1
         assert findings[0].status == GapStatus.TAG_ERROR

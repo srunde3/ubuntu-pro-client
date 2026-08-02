@@ -22,7 +22,11 @@ from dataclasses import dataclass, field
 from datetime import date
 from typing import Dict, List, Optional, Sequence, Set
 
-TAG_PREFIX = "@releases."
+#: No leading `@` -- behave strips it from Tag.name (same convention as
+#: behave_features._CONFIG_TAG_PREFIX = "uses.config."). Only Gherkin
+#: *source* text uses the `@`; every tag string this module ever sees has
+#: already been parsed by behave, which never includes it.
+TAG_PREFIX = "releases."
 
 LINES = {"lts", "interim"}
 STATUSES = {"supported", "esm", "legacy"}
