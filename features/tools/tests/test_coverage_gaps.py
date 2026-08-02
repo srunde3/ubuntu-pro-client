@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 
 from coverage_gaps import (  # noqa: E402
     Finding,
@@ -15,9 +16,11 @@ from coverage_gaps import (  # noqa: E402
     ScenarioCoverage,
     aggregate_scenarios,
     find_gaps,
-    load_scenario_coverage,
+    scenario_coverage_from_feature_detail,
 )
 from release_catalog import ReleaseCatalog  # noqa: E402
+
+from features import behave_features  # noqa: E402
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures" / "release_coverage"
 
@@ -78,6 +81,44 @@ ROWS = [
 @pytest.fixture
 def catalog():
     return ReleaseCatalog.from_rows(ROWS, today=TODAY)
+
+
+def _feature_detail_from_payload(
+    payload: dict,
+) -> behave_features.FeatureDetail:
+    """Fixtures are JSON dicts, MCP describe_feature-shaped. Convert
+    through the same behave_features.FeatureDetail path production code
+    uses, rather than duplicating ScenarioCoverage-construction logic here.
+    """
+    return behave_features.FeatureDetail(
+        path=payload["feature_file"],
+        title=payload.get("title", ""),
+        tags=list(payload.get("tags", [])),
+        requires_config=list(payload.get("requires_config", [])),
+        scenarios=[
+            behave_features.ScenarioSummary(
+                name=scenario["name"],
+                type=scenario.get("type", "scenario"),
+                tags=list(scenario.get("tags", [])),
+                requires_config=list(scenario.get("requires_config", [])),
+                example_columns=list(scenario.get("example_columns", [])),
+                combos=[
+                    behave_features.Combo(
+                        release=combo["release"],
+                        machine_type=combo["machine_type"],
+                    )
+                    for combo in scenario.get("combos", [])
+                ],
+            )
+            for scenario in payload.get("scenarios", [])
+        ],
+    )
+
+
+def load_scenario_coverage(payload: dict):
+    return scenario_coverage_from_feature_detail(
+        _feature_detail_from_payload(payload)
+    )
 
 
 def _load(fixture_name):

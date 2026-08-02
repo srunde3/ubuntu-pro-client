@@ -16,6 +16,11 @@ module = [
   "*.tests.*",
   "uaclient.conftest",
   "uaclient.testing.*",
+  # features/tools/mcp-behave-server/tests/*: its parent directory's name
+  # isn't a valid Python identifier (a hyphen), so mypy's package-base
+  # inference can't build a *.tests.* -style dotted name for it -- these
+  # resolve as a bare `tests.*` instead.
+  "tests.*",
 ]
 ignore_errors = "true"
 
@@ -24,6 +29,11 @@ module = [
   "apt_pkg",
   "behave.*",
   "hamcrest",
+  # features/tools/coverage_gaps.py imports these via a sys.path insert
+  # (see the module's own comment) rather than a real package relationship
+  # mypy can follow statically.
+  "release_catalog",
+  "release_tags",
 ]
 ignore_missing_imports = "true"
 

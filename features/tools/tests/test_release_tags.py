@@ -7,7 +7,6 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from release_tags import (  # noqa: E402
     Bound,
-    CoverageDeclaration,
     SkipException,
     TagValidationError,
     parse_tags,

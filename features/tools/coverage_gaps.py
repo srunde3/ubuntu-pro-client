@@ -13,11 +13,12 @@ vocabulary ``release_tags.py`` parses.
 
 Design constraints:
 
-* This module never opens a ``.feature`` file. Its only view of "what a
-  scenario covers" is the behave MCP server's ``describe_feature`` output
-  (JSON in), including each scenario's raw ``tags``. Investigation and
-  execution of the suite live in the MCP; this module only does the gap
-  arithmetic.
+* This module never opens a ``.feature`` file itself. It reads structured
+  scenario/combo data from ``features.behave_features`` (the repo's
+  authority on ``.feature`` file conventions -- see
+  ``features/behave_features.py``), the same module the behave MCP server
+  uses. Investigation and execution of the suite live in the MCP; this
+  module only does the gap arithmetic.
 * Applicability is read entirely from ``@releases.*`` tags -- there is no
   separate skip-record log or other side artifact. A scenario with no
   ``@releases.*`` tags is reported ``UNCLASSIFIED``, never silently treated
@@ -28,7 +29,7 @@ Design constraints:
 
 Usage::
 
-    python3 tools/coverage_gaps.py --describe-json - < payload.json
+    python3 features/tools/coverage_gaps.py --repo-root .
 """
 
 import argparse
@@ -37,15 +38,27 @@ import sys
 from dataclasses import dataclass, field
 from datetime import date
 from enum import Enum
+from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Set, Tuple
 
-from release_catalog import ReleaseCatalog
-from release_tags import (
+# `features/behave_features.py` is the repo's authority on how .feature
+# files are structured -- this script is one of its consumers, alongside
+# the behave MCP server. `release_catalog` lives in the top-level tools/
+# (it's generic Ubuntu-release-lifecycle math, not feature-specific), so
+# both the repo root (for `features.*`) and tools/ need to be reachable.
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(_REPO_ROOT))
+sys.path.insert(0, str(_REPO_ROOT / "tools"))
+
+from release_catalog import ReleaseCatalog  # noqa: E402
+from release_tags import (  # noqa: E402
     TAG_PREFIX,
     CoverageDeclaration,
     TagValidationError,
     parse_tags,
 )
+
+from features import behave_features  # noqa: E402
 
 
 class UnknownReleaseError(ValueError):
@@ -60,8 +73,8 @@ class ScenarioCoverage:
     """One scenario's current release x machine_type coverage and its raw
     tags.
 
-    Built from the MCP's ``describe_feature`` response -- never from
-    reading the ``.feature`` file directly.
+    Built from ``features.behave_features``' structured data -- this module
+    never opens a ``.feature`` file itself.
     """
 
     feature_file: str
@@ -86,30 +99,40 @@ class ScenarioCoverage:
         return self.is_outline and "release" in self.example_columns
 
 
-def load_scenario_coverage(
-    describe_feature_payload: dict,
+def scenario_coverage_from_feature_detail(
+    detail: behave_features.FeatureDetail,
 ) -> List[ScenarioCoverage]:
-    """Parse one MCP `describe_feature` response into one ScenarioCoverage
+    """Turn one ``behave_features.FeatureDetail`` into one ScenarioCoverage
     record per raw scenario/outline node -- no aggregation yet.
     """
-    feature_file = describe_feature_payload["feature_file"]
     coverage: List[ScenarioCoverage] = []
-    for scenario in describe_feature_payload.get("scenarios", []):
+    for scenario in detail.scenarios:
         combos = {
-            (combo["release"], combo["machine_type"])
-            for combo in scenario.get("combos", [])
+            (combo.release, combo.machine_type) for combo in scenario.combos
         }
         coverage.append(
             ScenarioCoverage(
-                feature_file=feature_file,
-                scenario_name=scenario["name"],
-                is_outline=scenario.get("type") == "scenario_outline",
-                example_columns=scenario.get("example_columns", []),
+                feature_file=detail.path,
+                scenario_name=scenario.name,
+                is_outline=scenario.type == "scenario_outline",
+                example_columns=list(scenario.example_columns),
                 combos=combos,
-                tags=list(scenario.get("tags", [])),
+                tags=list(scenario.tags),
             )
         )
     return coverage
+
+
+def load_scenario_coverage(repo_root: Path) -> List[ScenarioCoverage]:
+    """Read every feature file under ``repo_root`` and return one
+    ScenarioCoverage record per raw scenario/outline node -- no aggregation
+    yet.
+    """
+    return [
+        s
+        for detail in behave_features.discover_feature_details(repo_root)
+        for s in scenario_coverage_from_feature_detail(detail)
+    ]
 
 
 def _release_tags(tags: Sequence[str]) -> frozenset:
@@ -155,9 +178,10 @@ def aggregate_scenarios(
         distinct_tag_sets = {_release_tags(node.tags) for node in nodes}
         tag_conflict_detail = None
         if len(distinct_tag_sets) > 1:
+            tag_sets = sorted(sorted(s) for s in distinct_tag_sets)
             tag_conflict_detail = (
                 f"nodes sharing the name {scenario_name!r} carry different "
-                f"@releases.* tags: {sorted(sorted(s) for s in distinct_tag_sets)}"
+                f"@releases.* tags: {tag_sets}"
             )
 
         aggregated.append(
@@ -343,8 +367,9 @@ def find_gaps(
                         scenario.feature_file,
                         scenario.scenario_name,
                         GapStatus.NON_STANDARD_SHAPE,
-                        detail="resolves release coverage without matching the "
-                        "golden Scenario Outline + Examples(release) shape",
+                        detail="resolves release coverage without matching "
+                        "the golden Scenario Outline + Examples(release) "
+                        "shape",
                     )
                 )
             continue
@@ -423,7 +448,8 @@ def render_table(findings: Sequence[Finding]) -> str:
         ):
             lines.append(
                 f"  {f.feature_file:<45} {f.scenario_name[:40]:<40} "
-                f"{f.bucket:<15} {f.release:<10} {f.machine_type:<14} {f.detail}"
+                f"{f.bucket:<15} {f.release:<10} {f.machine_type:<14} "
+                f"{f.detail}"
             )
     return "\n".join(lines)
 
@@ -452,10 +478,10 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         description=__doc__.splitlines()[0] if __doc__ else None
     )
     parser.add_argument(
-        "--describe-json",
-        required=True,
-        help="path to a JSON array of MCP `describe_feature` responses, "
-        "or `-` for stdin",
+        "--repo-root",
+        default=".",
+        help="path to the ubuntu-pro-client checkout to read features/ from "
+        "(default: current directory)",
     )
     parser.add_argument("--format", choices=("table", "json"), default="table")
     return parser.parse_args(argv)
@@ -463,20 +489,8 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = parse_args(argv)
-    source = (
-        sys.stdin
-        if args.describe_json == "-"
-        else open(args.describe_json, encoding="utf-8")
-    )
-    with source:
-        payloads = json.load(source)
-    if isinstance(payloads, dict):
-        payloads = [payloads]
-
     catalog = ReleaseCatalog.from_csv()
-    scenarios = [
-        s for payload in payloads for s in load_scenario_coverage(payload)
-    ]
+    scenarios = load_scenario_coverage(Path(args.repo_root).resolve())
 
     findings = find_gaps(catalog, scenarios)
     print(
