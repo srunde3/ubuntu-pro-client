@@ -60,19 +60,46 @@ convention. `<line>` is `lts` or `interim`; `<status>` is `supported`,
 `@releases.fixed` is present. `@releases.fixed` and
 `@releases.<line>.<status>` are mutually exclusive.
 
+## Tag placement: always on `Examples:`, never on `Scenario Outline:`
+
+`@releases.*` tags go above an `Examples:` block, not above
+`Scenario Outline:` -- behave supports tags on `Examples:` independently of
+the scenario's own tags, and this is the only place `@releases.*` tags are
+read from. A scenario with one `Examples:` block (the common case) tags
+that one block; a scenario whose substrate coverage splits along a policy
+boundary the release axis alone can't express (e.g. "clouds are only
+tested on LTS releases, standard substrates on every release") tags each
+block independently. Same rule either way -- there's no separate
+"whole-scenario" mechanism to reach for.
+
+- **A `@releases.*` tag on `Scenario Outline:` itself is a `TAG_ERROR`,**
+  not silently ignored and not a fallback -- exactly the kind of
+  wrong-location mistake that's easy to make out of habit and easy to miss
+  if it's just quietly unread.
+- **Untagged blocks are `UNCLASSIFIED`, not an error.** If some blocks in a
+  scenario are tagged and others aren't, the untagged ones are
+  independently undecided -- the same honest state an untagged scenario is
+  in today.
+- **Each block's tag set is complete on its own**, with no inheritance
+  from anywhere else -- a tagged `Examples:` block declares its own
+  `tracks`/`since`/`until`/`machine_types`/`exceptions` from scratch.
+
 ## Encoding rules
 
 - **One tag per fact.** No packed/structured tag values beyond the `:`
   value-escape and `+` pairing described above. Keeps parsing trivial
   (split on `.`, check against a small fixed keyword set) and keeps diffs
   small when one fact changes.
-- **Consistency across aggregated nodes is required, not just
-  recommended.** The precondition-split pattern (`fix.feature`'s three
-  `Scenario Outline`s sharing one name) means `@releases.*` tags are a
-  property of the *behavior*, not the node -- every node sharing a name
-  must carry identical `@releases.*` tags. A mismatch is itself a data
-  hygiene bug worth flagging, the same way an accidental name collision
-  would be.
+- **Consistency across aggregated nodes is still required.** The
+  precondition-split pattern (`fix.feature`'s three `Scenario Outline`s
+  sharing one name) means `@releases.*` tags are a property of the
+  *behavior*, not the node -- when one scenario name is split across
+  multiple `Scenario Outline` nodes, every node's `Examples:` block(s) must
+  carry identical `@releases.*` tags. A mismatch is a data hygiene bug
+  worth flagging, the same way an accidental name collision would be. This
+  is a different axis from multiple `Examples:` blocks *within one node*
+  carrying deliberately *different* tags (see "Tag placement" above) --
+  that's the sub-grouping mechanism working as intended, not a mismatch.
 - **Reasons go in a comment on its own line directly above the tag (or the
   Examples table) they explain**, not in a fixed format -- they're for
   humans. **Never inline on the same line as a tag.** Verified against
@@ -115,92 +142,165 @@ convention. `<line>` is `lts` or `interim`; `<status>` is `supported`,
 **Anbox** (`tracks={lts:{supported}}`, everything else defaulted):
 
 ```gherkin
-  @releases.lts.supported
   Scenario Outline: Enable Anbox cloud service in a VM
+    Given a `<release>` `<machine_type>` machine with ubuntu-advantage-tools installed
+    ...
+
+    @releases.lts.supported
+    Examples: ubuntu release
+      | release | machine_type |
+      | ...
 ```
 
 **`fix.feature`'s lifecycle-tracked scenario** (`tracks={lts:{supported,
 esm}}`):
 
 ```gherkin
-  @releases.lts.supported
-  @releases.lts.esm
   Scenario Outline: Fix command on a machine without security/updates source lists
+    ...
+
+    @releases.lts.supported
+    @releases.lts.esm
+    Examples: ubuntu release
+      | release | machine_type |
+      | ...
 ```
 
 **Closed window** (hypothetical -- no longer Pro-gated after resolute):
 
 ```gherkin
-  @releases.lts.supported
-  @releases.until.lts.resolute
   Scenario Outline: ...
+    ...
+
+    @releases.lts.supported
+    @releases.until.lts.resolute
+    Examples: ...
 ```
 
 **Cloud-scoped** (hypothetical -- FIPS not offered on GCP):
 
 ```gherkin
-  @releases.lts.supported
-  @releases.machine_types:aws.pro
-  @releases.machine_types:azure.pro
   Scenario Outline: ...
+    ...
+
+    @releases.lts.supported
+    @releases.machine_types:aws.pro
+    @releases.machine_types:azure.pro
+    Examples: ...
 ```
 
 **Temporary mid-window hole** (the ESM-outage-from-a-CVE example):
 
 ```gherkin
-  @releases.lts.supported
-  @releases.lts.esm
-  @releases.skip.noble.until.2026-08-15
   Scenario Outline: ...
+    ...
+
     # noble skipped: ESM was down for months due to a CVE response;
     # revisit after 2026-08-15
+    @releases.lts.supported
+    @releases.lts.esm
+    @releases.skip.noble.until.2026-08-15
+    Examples: ...
 ```
 
-**Machine_type introduced partway through the window** (GCP added in
-focal):
+**Cloud type with its own availability window** (GCP Pro only available
+since focal):
 
 ```gherkin
+  Scenario Outline: ...
+    ...
+
+    @releases.lts.supported
+    @releases.machine_types:aws.pro
+    @releases.machine_types:azure.pro
+    @releases.machine_types:gcp.pro
+    Examples: ...
+```
+
+No exceptions needed. `gcp.pro`'s own availability window is an
+`applicable(m, r)` fact (see
+[release_coverage_model.md](../explanation/release_coverage_model.md)'s
+"External classification facts"), external to this scenario and never
+encoded in a tag -- it already excludes xenial/bionic from `R(S)`.
+Declaring the full relevant `machine_types` set is enough.
+
+**Two Examples blocks with different testing policies** (clouds tested
+only while `supported`, standard substrates also tracked through `esm` and
+across the `interim` line):
+
+```gherkin
+Scenario Outline: Check pro version
+  Given a `<release>` `<machine_type>` machine with ubuntu-advantage-tools installed
+  ...
+
+  @releases.lts.supported
+  @releases.lts.esm
+  @releases.interim.supported
+  Examples: standard
+    | release | machine_type  |
+    | ...     | lxd-container |
+
   @releases.lts.supported
   @releases.machine_types:aws.pro
   @releases.machine_types:azure.pro
   @releases.machine_types:gcp.pro
-  @releases.skip.xenial+gcp.pro
-  @releases.skip.bionic+gcp.pro
-  Scenario Outline: ...
-    # gcp.pro added starting in focal; xenial/bionic never supported it
+  Examples: clouds
+    | release | machine_type |
+    | ...     | aws.pro      |
 ```
+
+Each block's tags are independent -- "standard" also tracks `esm` and
+`interim`, "clouds" doesn't, reflecting a genuine difference in testing
+policy between the two groups. `Scenario Outline: Check pro version`
+itself carries no `@releases.*` tags -- putting any there would be a
+`TAG_ERROR`.
 
 **Explicit bound with a reason** (apt output format changed in kernel
 5.5, which focal ships):
 
 ```gherkin
-  @releases.lts.supported
-  @releases.since.lts.focal
   Scenario Outline: ...
+    ...
+
     # apt changed its output format starting in kernel 5.5, which focal ships
+    @releases.lts.supported
+    @releases.since.lts.focal
+    Examples: ...
 ```
 
 **Deliberately fixed** (tied to one historical CVE, never expected to
 grow):
 
 ```gherkin
-  @releases.fixed
   Scenario Outline: ...
+    ...
+
+    @releases.fixed
+    Examples: ...
 ```
 
 **Unclassified** (the honest current state of most of the suite): no
-`@releases.*` tags at all. Nothing to show -- that's the point.
+`@releases.*` tags on the `Examples:` block(s) at all. Nothing to show --
+that's the point.
 
 ## Open items
 
-- Parsing and validation are implemented: `tools/release_tags.py` turns
-  `ScenarioSummary.tags` into `tracks`/`since`/`until`/`machine_types`/
-  `exceptions` per the vocabulary above and rejects malformed or
-  conflicting tags (unknown tokens, `@releases.fixed` co-occurring with a
+- Parsing and validation are implemented: `tools/release_tags.py` turns a
+  set of tags into `tracks`/`since`/`until`/`machine_types`/`exceptions`
+  per the vocabulary above and rejects malformed or conflicting tags
+  (unknown tokens, `@releases.fixed` co-occurring with a
   `@releases.<line>.<status>` tag, an unresolvable `since`/`until`
-  release). `tools/coverage_gaps.py` applies this after aggregation-by-name
-  and additionally checks that every node sharing a scenario name carries
-  identical `@releases.*` tags.
+  release). `tools/coverage_gaps.py` applies this after aggregation and
+  additionally checks that every `Scenario Outline` node sharing a
+  scenario name carries identical `@releases.*` tags on its `Examples:`
+  block(s).
+- Reading tags from `Examples:` blocks (rather than `Scenario Outline:`)
+  is new to this document -- `features/behave_features.py`/
+  `features/tools/coverage_gaps.py` don't implement "Tag placement" above
+  yet.
+- `applicable(m, r)` (referenced in the "cloud type with its own
+  availability window" translation above) isn't sourced anywhere yet --
+  see `dev-docs/reference/machine_type_applicability.md`.
 - Migration (tagging the ~180 existing scenario behaviors) is a separate,
   bounded task -- a scenario's own historical `combos` strongly suggest its
   `tracks` value in most cases, which could seed a first pass.

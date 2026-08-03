@@ -208,23 +208,6 @@ def _resolve_order(catalog: ReleaseCatalog, release: str) -> int:
     return order
 
 
-def _default_since_order(
-    catalog: ReleaseCatalog, scenario: ScenarioCoverage, line: str
-) -> Optional[int]:
-    """The earliest release already covered on this line, per the model's
-    stated default -- "the boundary is self-evident from existing data."
-    If nothing is covered on this line yet, there is no data to derive a
-    bound from, so none is applied (the full catalog history for this
-    line/status combination is in scope).
-    """
-    orders = []
-    for series in scenario.releases_covered():
-        release = catalog.get(series)
-        if release is not None and _line_of(release) == line:
-            orders.append(release.order)
-    return min(orders) if orders else None
-
-
 def _line_of(release) -> str:
     return "lts" if release.is_lts else "interim"
 
@@ -238,6 +221,13 @@ def compute_r(
     currently cover, per its declared ``tracks``/``since``/``until``/
     ``machine_types``. Raises ``UnknownReleaseError`` if a ``since``/
     ``until`` tag names a release the catalog doesn't recognize.
+
+    ``since``/``until`` are never inferred from ``scenario``'s current
+    coverage -- unstated means unbounded on that side, same as ``until``
+    already worked. A bound derived from "what's currently covered" would
+    move every time coverage changes, which defeats the purpose of a
+    coverage checker: deleting the *earliest* covered release would quietly
+    narrow the requirement instead of surfacing the deletion as a gap.
     """
     machine_types = (
         declaration.machine_types or scenario.machine_types_covered()
@@ -252,7 +242,7 @@ def compute_r(
         since_order = (
             _resolve_order(catalog, since_bound.release)
             if since_bound
-            else _default_since_order(catalog, scenario, line)
+            else None
         )
         until_order = (
             _resolve_order(catalog, until_bound.release)

@@ -485,8 +485,8 @@ class TestWorkedExamplesStandalone:
     def test_no_existing_coverage_and_no_since_leaves_the_line_unbounded(
         self, catalog
     ):
-        # If nothing is covered yet on this line, there's no data to
-        # derive a `since` default from, so none is applied.
+        # Unstated `since` is always unbounded -- never inferred from what
+        # this scenario happens to cover, with or without existing rows.
         scenario = _scenario(
             combos=set(),
             tags=[
@@ -531,6 +531,54 @@ class TestWorkedExamplesStandalone:
         findings = find_gaps(catalog, [scenario], today=TODAY)
         assert len(findings) == 1
         assert findings[0].status == GapStatus.UNCLASSIFIED
+
+
+# ---------------------------------------------------------------------------
+# Regression: `since` must never be inferred from the scenario's own
+# current coverage. A bound derived that way moves every time coverage
+# changes -- specifically, deleting the *earliest* covered release used to
+# silently narrow the requirement instead of surfacing the deletion as a
+# gap. Caught by hand against features/_version.feature: deleting bionic
+# (esm) alone was flagged correctly (xenial still anchored the old default),
+# but deleting xenial *and* bionic together silently absorbed both, because
+# focal became the new "earliest covered" and the bound moved past bionic
+# too. `until` was never affected -- it was already unconditionally
+# unbounded unless stated.
+# ---------------------------------------------------------------------------
+class TestSinceIsNeverInferredFromCurrentCoverage:
+    def test_an_older_tracked_release_is_required_even_if_never_covered(
+        self, catalog
+    ):
+        # bionic and focal are both esm at TODAY. Covering only focal and
+        # tracking esm must still flag bionic -- there is no bound to
+        # silently exclude it, unstated `since` is unbounded, full stop.
+        scenario = _scenario(
+            combos={("focal", "lxd-container")},
+            tags=["releases.lts.esm"],
+        )
+        findings = find_gaps(catalog, [scenario], today=TODAY)
+        assert {f.release for f in findings} == {"bionic"}
+
+    def test_deleting_the_earliest_covered_release_still_flags_the_rest(
+        self, catalog
+    ):
+        # The exact bug: two releases covered (bionic, focal), tracking
+        # esm. Removing bionic (the earliest) must not shrink the
+        # requirement and silently drop focal's neighbor out of scope --
+        # bionic itself must still be flagged missing.
+        covered_before = _scenario(
+            combos={("bionic", "lxd-container"), ("focal", "lxd-container")},
+            tags=["releases.lts.esm"],
+        )
+        covered_after_deleting_bionic = _scenario(
+            combos={("focal", "lxd-container")},
+            tags=["releases.lts.esm"],
+        )
+        assert find_gaps(catalog, [covered_before], today=TODAY) == []
+        findings = find_gaps(
+            catalog, [covered_after_deleting_bionic], today=TODAY
+        )
+        assert {f.release for f in findings} == {"bionic"}
 
 
 # ---------------------------------------------------------------------------

@@ -39,19 +39,21 @@ Three distinct states, not two:
 `tracks(S)`, the earliest and latest release that line's bucket
 membership is evaluated over, each optionally paired with a `reason` (e.g.
 "apt changed its output format starting in kernel 5.5, which focal
-ships"). `since` defaults to the earliest release already covered on that
-line if unstated -- no reason needed, the boundary is self-evident from
-existing data. `until` defaults to unbounded if unstated. A `reason` is
-optional on both, but worth attaching whenever a bound is *explicitly*
-narrowed, since that's exactly the kind of fact a future reader needs
-explained rather than mistaken for an oversight. This mirrors
+ships"). Both default to unbounded if unstated: neither is ever inferred
+from `S`'s current coverage, since a bound derived that way would move
+whenever coverage changes and so could never detect a deleted release. A
+`reason` is optional on both, worth attaching whenever a bound is
+*explicitly* narrowed, since that's exactly the kind of fact a future
+reader needs explained rather than mistaken for an oversight. This mirrors
 `exceptions`' `reason` field, so all three "why doesn't this apply here"
 mechanisms -- `since`, `until`, `exceptions` -- share the same shape. The
 reason is carried as metadata only; it plays no part in computing `R(S)`.
 
 **`machine_types(S)`** -- the set of machine_types `S` applies to.
 Defaults to whatever machine_types are already covered anywhere in `S` if
-unstated. Not windowed by release (see Limitation A).
+unstated (see Limitation F). Each declared machine_type is further
+constrained by `applicable(m, r)` -- see "External classification facts"
+below.
 
 **`exceptions(S)`** -- a set of `(release, machine_type?, reason,
 expires?)` records: deliberate holes within an otherwise-applicable
@@ -59,7 +61,7 @@ expires?)` records: deliberate holes within an otherwise-applicable
 `expires` omitted = permanent. Once `expires` passes, the exception lapses
 and the pair becomes a live gap again.
 
-### Default asymmetry, deliberately
+### No field ever defaults from `S`'s own current coverage
 
 `tracks` has no safe default -- guessing it is the exact circularity this
 model exists to avoid, and any default (empty, full, or inferred from
@@ -68,9 +70,48 @@ silently degrade over time as releases age between statuses (a scenario
 that happens to cover a release which later ages into ESM would start
 being checked against ESM with no decision ever having been made). So
 absence is its own visible state.
-`since`/`until` and `machine_types` default towards *not* flagging when
-unstated, because a missed flag is far cheaper than the false-positive
-floods both "assume broadly" defaults produced empirically.
+
+`since`/`until` unstated means unbounded -- the more inclusive direction,
+deliberately, even though that costs an occasional noisy finding (an
+ancient release nobody's thought about in years suddenly needs a decision).
+
+`machine_types` is the one field that still defaults from `S`'s current
+coverage (whatever's covered anywhere in `S`), because there is no
+equivalent "unbounded" alternative for it the way there is for releases --
+most scenarios are legitimately scoped to a specific subset of
+machine_types (a GCP-specific behavior shouldn't default to being checked
+against every cloud). This carries a structural risk: deleting every row
+of one machine_type from a scenario silently narrows what's required
+instead of flagging the deletion (see Limitation F). Declaring the full
+relevant set explicitly avoids this risk entirely, and is cheap to do now
+that `applicable(m, r)` prunes it down to what was actually available,
+without needing exceptions to narrow it by hand.
+
+## External classification facts
+
+Two facts about the world feed this model. Both are treated as given --
+computed by something outside this model, evaluated as of today -- and
+both are genuinely the same *kind* of fact: a classification that changes
+as a release ages.
+
+- **`status(r)`** -- a release's current phase: `devel`, `supported`,
+  `esm`, `legacy`, or `eol`. Time-varying: the same release moves through
+  these phases over its life. (`line(r)`, used alongside it throughout
+  this doc, is different in kind -- permanent, not a phase: `lts`/`interim`
+  never changes for a release once it exists.)
+- **`applicable(m, r)`** -- whether machine_type `m` was, or is, actually
+  offered as a real product or environment for release `r`. The same kind
+  of fact as `status(r)`: a machine_type can be not-yet-applicable,
+  applicable, or (for some) retired, depending on `r`.
+
+This model only needs these as classifications -- how they're actually
+produced is a separate, later concern, deliberately out of scope here. For
+`status`/`line`, this repo happens to source them from `distro-info`'s
+`ubuntu.csv`; that's a sourcing choice, not part of the model itself -- the
+model works identically if that classification came from somewhere else.
+`applicable` needs a source of the same kind; see
+[machine_type_applicability.md](../reference/machine_type_applicability.md)
+for its shape.
 
 ## Derivation
 
@@ -81,7 +122,7 @@ R_line(S, L) for a line L present in tracks(S):
              since(S,L) <= r <= until(S,L)-or-now }
 
 R(S)        = { (r, m) : r in union over L in tracks(S) of R_line(S, L),
-                m in machine_types(S) }
+                m in machine_types(S), applicable(m, r) }
 Excepted(S) = { (r, m) : an unexpired exception covers (r, m) or (r, None) }
 
 Missing(S) = R(S) - Covered(S) - Excepted(S)
@@ -98,28 +139,24 @@ If `tracks(S)` is undeclared, output is `UNCLASSIFIED(S)`, not `Missing(S)
    support -- today that's jammy, noble, *and* resolute simultaneously
    (LTS support windows overlap across the 2-year release cadence), not
    just the newest one. This scenario already covers jammy and noble, so
-   in practice only resolute is missing -- but the mechanism now checks
-   all three, not just the newest, which matters whenever a scenario has
-   a hole further back (see #3).
+   only resolute is missing.
 
 2. **Bounded-forward product feature** (`anbox.feature`). `tracks =
-   {lts: {supported}}`, `since` defaulted to jammy (its earliest existing
-   row). `R(S)` = currently-supported LTS releases from jammy onward =
-   `{jammy, noble, resolute}`. Covered = `{jammy, noble}`. Missing =
-   `{resolute}`. Bionic/focal/xenial never enter `R(S)` -- `esm` was never
-   declared as a tracked status for this scenario.
+   {lts: {supported}}`, `since` unstated (unbounded). `R(S)` = every
+   currently-`supported` LTS release = `{jammy, noble, resolute}` --
+   bionic/focal/xenial never enter `R(S)` regardless of the unbounded
+   `since`, because none of them is currently `supported` (`esm` was never
+   declared as a tracked status here). Covered = `{jammy, noble}`. Missing
+   = `{resolute}`.
 
 3. **Lifecycle-tracked security feature** (`fix.feature`'s "Fix command on
    a machine without security/updates source lists"). `tracks =
-   {lts: {supported, esm}}`, covers only bionic today. `R(S)` = LTS
-   releases currently `supported` or `esm`, from bionic onward =
-   `{bionic, focal, jammy, noble, resolute}`. Missing = `{focal, jammy,
-   noble, resolute}` -- **not just focal**. This is the concrete case
-   where the old newest-only mechanism was wrong: it only ever checked
-   this scenario against the single newest LTS (resolute) via one check
-   and against the ESM set via a separate check, and never noticed jammy
-   and noble were missing too, because "check the newest" silently skipped
-   the releases in between.
+   {lts: {supported, esm}}`, covers only bionic today. `R(S)` = every LTS
+   release currently `supported` or `esm` = `{bionic, focal, jammy, noble,
+   resolute}` (xenial is currently `legacy`, not `supported`/`esm`, so it
+   doesn't enter `R(S)` here either). Missing = `{focal, jammy, noble,
+   resolute}` -- **not just focal**: every currently-`supported`-or-`esm`
+   LTS release is checked, not only the newest.
 
 4. **Closed window** (hypothetical: a feature stops being Pro-gated after
    resolute). `tracks = {lts: {supported}}`, `until(S, lts) = resolute`.
@@ -164,15 +201,15 @@ If `tracks(S)` is undeclared, output is `UNCLASSIFIED(S)`, not `Missing(S)
     any migration). No `tracks` declared. Output: `UNCLASSIFIED(S)`, a
     finding of its own, not a guess in either direction.
 
-12. **Machine_type introduced partway through the window** (e.g. "AWS and
-    Azure since xenial, GCP only since focal"). Not a separate mechanism --
-    declare the full eventual `machine_types(S) = {aws.*, azure.*, gcp.*}`,
-    then add one permanent exception (`expires` omitted) per
-    `(release, gcp.*, "not added to GCP until focal")` for each release
-    before focal. This is cheap specifically because those exceptions are
-    for *closed* history: a fixed, small, one-time list that never needs
-    revisiting, not something that grows going forward. Once focal ships,
-    real rows satisfy `R(S)` with no further exceptions needed.
+12. **Machine_type introduced or retired partway through the window** (e.g.
+    `gcp.pro` only available since focal; `gcp.pro-fips` only available
+    through focal). Not a scenario-level concern -- declare the full
+    relevant `machine_types(S) = {aws.pro, azure.pro, gcp.pro}`;
+    `applicable(gcp.pro, r)` is false for xenial/bionic, so `R(S)`
+    excludes them automatically. A retired type like `gcp.pro-fips`, where
+    `applicable` goes false again after focal, is excluded the same way
+    once it ages out -- no exception list to maintain as new releases
+    ship.
 
 13. **Explicit bound with a reason** (apt's output format changed starting
     in kernel 5.5, which focal ships). `tracks = {lts: {supported}}`,
@@ -213,3 +250,12 @@ nothing to say about missing behaviors -- product surface with no test
 scenario at all is invisible to it, by construction. This is a
 release/machine_type completeness tool, not a test-coverage-in-the-general-
 sense tool.
+
+**F. Detecting a deleted machine_type.** Unlike `since`/`until`,
+`machine_types(S)` still defaults from `S`'s own current coverage (see "No
+field ever defaults from `S`'s own current coverage" above) because there's
+no meaningful "unbounded" machine_types default. If every row of one
+machine_type is removed from a scenario, the default silently narrows along
+with it -- the deletion never surfaces as a gap. Declaring `machine_types`
+explicitly closes this for a given scenario; nothing currently protects a
+scenario that leaves it unstated.

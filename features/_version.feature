@@ -1,6 +1,6 @@
 Feature: Pro is expected version
 
-  @uses.config.check_version
+  @releases.lts.esm @releases.lts.supported @releases.interim.supported @uses.config.check_version
   Scenario Outline: Check pro version
     Given a `<release>` `<machine_type>` machine with ubuntu-advantage-tools installed
     When I run `dpkg-query --showformat='${Version}' --show ubuntu-pro-client` with sudo
@@ -83,7 +83,7 @@ Feature: Pro is expected version
       | resolute | lxd-container  |
       | resolute | lxd-vm         |
 
-  @uses.config.check_version @upgrade
+  @releases.lts.esm @releases.lts.supported @releases.interim.supported @uses.config.check_version @upgrade
   Scenario Outline: Check pro version
     Given a `<release>` `<machine_type>` machine with ubuntu-advantage-tools installed
     When I run `dpkg-query --showformat='${Version}' --show ubuntu-pro-client` with sudo
@@ -115,7 +115,7 @@ Feature: Pro is expected version
       | questing | lxd-container |
       | resolute | lxd-container |
 
-  @uses.config.contract_token
+  @uses.config.contract_token @releases.lts.esm @releases.lts.supported @releases.interim.supported
   Scenario Outline: Attached show version in a ubuntu machine
     Given a `<release>` `<machine_type>` machine with ubuntu-advantage-tools installed
     When I attach `contract_token` with sudo
@@ -138,7 +138,7 @@ Feature: Pro is expected version
       | questing | lxd-container |
       | resolute | lxd-container |
 
-  @arm64
+  @arm64 @releases.lts.esm @releases.lts.supported @releases.interim.supported
   Scenario Outline: Check for newer versions of the client in an ubuntu machine
     Given a `<release>` `<machine_type>` machine with ubuntu-advantage-tools installed
     # Make sure we have a fresh, just rebooted, environment
