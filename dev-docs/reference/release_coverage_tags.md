@@ -302,9 +302,9 @@ that's the point.
   `Scenario Outline:` instead (`TAG_ERROR`), and groups combos per
   distinct `@releases.*` tag set across a scenario's block(s) rather than
   requiring one flat tag list per scenario.
-- `applicable(m, r)` is implemented in
-  `features/tools/machine_type_applicability.py` (data in the sibling
-  `machine_type_applicability.yaml`) and wired into `compute_r` -- see
+- `applicable(m, r)` is implemented in `features/tools/coverage_gaps.py`
+  (data in `machine_types.yaml`) and wired into
+  `compute_required_coverage` -- see
   `dev-docs/reference/machine_type_applicability.md` for sourcing and
   current data.
 - Migration (tagging the ~180 existing scenario behaviors) is a separate,

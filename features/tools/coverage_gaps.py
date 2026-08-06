@@ -47,9 +47,9 @@ from pathlib import Path
 from typing import Dict, FrozenSet, List, Optional, Sequence, Set, Tuple
 
 from features import behave_features
-from features.tools import machine_type_applicability
 from features.tools.release_catalog import ReleaseCatalog, Series
 from features.tools.release_tags import (
+    MACHINE_TYPES_TO_RELEASES,
     TAG_PREFIX,
     CoverageDeclaration,
     MachineType,
@@ -395,12 +395,15 @@ def compute_required_coverage(
 def _applicable(
     catalog: ReleaseCatalog, machine_type: MachineType, release: Series
 ) -> bool:
-    try:
-        return machine_type_applicability.applicable(
-            catalog, machine_type, release
-        )
-    except machine_type_applicability.UnknownReleaseError as exc:
-        raise UnknownReleaseError(str(exc)) from exc
+    """Whether ``machine_type`` was, or is, actually offered for
+    ``release``, per ``MACHINE_TYPES_TO_RELEASES``. Unbounded (``True``
+    everywhere) for any machine_type not listed there.
+    """
+    if catalog.order_of(release) is None:
+        raise UnknownReleaseError(f"unknown release {release!r}")
+    if machine_type not in MACHINE_TYPES_TO_RELEASES:
+        return True
+    return release in MACHINE_TYPES_TO_RELEASES[machine_type]
 
 
 def compute_excepted(

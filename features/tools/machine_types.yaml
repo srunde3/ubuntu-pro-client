@@ -2,8 +2,9 @@
 # dev-docs/reference/machine_type_applicability.md for what this fact means
 # and why it needs its own source. Kept as data, not code: this file is the
 # actual source of record for machine_type product-availability history,
-# not an implementation detail, so it lives separately from
-# machine_type_applicability.py's lookup logic.
+# not an implementation detail, so it lives separately from the lookup
+# logic (coverage_gaps.py's `_applicable`) and the loading logic
+# (release_tags.py's MACHINE_TYPE_APPLICABILITY).
 #
 # One entry per machine_type: the complete, explicit list of release series
 # it was, or is, offered on. Every release a machine_type applies to is
@@ -12,10 +13,14 @@
 # list by hand; that one-line update per cycle is the cost of this file
 # being a literal, auditable fact table instead of inferred from a rule.
 #
-# A machine_type with no entry here is treated as unbounded (applicable to
-# any release) by machine_type_applicability.py -- but every machine_type in
-# release_tags.ALLOWED_MACHINE_TYPES should have a real entry below; that
-# fallback exists only for machine types not yet added there.
+# release_tags.ALLOWED_MACHINE_TYPES (the valid vocabulary for
+# `@releases.machine_types:*`/`@releases.skip.*+*` tags) is derived from
+# this file's keys, not hand-kept in sync with them -- so every machine_type
+# meant to be tag-legal needs a real entry here; there's no separate list
+# to fall out of sync. A machine_type with no entry here at all (not
+# tag-legal, never mentioned) is treated as unbounded by `_applicable`, but
+# that's a fallback for machine_types outside this vocabulary entirely, not
+# a way to defer adding an entry for one that's in it.
 
 lxd-container:
   - trusty

@@ -1,12 +1,14 @@
+# machine_type/release applicability lookup logic lives in coverage_gaps.py
+# (merged from a standalone machine_type_applicability.py); kept as its own
+# test file since it's a narrow, data-driven unit distinct from
+# coverage_gaps.py's aggregation/gap-computation tests.
 from datetime import date
 
 import pytest
 
-from features.tools.machine_type_applicability import (
-    UnknownReleaseError,
-    applicable,
-)
-from features.tools.release_catalog import ReleaseCatalog
+from features.tools.coverage_gaps import UnknownReleaseError, _applicable
+from features.tools.release_catalog import ReleaseCatalog, Series
+from features.tools.release_tags import MachineType
 
 TODAY = date(2026, 8, 1)
 
@@ -27,61 +29,67 @@ def catalog():
 
 
 def test_listed_machine_type_is_applicable_on_every_release_it_names(catalog):
-    assert applicable(catalog, "aws.pro", "xenial")
-    assert applicable(catalog, "aws.pro", "resolute")
+    assert _applicable(catalog, MachineType("aws.pro"), Series("xenial"))
+    assert _applicable(catalog, MachineType("aws.pro"), Series("resolute"))
 
 
 def test_lxd_types_have_explicit_entries_too(catalog):
-    assert applicable(catalog, "lxd-container", "xenial")
-    assert applicable(catalog, "lxd-vm", "resolute")
+    assert _applicable(catalog, MachineType("lxd-container"), Series("xenial"))
+    assert _applicable(catalog, MachineType("lxd-vm"), Series("resolute"))
 
 
 def test_unknown_machine_type_defaults_to_unbounded(catalog):
-    assert applicable(catalog, "some-future-machine-type", "xenial")
+    assert _applicable(
+        catalog, MachineType("some-future-machine-type"), Series("xenial")
+    )
 
 
 @pytest.mark.parametrize(
     "release,expected",
     [
-        ("xenial", True),
-        ("bionic", True),
-        ("focal", True),
-        ("jammy", False),
-        ("noble", False),
-        ("resolute", False),
+        (Series("xenial"), True),
+        (Series("bionic"), True),
+        (Series("focal"), True),
+        (Series("jammy"), False),
+        (Series("noble"), False),
+        (Series("resolute"), False),
     ],
 )
 def test_fips_list_ends_at_focal(catalog, release, expected):
-    assert applicable(catalog, "aws.pro-fips", release) is expected
+    assert (
+        _applicable(catalog, MachineType("aws.pro-fips"), release) is expected
+    )
 
 
 @pytest.mark.parametrize(
     "release,expected",
     [
-        ("xenial", False),  # never offered on xenial
-        ("bionic", True),
-        ("focal", True),
-        ("jammy", False),
+        (Series("xenial"), False),  # never offered on xenial
+        (Series("bionic"), True),
+        (Series("focal"), True),
+        (Series("jammy"), False),
     ],
 )
 def test_gcp_fips_list_starts_at_bionic(catalog, release, expected):
-    assert applicable(catalog, "gcp.pro-fips", release) is expected
+    assert (
+        _applicable(catalog, MachineType("gcp.pro-fips"), release) is expected
+    )
 
 
 @pytest.mark.parametrize(
     "release,expected",
     [
-        ("xenial", False),
-        ("bionic", True),
-        ("jammy", True),
-        ("noble", False),
-        ("resolute", False),
+        (Series("xenial"), False),
+        (Series("bionic"), True),
+        (Series("jammy"), True),
+        (Series("noble"), False),
+        (Series("resolute"), False),
     ],
 )
 def test_wsl_list_is_bionic_through_jammy(catalog, release, expected):
-    assert applicable(catalog, "wsl", release) is expected
+    assert _applicable(catalog, MachineType("wsl"), release) is expected
 
 
 def test_unknown_release_raises(catalog):
     with pytest.raises(UnknownReleaseError):
-        applicable(catalog, "aws.pro-fips", "warty")
+        _applicable(catalog, MachineType("aws.pro-fips"), Series("warty"))

@@ -9,7 +9,10 @@ Keep this module and that document in sync when either changes.
 
 This module only parses tags -- it never opens a ``.feature`` file or talks
 to the MCP. Tags come in as plain strings (e.g. from the MCP's
-``describe_feature`` response); a ``CoverageDeclaration`` comes out.
+``describe_feature`` response); a ``CoverageDeclaration`` comes out. It
+does read one other file, ``machine_types.yaml`` -- see
+``MACHINE_TYPES_TO_RELEASES`` below -- since ``ALLOWED_MACHINE_TYPES`` is
+derived from it rather than kept as a separately hand-maintained list.
 
 A ``reason`` (the human-facing "why") can never be recovered from a tag --
 Gherkin tags can't contain whitespace, so reasons live in comments per the
@@ -21,9 +24,21 @@ TODO: strip reason from this model entirely, if we can't support it here.
 Simpler to add back later.
 """
 
+import os
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Dict, List, NewType, Optional, Sequence, Set, Tuple
+from typing import (
+    Dict,
+    FrozenSet,
+    List,
+    NewType,
+    Optional,
+    Sequence,
+    Set,
+    Tuple,
+)
+
+import yaml
 
 from features.tools.release_catalog import Series
 
@@ -34,20 +49,27 @@ STATUSES = {"supported", "esm", "legacy"}
 MachineType = NewType("MachineType", str)
 Tag = NewType("Tag", str)
 
-ALLOWED_MACHINE_TYPES: Set[MachineType] = {
-    MachineType("lxd-container"),
-    MachineType("lxd-vm"),
-    MachineType("aws.generic"),
-    MachineType("gcp.generic"),
-    MachineType("azure.generic"),
-    MachineType("aws.pro"),
-    MachineType("gcp.pro"),
-    MachineType("azure.pro"),
-    MachineType("aws.pro-fips"),
-    MachineType("gcp.pro-fips"),
-    MachineType("azure.pro-fips"),
-    MachineType("wsl"),
-}
+_MACHINE_TYPES_PATH = os.path.join(
+    os.path.dirname(__file__), "machine_types.yaml"
+)
+
+
+def _load_machine_types() -> Dict[MachineType, Set[Series]]:
+    with open(_MACHINE_TYPES_PATH, encoding="utf-8") as handle:
+        raw = yaml.safe_load(handle) or {}
+    return {
+        MachineType(machine_type): {Series(release) for release in releases}
+        for machine_type, releases in raw.items()
+    }
+
+
+MACHINE_TYPES_TO_RELEASES: Dict[MachineType, Set[Series]] = (
+    _load_machine_types()
+)
+
+ALLOWED_MACHINE_TYPES: FrozenSet[MachineType] = frozenset(
+    MACHINE_TYPES_TO_RELEASES.keys()
+)
 
 
 class TagValidationError(ValueError):

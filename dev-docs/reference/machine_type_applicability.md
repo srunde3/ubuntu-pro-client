@@ -6,8 +6,10 @@ TODO: identify if this document is necessary at all, or if the releases file is 
 
 ## Schema
 
-One entry per `ALLOWED_MACHINE_TYPES` value, each mapping to the complete,
-explicit list of release series it was, or is, offered on:
+One entry per machine_type, each mapping to the complete, explicit list of
+release series it was, or is, offered on. `ALLOWED_MACHINE_TYPES` (the
+valid vocabulary for `@releases.machine_types:*`/`@releases.skip.*+*`
+tags) is derived from this file's keys, not the other way around:
 
 ```yaml
 machine_type:
@@ -24,10 +26,12 @@ every still-applicable machine_type's list, or that series reads as not
 applicable by omission. That's a small, expected part of the twice-yearly
 release process, in exactly one file.
 
-A machine_type with no entry is treated as unbounded (applicable to every
-release) by the lookup logic -- but every value in `ALLOWED_MACHINE_TYPES`
-should have a real entry; that fallback exists only for machine types not
-yet added there.
+A machine_type with no entry here at all -- outside the tag vocabulary
+entirely, never mentioned -- is treated as unbounded (applicable to every
+release) by the lookup logic. That's a fallback for machine_types this
+file has nothing to say about, not a way to defer adding an entry for one
+that's meant to be tag-legal, since `ALLOWED_MACHINE_TYPES` can't include
+a machine_type without also including its entry here.
 
 One entry per literal machine_type string, not a cross-cutting "capability"
 dimension (e.g. FIPS modeled once and combined with cloud provider) -- the
@@ -36,9 +40,11 @@ use, so nothing downstream needs a second way to identify a machine_type.
 
 ## Current state
 
-Implemented in `features/tools/machine_type_applicability.py` (lookup logic
-only, read by `features/tools/coverage_gaps.py`'s `compute_r`). The actual
-data lives in its own file, `features/tools/machine_type_applicability.yaml`
+Implemented in `features/tools/coverage_gaps.py` (the `_applicable` lookup,
+read by `compute_required_coverage`), loaded by
+`features/tools/release_tags.py`'s `MACHINE_TYPES_TO_RELEASES` (also the
+source `ALLOWED_MACHINE_TYPES` is derived from -- see below). The actual
+data lives in its own file, `features/tools/machine_types.yaml`
 -- kept separate so updating it as real product-availability history gets
 filled in never requires touching the lookup logic. `lxd-container`/
 `lxd-vm` and the cloud `*.generic`/`*.pro` types currently list every
