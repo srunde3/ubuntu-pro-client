@@ -71,6 +71,12 @@ class Release:
         return "eol"
 
     @property
+    def line(self) -> str:
+        """Which release-cadence line this belongs to: ``lts`` or
+        ``interim``. Matches ``release_tags.LINES``."""
+        return "lts" if self.is_lts else "interim"
+
+    @property
     def is_relevant(self) -> bool:
         return self.status in RELEVANT_STATUSES
 

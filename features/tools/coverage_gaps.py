@@ -1,4 +1,11 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.12"
+# dependencies = [
+#     "pyyaml",
+#     "behave",
+# ]
+# ///
 """Flag behave scenarios missing coverage for a currently-relevant release.
 
 Where ``release_catalog`` answers "what releases exist, and what's their
@@ -29,7 +36,7 @@ Design constraints:
 
 Usage::
 
-    python3 features/tools/coverage_gaps.py --repo-root .
+    uv run features/tools/coverage_gaps.py --repo-root .
 """
 
 import argparse
@@ -50,17 +57,8 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_REPO_ROOT))
 
 from features import behave_features  # noqa: E402
-from features.tools.machine_type_applicability import (  # noqa: E402
-    UnknownReleaseError as _ApplicabilityUnknownReleaseError,
-)
-from features.tools.machine_type_applicability import (  # noqa: E402
-    applicable as _applicable_fact,
-)
-from features.tools.release_catalog import (  # noqa: E402
-    Release,
-    ReleaseCatalog,
-    Series,
-)
+from features.tools import machine_type_applicability  # noqa: E402
+from features.tools.release_catalog import ReleaseCatalog, Series  # noqa: E402
 from features.tools.release_tags import (  # noqa: E402
     TAG_PREFIX,
     CoverageDeclaration,
@@ -350,13 +348,7 @@ def _resolve_order(catalog: ReleaseCatalog, release: Series) -> int:
     return order
 
 
-# TODO can info be gathered elsewhere? Release catalog?
-def _line_of(release: Release) -> str:
-    return "lts" if release.is_lts else "interim"
-
-
-# TODO rename to more natural language; no formalism
-def compute_r(
+def compute_required_coverage(
     catalog: ReleaseCatalog,
     scenario: ScenarioCoverage,
     declaration: CoverageDeclaration,
@@ -394,7 +386,7 @@ def compute_r(
             else None
         )
         for release in catalog.ordered:
-            if _line_of(release) != line or release.status not in statuses:
+            if release.line != line or release.status not in statuses:
                 continue
             if since_order is not None and release.order < since_order:
                 continue
@@ -410,13 +402,14 @@ def compute_r(
     }
 
 
-# TODO inline the _applicable_fact func here.
 def _applicable(
     catalog: ReleaseCatalog, machine_type: MachineType, release: Series
 ) -> bool:
     try:
-        return _applicable_fact(catalog, machine_type, release)
-    except _ApplicabilityUnknownReleaseError as exc:
+        return machine_type_applicability.applicable(
+            catalog, machine_type, release
+        )
+    except machine_type_applicability.UnknownReleaseError as exc:
         raise UnknownReleaseError(str(exc)) from exc
 
 
@@ -446,17 +439,19 @@ def compute_excepted(
     return excepted
 
 
-# TODO reframe in natural language
 def compute_missing(
     catalog: ReleaseCatalog,
     scenario: ScenarioCoverage,
     declaration: CoverageDeclaration,
     today: Optional[date] = None,
 ) -> Set[Tuple[Series, MachineType]]:
-    """``Missing(S) = R(S) - Covered(S) - Excepted(S)``."""
-    r = compute_r(catalog, scenario, declaration)
-    excepted = compute_excepted(declaration, r, today or date.today())
-    return r - scenario.combos - excepted
+    """``Missing(S) = R(S) - Covered(S) - Excepted(S)``: every (release,
+    machine_type) pair this scenario should currently cover but doesn't,
+    and isn't deliberately excepted.
+    """
+    required = compute_required_coverage(catalog, scenario, declaration)
+    excepted = compute_excepted(declaration, required, today or date.today())
+    return required - scenario.combos - excepted
 
 
 # ---------------------------------------------------------------------------
@@ -557,7 +552,7 @@ def find_gaps(
 
         for release, machine_type in sorted(missing):
             found = catalog.get(release)
-            bucket = f"{_line_of(found)}.{found.status}" if found else ""
+            bucket = f"{found.line}.{found.status}" if found else ""
             findings.append(
                 Finding(
                     scenario.feature_file,
