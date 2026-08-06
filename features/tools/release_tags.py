@@ -23,7 +23,7 @@ Simpler to add back later.
 
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Dict, List, NewType, Optional, Sequence, Set
+from typing import Dict, List, NewType, Optional, Sequence, Set, Tuple
 
 from features.tools.release_catalog import Series
 
@@ -138,6 +138,67 @@ def _parse_skip(tag: str, rest: str) -> SkipException:
     )
 
 
+def _apply_machine_type(
+    tag: Tag, raw_machine_type: str, machine_types: Set[MachineType]
+) -> None:
+    if raw_machine_type not in ALLOWED_MACHINE_TYPES:
+        raise TagValidationError(
+            f"{tag!r}: unknown machine_type {raw_machine_type!r}"
+        )
+    machine_types.add(MachineType(raw_machine_type))
+
+
+def _apply_bound(
+    tag: Tag,
+    keyword: str,
+    rest: str,
+    since: Dict[str, Bound],
+    until: Dict[str, Bound],
+) -> None:
+    parts = rest.split(".", 1)
+    if len(parts) != 2:
+        raise TagValidationError(
+            f"{tag!r}: expected {keyword}.<line>.<release>"
+        )
+    line, release = parts
+    if line not in LINES:
+        raise TagValidationError(f"{tag!r}: unknown line {line!r}")
+    if not release:
+        raise TagValidationError(f"{tag!r}: missing release")
+    bucket = since if keyword == "since" else until
+    if line in bucket:
+        raise TagValidationError(
+            f"{tag!r}: duplicate @releases.{keyword}.{line}.* tag"
+        )
+    bucket[line] = Bound(release=Series(release))
+
+
+def _apply_track(
+    tag: Tag, line: str, status: str, tracks: Dict[str, Set[str]]
+) -> None:
+    if line not in LINES:
+        raise TagValidationError(f"{tag!r}: unknown line {line!r}")
+    if status not in STATUSES:
+        raise TagValidationError(f"{tag!r}: unknown status {status!r}")
+    tracks.setdefault(line, set()).add(status)
+
+
+def _apply_skip(
+    tag: Tag,
+    rest: str,
+    exceptions: List[SkipException],
+    seen_exception_keys: Set[Tuple[Series, Optional[MachineType]]],
+) -> None:
+    exception = _parse_skip(tag, rest)
+    key = (exception.release, exception.machine_type)
+    if key in seen_exception_keys:
+        raise TagValidationError(
+            f"{tag!r}: duplicate @releases.skip.* for {key}"
+        )
+    seen_exception_keys.add(key)
+    exceptions.append(exception)
+
+
 def parse_tags(tags: Sequence[Tag]) -> CoverageDeclaration:
     """Parse every ``@releases.*`` tag in ``tags`` into a
     ``CoverageDeclaration``. Tags outside the ``@releases.*`` namespace
@@ -149,77 +210,53 @@ def parse_tags(tags: Sequence[Tag]) -> CoverageDeclaration:
     the same line, or more than one ``@releases.skip.*`` for the same
     (release, machine_type) key. Nothing is silently dropped.
     """
-    tracks: Optional[Dict[str, Set[str]]] = None
+    tracks: Dict[str, Set[str]] = {}
+    classified = False
     fixed = False
     since: Dict[str, Bound] = {}
     until: Dict[str, Bound] = {}
     machine_types: Set[MachineType] = set()
     exceptions: List[SkipException] = []
-    seen_exception_keys: Set[tuple] = set()
+    seen_exception_keys: Set[Tuple[Series, Optional[MachineType]]] = set()
 
     for tag in tags:
         if not tag.startswith(TAG_PREFIX):
             continue
         remainder = tag[len(TAG_PREFIX) :]
 
-        if remainder == "fixed":
+        # `machine_types:<type>` is the only `:`-delimited shape; every
+        # other shape is `.`-nested, and machine_type *names* embedded in
+        # this one can themselves contain dots (e.g. "aws.pro-fips") -- so
+        # the `:` split has to happen on its own, before any `.`-splitting
+        # below can touch it.
+        if ":" in remainder:
+            prefix, _, raw_machine_type = remainder.partition(":")
+            if prefix != "machine_types":
+                raise TagValidationError(
+                    f"{tag!r}: unrecognized @releases.* tag"
+                )
+            _apply_machine_type(tag, raw_machine_type, machine_types)
+            continue
+
+        # Every remaining shape is `<keyword>.<rest>` or the bare
+        # `<line>.<status>` fallback -- uniformly `.`-nested, so one split
+        # up front is enough to dispatch to the right handler below. The
+        # final `else` is the exhaustiveness backstop: every shape this
+        # vocabulary defines is claimed by a branch above it, so anything
+        # left is genuinely unrecognized, not just unhandled.
+        parts = remainder.split(".", 1)
+        if parts == ["fixed"]:
             fixed = True
-            if tracks is None:
-                tracks = {}
-            continue
-
-        if remainder.startswith("machine_types:"):
-            raw_machine_type = remainder[len("machine_types:") :]
-            if raw_machine_type not in ALLOWED_MACHINE_TYPES:
-                raise TagValidationError(
-                    f"{tag!r}: unknown machine_type {raw_machine_type!r}"
-                )
-            machine_types.add(MachineType(raw_machine_type))
-            continue
-
-        if remainder.startswith("since.") or remainder.startswith("until."):
-            keyword, _, rest = remainder.partition(".")
-            parts = rest.split(".", 1)
-            if len(parts) != 2:
-                raise TagValidationError(
-                    f"{tag!r}: expected {keyword}.<line>.<release>"
-                )
-            line, release = parts
-            if line not in LINES:
-                raise TagValidationError(f"{tag!r}: unknown line {line!r}")
-            if not release:
-                raise TagValidationError(f"{tag!r}: missing release")
-            bucket = since if keyword == "since" else until
-            if line in bucket:
-                raise TagValidationError(
-                    f"{tag!r}: duplicate @releases.{keyword}.{line}.* tag"
-                )
-            bucket[line] = Bound(release=Series(release))
-            continue
-
-        if remainder.startswith("skip."):
-            exception = _parse_skip(tag, remainder[len("skip.") :])
-            key = (exception.release, exception.machine_type)
-            if key in seen_exception_keys:
-                raise TagValidationError(
-                    f"{tag!r}: duplicate @releases.skip.* for {key}"
-                )
-            seen_exception_keys.add(key)
-            exceptions.append(exception)
-            continue
-
-        # Only remaining valid shape: @releases.<line>.<status>
-        parts = remainder.split(".")
-        if len(parts) != 2:
+            classified = True
+        elif len(parts) == 2 and parts[0] in ("since", "until"):
+            _apply_bound(tag, parts[0], parts[1], since, until)
+        elif len(parts) == 2 and parts[0] == "skip":
+            _apply_skip(tag, parts[1], exceptions, seen_exception_keys)
+        elif len(parts) == 2 and "." not in parts[1]:
+            _apply_track(tag, parts[0], parts[1], tracks)
+            classified = True
+        else:
             raise TagValidationError(f"{tag!r}: unrecognized @releases.* tag")
-        line, status = parts
-        if line not in LINES:
-            raise TagValidationError(f"{tag!r}: unknown line {line!r}")
-        if status not in STATUSES:
-            raise TagValidationError(f"{tag!r}: unknown status {status!r}")
-        if tracks is None:
-            tracks = {}
-        tracks.setdefault(line, set()).add(status)
 
     if fixed and tracks:
         raise TagValidationError(
@@ -227,7 +264,7 @@ def parse_tags(tags: Sequence[Tag]) -> CoverageDeclaration:
         )
 
     return CoverageDeclaration(
-        tracks=tracks,
+        tracks=tracks if classified else None,
         since=since,
         until=until,
         machine_types=machine_types,
