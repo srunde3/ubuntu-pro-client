@@ -34,8 +34,10 @@ class _Row:
 
 
 class _Example:
-    def __init__(self, headings, rows):
+    def __init__(self, headings, rows, tags=None, name=""):
         self.table = _Table(headings, rows)
+        self.tags = tags or []
+        self.name = name
 
 
 class _Scenario:
@@ -167,6 +169,57 @@ def test_combos_skips_placeholder_only_rows():
     assert behave_features.combos_from_scenario(scenario) == []
 
 
+# ---- examples_blocks_from_scenario ----
+
+
+def test_examples_blocks_from_scenario_carries_per_block_tags():
+    scenario = _Scenario(
+        "Check pro version",
+        "scenario_outline",
+        [],
+        [_MACHINE_STEP],
+        [
+            _Example(
+                ["release", "machine_type"],
+                [["jammy", "lxd-container"]],
+                tags=["releases.lts.supported"],
+                name="standard",
+            ),
+            _Example(
+                ["release", "machine_type"],
+                [["jammy", "aws.pro"]],
+                tags=["releases.lts.esm"],
+                name="clouds",
+            ),
+        ],
+    )
+    blocks = behave_features.examples_blocks_from_scenario(scenario)
+    assert [b.name for b in blocks] == ["standard", "clouds"]
+    assert [b.tags for b in blocks] == [
+        ["releases.lts.supported"],
+        ["releases.lts.esm"],
+    ]
+    assert _combo_dicts(blocks[0].combos) == [
+        {"release": "jammy", "machine_type": "lxd-container"}
+    ]
+    assert _combo_dicts(blocks[1].combos) == [
+        {"release": "jammy", "machine_type": "aws.pro"}
+    ]
+
+
+def test_examples_blocks_from_scenario_empty_for_plain_scenario():
+    scenario = _Scenario(
+        "Plain",
+        "scenario",
+        [],
+        [
+            "a `jammy` `lxd-container` machine with"
+            " ubuntu-advantage-tools installed"
+        ],
+    )
+    assert behave_features.examples_blocks_from_scenario(scenario) == []
+
+
 # ---- summarize_feature ----
 
 
@@ -198,6 +251,11 @@ def test_summarize_feature_shapes_scenarios():
         "landscape",
     ]
     assert scenario["combos"] == [
+        {"release": "jammy", "machine_type": "lxd-container"}
+    ]
+    assert len(scenario["examples"]) == 1
+    assert scenario["examples"][0]["tags"] == []
+    assert scenario["examples"][0]["combos"] == [
         {"release": "jammy", "machine_type": "lxd-container"}
     ]
 

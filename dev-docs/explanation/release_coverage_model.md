@@ -1,5 +1,7 @@
 # Release coverage model
 
+TODO tidy this document up and remove introduced syntax like S, r. Use natural human language instead of a mathematical formalism.
+
 This defines what facts must be knowable about a behave scenario to
 deterministically compute "which (release, machine_type) pairs should this
 cover, and which of those are missing." The model is syntax-independent;

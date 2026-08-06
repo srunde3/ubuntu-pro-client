@@ -9,9 +9,9 @@ TODO: add context about how behave tests run
 
 ## Tools
 
-- `tools/release_catalog.py` (Tool 1) — authoritative Ubuntu release catalog, backed by `distro-info`: chronological ordering, LTS flag, and current status (devel/supported/esm/legacy/eol) per release. Source of truth for "what releases exist and what's their status right now."
-- `tools/release_tags.py` (Tool 2) — parses a scenario's `@releases.*` tags (see [dev-docs/reference/release_coverage_tags.md](../../../dev-docs/reference/release_coverage_tags.md)) into its declared `tracks`/`since`/`until`/`machine_types`/`exceptions`.
-- `tools/coverage_gaps.py` (Tool 3) — combines Tools 1 and 2 with a scenario's current coverage (from the MCP's `describe_feature`) to compute `Missing(S)` per [dev-docs/explanation/release_coverage_model.md](../../../dev-docs/explanation/release_coverage_model.md). Never parses `.feature` files itself — all coverage data comes from the MCP; all applicability data comes from tags, not a side log.
+- `features/tools/release_catalog.py` (Tool 1) — authoritative Ubuntu release catalog, backed by `distro-info`: chronological ordering, LTS flag, and current status (devel/supported/esm/legacy/eol) per release. Source of truth for "what releases exist and what's their status right now."
+- `features/tools/release_tags.py` (Tool 2) — parses a scenario's `@releases.*` tags (see [dev-docs/reference/release_coverage_tags.md](../../../dev-docs/reference/release_coverage_tags.md)) into its declared `tracks`/`since`/`until`/`machine_types`/`exceptions`.
+- `features/tools/coverage_gaps.py` (Tool 3) — combines Tools 1 and 2 with a scenario's current coverage (from the MCP's `describe_feature`) to compute `Missing(S)` per [dev-docs/explanation/release_coverage_model.md](../../../dev-docs/explanation/release_coverage_model.md). Never parses `.feature` files itself — all coverage data comes from the MCP; all applicability data comes from tags, not a side log.
 
 ## Using the MCP
 

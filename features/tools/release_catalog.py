@@ -17,8 +17,8 @@ dates to today:
 
 Usage::
 
-    python3 tools/release_catalog.py            # human-readable table
-    python3 tools/release_catalog.py --format json
+    python3 features/tools/release_catalog.py            # human-readable table
+    python3 features/tools/release_catalog.py --format json
 """
 
 import argparse
@@ -27,17 +27,23 @@ import json
 import sys
 from dataclasses import asdict, dataclass
 from datetime import date
-from typing import Dict, List, Optional, Sequence
+from typing import Dict, List, NewType, Optional, Sequence
 
 UBUNTU_CSV = "/usr/share/distro-info/ubuntu.csv"
 
 #: Statuses that count as "currently relevant" for gap analysis.
 RELEVANT_STATUSES = ("devel", "supported", "esm", "legacy")
 
+#: An Ubuntu release series name (e.g. ``"noble"``). A distinct type from
+#: ``MachineType`` (see ``release_tags.py``) so the ubiquitous
+#: ``(series, machine_type)`` pair can't be constructed with the two
+#: swapped.
+Series = NewType("Series", str)
+
 
 @dataclass
 class Release:
-    series: str
+    series: Series
     order: int
     version: str = ""
     is_lts: bool = False
@@ -74,16 +80,18 @@ class ReleaseCatalog:
 
     def __init__(self, releases: Sequence[Release]) -> None:
         self.ordered: List[Release] = sorted(releases, key=lambda r: r.order)
-        self._by_series: Dict[str, Release] = {r.series: r for r in releases}
+        self._by_series: Dict[Series, Release] = {
+            r.series: r for r in releases
+        }
 
     # -- lookups ----------------------------------------------------------
-    def get(self, series: str) -> Optional[Release]:
+    def get(self, series: Series) -> Optional[Release]:
         return self._by_series.get(series)
 
-    def known(self, series: str) -> bool:
+    def known(self, series: Series) -> bool:
         return series in self._by_series
 
-    def order_of(self, series: str) -> Optional[int]:
+    def order_of(self, series: Series) -> Optional[int]:
         release = self._by_series.get(series)
         return release.order if release else None
 
@@ -146,7 +154,7 @@ class ReleaseCatalog:
 
             releases.append(
                 Release(
-                    series=row.get("series", ""),
+                    series=Series(row.get("series", "")),
                     order=order,
                     version=version,
                     is_lts="LTS" in version,

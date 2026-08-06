@@ -1,29 +1,23 @@
 import copy
 import json
-import os
-import sys
 from datetime import date
 from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", ".."))
-
-from coverage_gaps import scenario_coverage_from_feature_detail  # noqa: E402
-from coverage_gaps import (  # noqa: E402
+from features import behave_features
+from features.tools.coverage_gaps import (
     Finding,
     GapStatus,
     ScenarioCoverage,
     aggregate_scenarios,
     find_gaps,
 )
-from coverage_gaps import (  # noqa: E402
+from features.tools.coverage_gaps import (
     load_scenario_coverage as load_scenario_coverage_from_repo_root,
 )
-from release_catalog import ReleaseCatalog  # noqa: E402
-
-from features import behave_features  # noqa: E402
+from features.tools.coverage_gaps import scenario_coverage_from_feature_detail
+from features.tools.release_catalog import ReleaseCatalog
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures" / "release_coverage"
 
@@ -152,6 +146,7 @@ def _scenario(
     tags=None,
     is_outline=True,
     example_columns=None,
+    blocks=None,
 ):
     return ScenarioCoverage(
         feature_file=feature_file,
@@ -164,6 +159,7 @@ def _scenario(
         ),
         combos=set(combos or []),
         tags=list(tags or []),
+        blocks=[(list(t), set(c)) for t, c in (blocks or [])],
     )
 
 
@@ -272,8 +268,22 @@ class TestFixUnattachedAggregation:
         findings = find_gaps(
             catalog, load_scenario_coverage(annotated), today=TODAY
         )
-        assert len(findings) == 9  # 3 missing releases x 3 known machine_types
+        # 3 missing releases x 3 known machine_types (lxd-container, lxd-vm,
+        # wsl), minus (noble, wsl) and (resolute, wsl) -- wsl's own
+        # applicability window ends at jammy (see
+        # dev-docs/reference/machine_type_applicability.md).
+        assert len(findings) == 7
         assert {f.release for f in findings} == {"jammy", "noble", "resolute"}
+        assert {f.machine_type for f in findings if f.release == "jammy"} == {
+            "lxd-container",
+            "lxd-vm",
+            "wsl",
+        }
+        assert {
+            f.machine_type
+            for f in findings
+            if f.release in ("noble", "resolute")
+        } == {"lxd-container", "lxd-vm"}
         assert all(f.status == GapStatus.GAP for f in findings)
 
     def test_conflicting_tags_across_nodes_is_a_tag_error(self, catalog):
@@ -311,7 +321,16 @@ class TestFixLifecycle:
             "noble",
             "resolute",
         }
-        assert len(findings) == 12  # 4 releases x 3 known machine_types
+        # 4 releases x 3 known machine_types (lxd-container, lxd-vm, wsl),
+        # minus (noble, wsl) and (resolute, wsl) -- wsl's own applicability
+        # window ends at jammy (see
+        # dev-docs/reference/machine_type_applicability.md).
+        assert len(findings) == 10
+        assert {
+            f.machine_type
+            for f in findings
+            if f.release in ("noble", "resolute")
+        } == {"lxd-container", "lxd-vm"}
 
 
 class TestDaemonInterimOnly:
@@ -357,12 +376,12 @@ class TestRealGherkinSourceTags:
         (tmp_path / "features" / "sample.feature").write_text(
             "Feature: Sample\n"
             "\n"
-            "  @releases.lts.supported\n"
             "  Scenario Outline: Attach on a machine\n"
             "    Given a `<release>` `<machine_type>` machine with"
             " ubuntu-advantage-tools installed\n"
             "    When I attach\n"
             "\n"
+            "    @releases.lts.supported\n"
             "    Examples: ubuntu release\n"
             "      | release | machine_type  |\n"
             "      | jammy   | lxd-container |\n"
@@ -531,6 +550,129 @@ class TestWorkedExamplesStandalone:
         findings = find_gaps(catalog, [scenario], today=TODAY)
         assert len(findings) == 1
         assert findings[0].status == GapStatus.UNCLASSIFIED
+
+
+# ---------------------------------------------------------------------------
+# Multiple `Examples:` blocks within one Scenario Outline node, each
+# carrying its own `@releases.*` tags -- the "two Examples blocks with
+# different testing policies" pattern (dev-docs/reference/
+# release_coverage_tags.md's "Check pro version" worked translation).
+# ---------------------------------------------------------------------------
+class TestExamplesBlockSubGrouping:
+    def test_two_blocks_with_different_policies_are_evaluated_independently(
+        self, catalog
+    ):
+        # "standard" tracks esm+supported -- so bionic/focal (esm today)
+        # plus resolute (supported, not yet covered) are missing.
+        # "clouds" tracks supported only -- just the missing resolute row.
+        scenario = _scenario(
+            blocks=[
+                (
+                    ["releases.lts.supported", "releases.lts.esm"],
+                    {("jammy", "lxd-container"), ("noble", "lxd-container")},
+                ),
+                (
+                    ["releases.lts.supported"],
+                    {("jammy", "aws.pro"), ("noble", "aws.pro")},
+                ),
+            ]
+        )
+        findings = find_gaps(catalog, [scenario], today=TODAY)
+        assert {(f.release, f.machine_type) for f in findings} == {
+            ("bionic", "lxd-container"),
+            ("focal", "lxd-container"),
+            ("resolute", "lxd-container"),
+            ("resolute", "aws.pro"),
+        }
+
+    def test_one_untagged_block_is_unclassified_while_sibling_is_evaluated(
+        self, catalog
+    ):
+        scenario = _scenario(
+            blocks=[
+                (
+                    ["releases.lts.supported"],
+                    {("jammy", "lxd-container"), ("noble", "lxd-container")},
+                ),
+                ([], {("jammy", "aws.pro")}),
+            ]
+        )
+        findings = find_gaps(catalog, [scenario], today=TODAY)
+        statuses = {f.status for f in findings}
+        assert GapStatus.UNCLASSIFIED in statuses
+        assert {
+            (f.release, f.machine_type)
+            for f in findings
+            if f.status == GapStatus.GAP
+        } == {("resolute", "lxd-container")}
+
+    def test_split_nodes_with_matching_sub_groups_union_combos(self, catalog):
+        # The `@upgrade`-sibling pattern: a second Scenario Outline node
+        # sharing the same name, whose single block's tags match one of
+        # the main node's blocks exactly -- combos union into that group.
+        main_node = _scenario(
+            name="Check pro version",
+            blocks=[
+                (
+                    ["releases.lts.supported"],
+                    {("jammy", "lxd-container")},
+                ),
+                (
+                    ["releases.lts.supported", "releases.lts.esm"],
+                    {("jammy", "aws.pro")},
+                ),
+            ],
+        )
+        upgrade_node = _scenario(
+            name="Check pro version",
+            blocks=[
+                (
+                    ["releases.lts.supported"],
+                    {("noble", "lxd-container")},
+                ),
+            ],
+        )
+        findings = find_gaps(catalog, [main_node, upgrade_node], today=TODAY)
+        # lxd-container group now covers jammy+noble (missing only
+        # resolute); aws.pro group (tracked esm+supported) is untouched by
+        # the upgrade node, so it's still missing bionic/focal (esm today)
+        # in addition to noble/resolute.
+        assert {(f.release, f.machine_type) for f in findings} == {
+            ("resolute", "lxd-container"),
+            ("bionic", "aws.pro"),
+            ("focal", "aws.pro"),
+            ("noble", "aws.pro"),
+            ("resolute", "aws.pro"),
+        }
+
+
+# ---------------------------------------------------------------------------
+# Tag placement: a `@releases.*` tag on `Scenario Outline:` itself (rather
+# than on an `Examples:` block) is a TAG_ERROR, never a silent fallback.
+# ---------------------------------------------------------------------------
+class TestTagPlacement:
+    def test_releases_tag_on_scenario_outline_is_a_tag_error(self, catalog):
+        scenario = _scenario(
+            tags=["releases.lts.supported"],
+            blocks=[([], {("jammy", "lxd-container")})],
+        )
+        findings = find_gaps(catalog, [scenario], today=TODAY)
+        assert len(findings) == 1
+        assert findings[0].status == GapStatus.TAG_ERROR
+        assert "Scenario Outline instead of Examples:" in findings[0].detail
+
+    def test_releases_tag_on_scenario_outline_is_not_checked_without_blocks(
+        self, catalog
+    ):
+        # A synthetic single-unit record with no separate block data has no
+        # node/block distinction to misplace a tag relative to -- exempt,
+        # not silently blessed (see ScenarioCoverage.effective_blocks).
+        scenario = _scenario(
+            tags=["releases.lts.supported"],
+            combos={("jammy", "lxd-container"), ("noble", "lxd-container")},
+        )
+        findings = find_gaps(catalog, [scenario], today=TODAY)
+        assert all(f.status != GapStatus.TAG_ERROR for f in findings)
 
 
 # ---------------------------------------------------------------------------

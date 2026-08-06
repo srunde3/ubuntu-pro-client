@@ -1,11 +1,6 @@
-import os
-import sys
-
 import pytest
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-
-from release_tags import (  # noqa: E402
+from features.tools.release_tags import (
     Bound,
     SkipException,
     TagValidationError,
@@ -130,11 +125,11 @@ class TestValidation:
 
     def test_unknown_machine_type_in_machine_types_tag(self):
         with pytest.raises(TagValidationError, match="unknown machine_type"):
-            parse_tags(["releases.machine_types:wsl"])
+            parse_tags(["releases.machine_types:hyperv"])
 
     def test_unknown_machine_type_in_skip_pairing(self):
         with pytest.raises(TagValidationError, match="unknown machine_type"):
-            parse_tags(["releases.skip.noble+wsl"])
+            parse_tags(["releases.skip.noble+hyperv"])
 
     def test_duplicate_since_for_same_line(self):
         with pytest.raises(TagValidationError, match="duplicate"):

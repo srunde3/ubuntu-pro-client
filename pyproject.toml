@@ -29,11 +29,6 @@ module = [
   "apt_pkg",
   "behave.*",
   "hamcrest",
-  # features/tools/coverage_gaps.py imports these via a sys.path insert
-  # (see the module's own comment) rather than a real package relationship
-  # mypy can follow statically.
-  "release_catalog",
-  "release_tags",
 ]
 ignore_missing_imports = "true"
 

@@ -1,40 +1,33 @@
 # Machine type applicability reference
 
-Sources `applicable(m, r)` -- the classification
-[release_coverage_model.md](../explanation/release_coverage_model.md)'s
-"External classification facts" treats as given: whether machine_type `m`
-was, or is, actually offered as a real product or environment for release
-`r`. That doc defines the model's need for this fact without saying how
-it's produced; this doc is that "later, separate concern."
+Certain machine types only have certain releases available.
 
-## Why this needs its own source
-
-For releases, `status(r)`/`line(r)` come from `distro-info`'s `ubuntu.csv`
--- an externally maintained, authoritative file. There is no equivalent
-upstream source for machine_type availability: whether `gcp.pro` existed
-on `bionic`, or when `wsl` support ended, is Ubuntu Pro product history
-that lives nowhere in a structured, queryable form yet. This reference
-defines the shape that history takes once captured; populating it with
-real dates is a separate, later step.
+TODO: identify if this document is necessary at all, or if the releases file is self-documenting.
 
 ## Schema
 
-One entry per machine_type, except `lxd-container`/`lxd-vm`, which get
-none -- their availability is fully captured by the release catalog
-already (a release either exists or it doesn't; there's no separate
-substrate-specific window). Every other value in `ALLOWED_MACHINE_TYPES`
--- the cloud `*.generic`/`*.pro` types, the `*.pro-fips` types, and `wsl`
--- gets a real entry:
+One entry per `ALLOWED_MACHINE_TYPES` value, each mapping to the complete,
+explicit list of release series it was, or is, offered on:
 
-```
-machine_type -> (since: Release | None, until: Release | None)
+```yaml
+machine_type:
+  - release_series
+  - release_series
+  ...
 ```
 
-- `since=None` -- available from the start (no lower bound).
-- `until=None` -- still available today (no upper bound).
-- Both bounds are release series names (e.g. `focal`), interpreted the
-  same inclusive way `since(S, line)`/`until(S, line)` already are in the
-  coverage model: `since <= r <= until-or-now`.
+No ranges, no implicit "still open" bound -- every applicable release is
+spelled out by name, so the file itself is a literal, auditable fact table
+("`jammy` exists on `aws.pro-fips`") rather than a rule to evaluate. The
+cost of that: when a new Ubuntu series ships, it has to be added by hand to
+every still-applicable machine_type's list, or that series reads as not
+applicable by omission. That's a small, expected part of the twice-yearly
+release process, in exactly one file.
+
+A machine_type with no entry is treated as unbounded (applicable to every
+release) by the lookup logic -- but every value in `ALLOWED_MACHINE_TYPES`
+should have a real entry; that fallback exists only for machine types not
+yet added there.
 
 One entry per literal machine_type string, not a cross-cutting "capability"
 dimension (e.g. FIPS modeled once and combined with cloud provider) -- the
@@ -43,9 +36,26 @@ use, so nothing downstream needs a second way to identify a machine_type.
 
 ## Current state
 
-Every non-`lxd` entry exists with `since=None, until=None` -- present, but
-unbounded, which is a deliberate placeholder, not a guess. Real dates need
-to come from whoever has the actual Ubuntu Pro product-availability
-history. Until they're filled in, `applicable(m, r)` is `True` for every
-declared machine_type at every release -- an inert default, not a guess,
-so nothing regresses while the data gets populated.
+Implemented in `features/tools/machine_type_applicability.py` (lookup logic
+only, read by `features/tools/coverage_gaps.py`'s `compute_r`). The actual
+data lives in its own file, `features/tools/machine_type_applicability.yaml`
+-- kept separate so updating it as real product-availability history gets
+filled in never requires touching the lookup logic. `lxd-container`/
+`lxd-vm` and the cloud `*.generic`/`*.pro` types currently list every
+release in the catalog's relevant window, since nothing is known to have
+ever excluded them.
+
+Populated so far, from this repo's own Examples tables (the only source of
+record available -- see "Why this needs its own source"):
+
+| machine_type | releases | basis |
+| --- | --- | --- |
+| `aws.pro-fips` | `xenial`, `bionic`, `focal` | offered xenial-focal; not offered jammy+ today, may resume on a future release |
+| `azure.pro-fips` | `xenial`, `bionic`, `focal` | same as `aws.pro-fips` |
+| `gcp.pro-fips` | `bionic`, `focal` | never offered on xenial; otherwise same as above |
+| `wsl` | `bionic`, `focal`, `jammy` | not offered before bionic; not offered noble+ |
+
+The three `.pro-fips` lists are evaluated as of today, the same way
+`status(r)` is -- not a permanent historical fact. If FIPS cloud images
+resume on some future release, the list gets that release added, not a
+per-scenario exception.

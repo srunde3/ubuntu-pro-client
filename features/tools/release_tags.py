@@ -16,34 +16,37 @@ Gherkin tags can't contain whitespace, so reasons live in comments per the
 encoding doc. Every ``reason`` field here is always ``None``; it exists so
 this module's types line up with the information model's, not because this
 parser can populate it.
+
+TODO: strip reason from this model entirely, if we can't support it here.
+Simpler to add back later.
 """
 
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Dict, List, Optional, Sequence, Set
+from typing import Dict, List, NewType, Optional, Sequence, Set
 
-#: No leading `@` -- behave strips it from Tag.name (same convention as
-#: behave_features._CONFIG_TAG_PREFIX = "uses.config."). Only Gherkin
-#: *source* text uses the `@`; every tag string this module ever sees has
-#: already been parsed by behave, which never includes it.
+from features.tools.release_catalog import Series
+
 TAG_PREFIX = "releases."
-
 LINES = {"lts", "interim"}
 STATUSES = {"supported", "esm", "legacy"}
 
-#: Mirrors behave_mcp.domain.ALLOWED_MACHINE_TYPES. Duplicated rather than
-#: imported: the MCP server is a separate package/venv (see
-#: .worktrees/behave-agent-mcp), and this is a small, stable list, not a
-#: runtime dependency worth taking on for eight strings.
-ALLOWED_MACHINE_TYPES = {
-    "lxd-container",
-    "lxd-vm",
-    "aws.generic",
-    "gcp.generic",
-    "azure.generic",
-    "aws.pro",
-    "gcp.pro",
-    "azure.pro",
+MachineType = NewType("MachineType", str)
+Tag = NewType("Tag", str)
+
+ALLOWED_MACHINE_TYPES: Set[MachineType] = {
+    MachineType("lxd-container"),
+    MachineType("lxd-vm"),
+    MachineType("aws.generic"),
+    MachineType("gcp.generic"),
+    MachineType("azure.generic"),
+    MachineType("aws.pro"),
+    MachineType("gcp.pro"),
+    MachineType("azure.pro"),
+    MachineType("aws.pro-fips"),
+    MachineType("gcp.pro-fips"),
+    MachineType("azure.pro-fips"),
+    MachineType("wsl"),
 }
 
 
@@ -56,7 +59,7 @@ class Bound:
     """A ``since``/``until`` boundary. ``reason`` is always ``None`` here --
     see the module docstring."""
 
-    release: str
+    release: Series
     reason: Optional[str] = None
 
 
@@ -66,8 +69,8 @@ class SkipException:
     whole release; ``expires=None`` means permanent. ``reason`` is always
     ``None`` here -- see the module docstring."""
 
-    release: str
-    machine_type: Optional[str]
+    release: Series
+    machine_type: Optional[MachineType]
     expires: Optional[str] = None
     reason: Optional[str] = None
 
@@ -88,7 +91,7 @@ class CoverageDeclaration:
     tracks: Optional[Dict[str, Set[str]]] = None
     since: Dict[str, Bound] = field(default_factory=dict)
     until: Dict[str, Bound] = field(default_factory=dict)
-    machine_types: Set[str] = field(default_factory=set)
+    machine_types: Set[MachineType] = field(default_factory=set)
     exceptions: List[SkipException] = field(default_factory=list)
 
     @property
@@ -116,12 +119,14 @@ def _parse_skip(tag: str, rest: str) -> SkipException:
     else:
         key_part, expires = rest, None
 
+    machine_type: Optional[MachineType]
     if "+" in key_part:
-        release, machine_type = key_part.split("+", 1)
-        if machine_type not in ALLOWED_MACHINE_TYPES:
+        release, raw_machine_type = key_part.split("+", 1)
+        if raw_machine_type not in ALLOWED_MACHINE_TYPES:
             raise TagValidationError(
-                f"{tag!r}: unknown machine_type {machine_type!r}"
+                f"{tag!r}: unknown machine_type {raw_machine_type!r}"
             )
+        machine_type = MachineType(raw_machine_type)
     else:
         release, machine_type = key_part, None
 
@@ -129,11 +134,11 @@ def _parse_skip(tag: str, rest: str) -> SkipException:
         raise TagValidationError(f"{tag!r}: missing release")
 
     return SkipException(
-        release=release, machine_type=machine_type, expires=expires
+        release=Series(release), machine_type=machine_type, expires=expires
     )
 
 
-def parse_tags(tags: Sequence[str]) -> CoverageDeclaration:
+def parse_tags(tags: Sequence[Tag]) -> CoverageDeclaration:
     """Parse every ``@releases.*`` tag in ``tags`` into a
     ``CoverageDeclaration``. Tags outside the ``@releases.*`` namespace
     (e.g. ``@uses.config.*``) are ignored.
@@ -148,7 +153,7 @@ def parse_tags(tags: Sequence[str]) -> CoverageDeclaration:
     fixed = False
     since: Dict[str, Bound] = {}
     until: Dict[str, Bound] = {}
-    machine_types: Set[str] = set()
+    machine_types: Set[MachineType] = set()
     exceptions: List[SkipException] = []
     seen_exception_keys: Set[tuple] = set()
 
@@ -164,12 +169,12 @@ def parse_tags(tags: Sequence[str]) -> CoverageDeclaration:
             continue
 
         if remainder.startswith("machine_types:"):
-            machine_type = remainder[len("machine_types:") :]
-            if machine_type not in ALLOWED_MACHINE_TYPES:
+            raw_machine_type = remainder[len("machine_types:") :]
+            if raw_machine_type not in ALLOWED_MACHINE_TYPES:
                 raise TagValidationError(
-                    f"{tag!r}: unknown machine_type {machine_type!r}"
+                    f"{tag!r}: unknown machine_type {raw_machine_type!r}"
                 )
-            machine_types.add(machine_type)
+            machine_types.add(MachineType(raw_machine_type))
             continue
 
         if remainder.startswith("since.") or remainder.startswith("until."):
@@ -189,7 +194,7 @@ def parse_tags(tags: Sequence[str]) -> CoverageDeclaration:
                 raise TagValidationError(
                     f"{tag!r}: duplicate @releases.{keyword}.{line}.* tag"
                 )
-            bucket[line] = Bound(release=release)
+            bucket[line] = Bound(release=Series(release))
             continue
 
         if remainder.startswith("skip."):

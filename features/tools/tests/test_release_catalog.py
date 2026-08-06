@@ -1,13 +1,10 @@
 import os
-import sys
 from datetime import date
 
 import pytest
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-
-import release_catalog  # noqa: E402
-from release_catalog import (  # noqa: E402
+from features.tools import release_catalog
+from features.tools.release_catalog import (
     Release,
     ReleaseCatalog,
     load_csv_rows,

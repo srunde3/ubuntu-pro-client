@@ -93,9 +93,9 @@ and [the tag encoding reference](../../../dev-docs/reference/release_coverage_ta
 what releases a scenario must cover is declared via `@releases.*` tags
 (`tracks`/`since`/`until`/`machine_types`), and deliberate holes are
 `@releases.skip.*` exceptions in the same file -- not a category lookup
-against `release_catalog.py` (now at `tools/release_catalog.py`) plus a
-separate skip-record log. Parsing and gap derivation live in
-`tools/release_tags.py` and `tools/coverage_gaps.py`.
+against `features/tools/release_catalog.py` plus a separate skip-record
+log. Parsing and gap derivation live in `features/tools/release_tags.py`
+and `features/tools/coverage_gaps.py`.
 
 ## Update scenarios
 

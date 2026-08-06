@@ -1,6 +1,6 @@
 Feature: Pro is expected version
 
-  @releases.lts.esm @releases.lts.supported @releases.interim.supported @uses.config.check_version
+  @uses.config.check_version
   Scenario Outline: Check pro version
     Given a `<release>` `<machine_type>` machine with ubuntu-advantage-tools installed
     When I run `dpkg-query --showformat='${Version}' --show ubuntu-pro-client` with sudo
@@ -22,68 +22,79 @@ Feature: Pro is expected version
       THIS GETS REPLACED AT RUNTIME VIA A HACK IN steps/ubuntu_advantage_tools.py
       """
 
-    Examples: version
+    @releases.lts.supported @releases.lts.esm @releases.interim.supported
+    Examples: standard
+      | release  | machine_type  |
+      | xenial   | lxd-container |
+      | xenial   | lxd-vm        |
+      | xenial   | aws.generic   |
+      | xenial   | azure.generic |
+      | xenial   | gcp.generic   |
+      | bionic   | lxd-container |
+      | bionic   | lxd-vm        |
+      | bionic   | aws.generic   |
+      | bionic   | azure.generic |
+      | bionic   | gcp.generic   |
+      | bionic   | wsl           |
+      | focal    | lxd-container |
+      | focal    | lxd-vm        |
+      | focal    | aws.generic   |
+      | focal    | azure.generic |
+      | focal    | gcp.generic   |
+      | focal    | wsl           |
+      | jammy    | lxd-container |
+      | jammy    | lxd-vm        |
+      | jammy    | aws.generic   |
+      | jammy    | azure.generic |
+      | jammy    | gcp.generic   |
+      | jammy    | wsl           |
+      | noble    | lxd-container |
+      | noble    | lxd-vm        |
+      | noble    | aws.generic   |
+      | noble    | azure.generic |
+      | noble    | gcp.generic   |
+      | questing | lxd-container |
+      | questing | lxd-vm        |
+      | questing | aws.generic   |
+      | questing | azure.generic |
+      | questing | gcp.generic   |
+      | resolute | lxd-container |
+      | resolute | lxd-vm        |
+      | resolute | aws.generic   |
+      | resolute | azure.generic |
+      | resolute | gcp.generic   |
+
+    @releases.lts.supported @releases.lts.esm
+    Examples: clouds
       | release  | machine_type   |
-      | xenial   | lxd-container  |
-      | xenial   | lxd-vm         |
-      | xenial   | aws.generic    |
       | xenial   | aws.pro        |
       | xenial   | aws.pro-fips   |
-      | xenial   | azure.generic  |
       | xenial   | azure.pro      |
       | xenial   | azure.pro-fips |
-      | xenial   | gcp.generic    |
       | xenial   | gcp.pro        |
-      | bionic   | lxd-container  |
-      | bionic   | lxd-vm         |
-      | bionic   | aws.generic    |
       | bionic   | aws.pro        |
       | bionic   | aws.pro-fips   |
-      | bionic   | azure.generic  |
       | bionic   | azure.pro      |
       | bionic   | azure.pro-fips |
-      | bionic   | gcp.generic    |
       | bionic   | gcp.pro        |
       | bionic   | gcp.pro-fips   |
-      | bionic   | wsl            |
-      | focal    | lxd-container  |
-      | focal    | lxd-vm         |
-      | focal    | aws.generic    |
       | focal    | aws.pro        |
       | focal    | aws.pro-fips   |
-      | focal    | azure.generic  |
       | focal    | azure.pro      |
       | focal    | azure.pro-fips |
-      | focal    | gcp.generic    |
       | focal    | gcp.pro        |
       | focal    | gcp.pro-fips   |
-      | focal    | wsl            |
-      | jammy    | lxd-container  |
-      | jammy    | lxd-vm         |
-      | jammy    | aws.generic    |
       | jammy    | aws.pro        |
-      | jammy    | azure.generic  |
       | jammy    | azure.pro      |
-      | jammy    | gcp.generic    |
       | jammy    | gcp.pro        |
-      | jammy    | wsl            |
-      | noble    | lxd-container  |
-      | noble    | lxd-vm         |
-      | noble    | aws.generic    |
       | noble    | aws.pro        |
-      | noble    | azure.generic  |
       | noble    | azure.pro      |
-      | noble    | gcp.generic    |
       | noble    | gcp.pro        |
-      | questing | lxd-container  |
-      | questing | lxd-vm         |
-      | questing | aws.generic    |
-      | questing | azure.generic  |
-      | questing | gcp.generic    |
-      | resolute | lxd-container  |
-      | resolute | lxd-vm         |
+      | resolute | aws.pro        |
+      | resolute | azure.pro      |
+      | resolute | gcp.pro        |
 
-  @releases.lts.esm @releases.lts.supported @releases.interim.supported @uses.config.check_version @upgrade
+  @uses.config.check_version @upgrade
   Scenario Outline: Check pro version
     Given a `<release>` `<machine_type>` machine with ubuntu-advantage-tools installed
     When I run `dpkg-query --showformat='${Version}' --show ubuntu-pro-client` with sudo
@@ -105,6 +116,7 @@ Feature: Pro is expected version
       THIS GETS REPLACED AT RUNTIME VIA A HACK IN steps/ubuntu_advantage_tools.py
       """
 
+    @releases.lts.supported @releases.lts.esm @releases.interim.supported
     Examples: version
       | release  | machine_type  |
       | xenial   | lxd-container |
@@ -115,7 +127,7 @@ Feature: Pro is expected version
       | questing | lxd-container |
       | resolute | lxd-container |
 
-  @uses.config.contract_token @releases.lts.esm @releases.lts.supported @releases.interim.supported
+  @uses.config.contract_token
   Scenario Outline: Attached show version in a ubuntu machine
     Given a `<release>` `<machine_type>` machine with ubuntu-advantage-tools installed
     When I attach `contract_token` with sudo
@@ -128,6 +140,7 @@ Feature: Pro is expected version
     When I run `pro --version` with sudo
     Then I will see the uaclient version on stdout
 
+    @releases.lts.supported @releases.lts.esm @releases.interim.supported
     Examples: ubuntu release
       | release  | machine_type  |
       | bionic   | lxd-container |
@@ -138,7 +151,7 @@ Feature: Pro is expected version
       | questing | lxd-container |
       | resolute | lxd-container |
 
-  @arm64 @releases.lts.esm @releases.lts.supported @releases.interim.supported
+  @arm64
   Scenario Outline: Check for newer versions of the client in an ubuntu machine
     Given a `<release>` `<machine_type>` machine with ubuntu-advantage-tools installed
     # Make sure we have a fresh, just rebooted, environment
@@ -212,6 +225,7 @@ Feature: Pro is expected version
       to get the latest bug fixes and new features.
       """
 
+    @releases.lts.supported @releases.lts.esm @releases.interim.supported
     Examples: ubuntu release
       | release  | machine_type  |
       | xenial   | lxd-container |

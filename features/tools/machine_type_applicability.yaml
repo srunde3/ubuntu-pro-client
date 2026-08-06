@@ -1,0 +1,122 @@
+# applicable(m, r)'s raw data -- see
+# dev-docs/reference/machine_type_applicability.md for what this fact means
+# and why it needs its own source. Kept as data, not code: this file is the
+# actual source of record for machine_type product-availability history,
+# not an implementation detail, so it lives separately from
+# machine_type_applicability.py's lookup logic.
+#
+# One entry per machine_type: the complete, explicit list of release series
+# it was, or is, offered on. Every release a machine_type applies to is
+# spelled out by name -- no ranges, no implicit "still open" bound. When a
+# new Ubuntu series ships, add it to every still-applicable machine_type's
+# list by hand; that one-line update per cycle is the cost of this file
+# being a literal, auditable fact table instead of inferred from a rule.
+#
+# A machine_type with no entry here is treated as unbounded (applicable to
+# any release) by machine_type_applicability.py -- but every machine_type in
+# release_tags.ALLOWED_MACHINE_TYPES should have a real entry below; that
+# fallback exists only for machine types not yet added there.
+
+lxd-container:
+  - trusty
+  - xenial
+  - bionic
+  - focal
+  - jammy
+  - noble
+  - resolute
+  - stonking
+
+lxd-vm:
+  - trusty
+  - xenial
+  - bionic
+  - focal
+  - jammy
+  - noble
+  - resolute
+  - stonking
+
+aws.generic:
+  - trusty
+  - xenial
+  - bionic
+  - focal
+  - jammy
+  - noble
+  - resolute
+  - stonking
+
+azure.generic:
+  - trusty
+  - xenial
+  - bionic
+  - focal
+  - jammy
+  - noble
+  - resolute
+  - stonking
+
+gcp.generic:
+  - trusty
+  - xenial
+  - bionic
+  - focal
+  - jammy
+  - noble
+  - resolute
+  - stonking
+
+aws.pro:
+  - trusty
+  - xenial
+  - bionic
+  - focal
+  - jammy
+  - noble
+  - resolute
+  - stonking
+
+azure.pro:
+  - trusty
+  - xenial
+  - bionic
+  - focal
+  - jammy
+  - noble
+  - resolute
+  - stonking
+
+gcp.pro:
+  - trusty
+  - xenial
+  - bionic
+  - focal
+  - jammy
+  - noble
+  - resolute
+  - stonking
+
+# FIPS cloud images: offered xenial-focal, not offered since jammy. Not a
+# permanent retirement -- may resume on a future release -- so this list is
+# evaluated as of today like status(r), not a one-time historical fact.
+aws.pro-fips:
+  - xenial
+  - bionic
+  - focal
+
+azure.pro-fips:
+  - xenial
+  - bionic
+  - focal
+
+# Never offered on xenial; otherwise same history as aws/azure.pro-fips.
+gcp.pro-fips:
+  - bionic
+  - focal
+
+# WSL: offered bionic through jammy only.
+wsl:
+  - bionic
+  - focal
+  - jammy

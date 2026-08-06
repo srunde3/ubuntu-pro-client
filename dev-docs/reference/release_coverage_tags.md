@@ -1,11 +1,13 @@
 # Release coverage tags reference
 
+TODO: clean up the historical and needlessly verbose langauge in this doc. Make it a more concise reference document without all the narrative.
+
 How the [release coverage model](../explanation/release_coverage_model.md)'s
 fields (`tracks`, `since`/`until`, `machine_types`, `exceptions`) are
 expressed as `@releases.*` tags in `.feature` files. The model is
 syntax-independent; this is where it compromises for what Gherkin can
-actually carry. `tools/release_tags.py` implements this vocabulary; keep
-it in sync with this document when either changes.
+actually carry. `features/tools/release_tags.py` implements this
+vocabulary; keep it in sync with this document when either changes.
 
 ## Why tags, not comments or the Examples table
 
@@ -285,22 +287,26 @@ that's the point.
 
 ## Open items
 
-- Parsing and validation are implemented: `tools/release_tags.py` turns a
-  set of tags into `tracks`/`since`/`until`/`machine_types`/`exceptions`
-  per the vocabulary above and rejects malformed or conflicting tags
-  (unknown tokens, `@releases.fixed` co-occurring with a
+- Parsing and validation are implemented: `features/tools/release_tags.py`
+  turns a set of tags into `tracks`/`since`/`until`/`machine_types`/
+  `exceptions` per the vocabulary above and rejects malformed or
+  conflicting tags (unknown tokens, `@releases.fixed` co-occurring with a
   `@releases.<line>.<status>` tag, an unresolvable `since`/`until`
-  release). `tools/coverage_gaps.py` applies this after aggregation and
-  additionally checks that every `Scenario Outline` node sharing a
-  scenario name carries identical `@releases.*` tags on its `Examples:`
-  block(s).
-- Reading tags from `Examples:` blocks (rather than `Scenario Outline:`)
-  is new to this document -- `features/behave_features.py`/
-  `features/tools/coverage_gaps.py` don't implement "Tag placement" above
-  yet.
-- `applicable(m, r)` (referenced in the "cloud type with its own
-  availability window" translation above) isn't sourced anywhere yet --
-  see `dev-docs/reference/machine_type_applicability.md`.
+  release). `features/tools/coverage_gaps.py` applies this after
+  aggregation and additionally checks that every `Scenario Outline` node
+  sharing a scenario name carries identical `@releases.*` tags on its
+  `Examples:` block(s).
+- Tag placement is implemented: `features/behave_features.py` reads each
+  `Examples:` block's own tags (`ExamplesBlock`), and
+  `features/tools/coverage_gaps.py` rejects a `@releases.*` tag found on
+  `Scenario Outline:` instead (`TAG_ERROR`), and groups combos per
+  distinct `@releases.*` tag set across a scenario's block(s) rather than
+  requiring one flat tag list per scenario.
+- `applicable(m, r)` is implemented in
+  `features/tools/machine_type_applicability.py` (data in the sibling
+  `machine_type_applicability.yaml`) and wired into `compute_r` -- see
+  `dev-docs/reference/machine_type_applicability.md` for sourcing and
+  current data.
 - Migration (tagging the ~180 existing scenario behaviors) is a separate,
   bounded task -- a scenario's own historical `combos` strongly suggest its
   `tracks` value in most cases, which could seed a first pass.

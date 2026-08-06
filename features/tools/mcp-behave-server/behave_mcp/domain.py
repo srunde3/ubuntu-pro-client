@@ -34,6 +34,9 @@ CLOUD_MACHINE_TYPES = {
     "aws.pro",
     "gcp.pro",
     "azure.pro",
+    "aws.pro-fips",
+    "gcp.pro-fips",
+    "azure.pro-fips",
 }
 ALLOW_CLOUD_MACHINE_TYPES_ENV_VAR = "MCP_ALLOW_CLOUD_MACHINE_TYPES"
 MAX_PARALLEL_JOBS_ENV_VAR = "MCP_MAX_PARALLEL_JOBS"

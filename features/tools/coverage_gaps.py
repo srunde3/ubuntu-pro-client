@@ -22,7 +22,7 @@ Design constraints:
 * Applicability is read entirely from ``@releases.*`` tags -- there is no
   separate skip-record log or other side artifact. A scenario with no
   ``@releases.*`` tags is reported ``UNCLASSIFIED``, never silently treated
-  as either fully covered or a gap.
+  as either fully covered or a gap
 * Every release whose *current* (line, status) matches one of a scenario's
   declared buckets is checked, not just the newest -- LTS support windows
   overlap, so multiple releases can be simultaneously ``supported``.
@@ -39,26 +39,36 @@ from dataclasses import dataclass, field
 from datetime import date
 from enum import Enum
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Set, Tuple
+from typing import Dict, FrozenSet, List, Optional, Sequence, Set, Tuple
 
 # `features/behave_features.py` is the repo's authority on how .feature
 # files are structured -- this script is one of its consumers, alongside
-# the behave MCP server. `release_catalog` lives in the top-level tools/
-# (it's generic Ubuntu-release-lifecycle math, not feature-specific), so
-# both the repo root (for `features.*`) and tools/ need to be reachable.
+# the behave MCP server. Everything else this module imports now lives
+# under `features/tools/` too, so the repo root just needs to be reachable
+# for the `features.*` package imports below to resolve.
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_REPO_ROOT))
-sys.path.insert(0, str(_REPO_ROOT / "tools"))
 
-from release_catalog import ReleaseCatalog  # noqa: E402
-from release_tags import (  # noqa: E402
+from features import behave_features  # noqa: E402
+from features.tools.machine_type_applicability import (  # noqa: E402
+    UnknownReleaseError as _ApplicabilityUnknownReleaseError,
+)
+from features.tools.machine_type_applicability import (  # noqa: E402
+    applicable as _applicable_fact,
+)
+from features.tools.release_catalog import (  # noqa: E402
+    Release,
+    ReleaseCatalog,
+    Series,
+)
+from features.tools.release_tags import (  # noqa: E402
     TAG_PREFIX,
     CoverageDeclaration,
+    MachineType,
+    Tag,
     TagValidationError,
     parse_tags,
 )
-
-from features import behave_features  # noqa: E402
 
 
 class UnknownReleaseError(ValueError):
@@ -68,10 +78,16 @@ class UnknownReleaseError(ValueError):
 # ---------------------------------------------------------------------------
 # Inputs: scenario coverage (from MCP `describe_feature`)
 # ---------------------------------------------------------------------------
+#: One `Examples:` block's raw tags and its own (release, machine_type)
+#: rows -- (tags, combos).
+_Block = Tuple[List[Tag], Set[Tuple[Series, MachineType]]]
+
+
 @dataclass
 class ScenarioCoverage:
-    """One scenario's current release x machine_type coverage and its raw
-    tags.
+    """One scenario/outline node's current release x machine_type coverage
+    and its raw tags -- or, after ``aggregate_scenarios``, one aggregated
+    (scenario_name, tag_set) policy group.
 
     Built from ``features.behave_features``' structured data -- this module
     never opens a ``.feature`` file itself.
@@ -81,22 +97,33 @@ class ScenarioCoverage:
     scenario_name: str
     is_outline: bool
     example_columns: List[str]
-    combos: Set[Tuple[str, str]] = field(
+    combos: Set[Tuple[Series, MachineType]] = field(
         default_factory=set
     )  # (release, machine_type)
-    tags: List[str] = field(default_factory=list)
+    tags: List[Tag] = field(default_factory=list)
     #: Set by aggregate_scenarios when nodes sharing a name carry different
     #: @releases.* tags. Non-None means "don't trust this record's tags."
     tag_conflict_detail: Optional[str] = None
+    #: Per-`Examples:` block tags+combos, when known. Real parsed Scenario
+    #: Outlines always populate one entry per Examples table (even a single
+    #: one) -- see behave_features.ExamplesBlock. Left empty for plain
+    #: Scenarios and for synthetic/test-constructed records that only model
+    #: one undifferentiated unit; ``effective_blocks`` falls back to
+    #: ``tags``/``combos`` in that case, since there's no separate node
+    #: label for those to be misplaced relative to.
+    blocks: List[_Block] = field(default_factory=list)
 
-    def releases_covered(self) -> Set[str]:
+    def releases_covered(self) -> Set[Series]:
         return {release for release, _machine_type in self.combos}
 
-    def machine_types_covered(self) -> Set[str]:
+    def machine_types_covered(self) -> Set[MachineType]:
         return {machine_type for _release, machine_type in self.combos}
 
     def is_matrix_driven(self) -> bool:
         return self.is_outline and "release" in self.example_columns
+
+    def effective_blocks(self) -> List[_Block]:
+        return self.blocks or [(self.tags, self.combos)]
 
 
 def scenario_coverage_from_feature_detail(
@@ -108,8 +135,19 @@ def scenario_coverage_from_feature_detail(
     coverage: List[ScenarioCoverage] = []
     for scenario in detail.scenarios:
         combos = {
-            (combo.release, combo.machine_type) for combo in scenario.combos
+            (Series(combo.release), MachineType(combo.machine_type))
+            for combo in scenario.combos
         }
+        blocks: List[_Block] = [
+            (
+                [Tag(tag) for tag in block.tags],
+                {
+                    (Series(combo.release), MachineType(combo.machine_type))
+                    for combo in block.combos
+                },
+            )
+            for block in scenario.examples
+        ]
         coverage.append(
             ScenarioCoverage(
                 feature_file=detail.path,
@@ -117,7 +155,8 @@ def scenario_coverage_from_feature_detail(
                 is_outline=scenario.type == "scenario_outline",
                 example_columns=list(scenario.example_columns),
                 combos=combos,
-                tags=list(scenario.tags),
+                tags=[Tag(tag) for tag in scenario.tags],
+                blocks=blocks,
             )
         )
     return coverage
@@ -135,29 +174,48 @@ def load_scenario_coverage(repo_root: Path) -> List[ScenarioCoverage]:
     ]
 
 
-def _release_tags(tags: Sequence[str]) -> frozenset:
+def _filter_release_tags(tags: Sequence[Tag]) -> FrozenSet[Tag]:
     return frozenset(tag for tag in tags if tag.startswith(TAG_PREFIX))
 
 
 def aggregate_scenarios(
     coverage: Sequence[ScenarioCoverage],
 ) -> List[ScenarioCoverage]:
-    """Union coverage across scenario/outline nodes that share an exact
-    (feature_file, scenario_name) -- the ``fix.feature`` "split by
-    precondition" pattern. Identical names within one file MUST mean
-    identical behavior (see dev-docs/explanation/release_coverage_model.md);
-    this aggregation assumes that bound holds.
+    """Group scenario/outline nodes that share an exact (feature_file,
+    scenario_name) -- the ``fix.feature`` "split by precondition" pattern --
+    and, within a golden-shaped group, further split by each ``Examples:``
+    block's own ``@releases.*`` tag content -- the "two Examples blocks with
+    different testing policies" pattern (see
+    ``dev-docs/reference/release_coverage_tags.md``). One
+    (scenario_name, tag_set) pair produces one output ``ScenarioCoverage``,
+    with combos unioned from every block -- in any node sharing this
+    scenario_name -- carrying that exact tag_set.
 
-    ``@releases.*`` tags are a property of the *behavior*, not the node --
-    every node sharing a name MUST carry identical ``@releases.*`` tags.
-    A mismatch sets ``tag_conflict_detail`` on the result rather than
-    silently picking one node's tags or merging them.
+    Two invariants are enforced, both producing a ``tag_conflict_detail``
+    result rather than silently resolving:
+
+    * **Tag placement.** A ``@releases.*`` tag directly on ``Scenario
+      Outline:`` (rather than ``Examples:``) is always wrong, never a
+      fallback -- checkable whenever a node's per-block tags are actually
+      known (``node.blocks`` non-empty; real parsed outlines always
+      populate this, even for a single Examples block).
+    * **Cross-node consistency, for the classic single-block split.** When
+      one scenario name spans multiple Scenario Outline nodes and every one
+      of them has exactly one Examples block (the ``fix.feature`` shape),
+      those blocks' tags must be identical -- a mismatch there is
+      unambiguously a typo, not a deliberate choice. Once any node uses
+      multiple blocks (sub-grouping is in play), this check is skipped: a
+      sibling node legitimately covering only a subset of the declared
+      policy groups (e.g. an ``@upgrade`` variant exercising one
+      machine_type) is indistinguishable, from tags alone, from a forgotten
+      group, so it's accepted -- each tag_set is evaluated with whatever
+      combos actually carry it, across every contributing node.
 
     If any contributing node isn't golden-shaped (not an outline, or no
-    ``release`` column), the aggregate isn't either -- ``is_matrix_driven()``
-    on the result reflects that, so a mixed group surfaces as
-    NON_STANDARD_SHAPE rather than being silently blessed by its
-    well-shaped siblings.
+    ``release`` column), the whole group falls back to the old whole-node
+    union -- ``is_matrix_driven()`` on the result reflects that, so a mixed
+    group surfaces as NON_STANDARD_SHAPE rather than being silently blessed
+    by its well-shaped siblings.
     """
     grouped: Dict[Tuple[str, str], List[ScenarioCoverage]] = {}
     for record in coverage:
@@ -167,56 +225,142 @@ def aggregate_scenarios(
 
     aggregated: List[ScenarioCoverage] = []
     for (feature_file, scenario_name), nodes in grouped.items():
-        combined_combos: Set[Tuple[str, str]] = set()
+        is_outline = all(node.is_outline for node in nodes)
         combined_columns: List[str] = []
         for node in nodes:
-            combined_combos |= node.combos
             for column in node.example_columns:
                 if column not in combined_columns:
                     combined_columns.append(column)
 
-        distinct_tag_sets = {_release_tags(node.tags) for node in nodes}
-        tag_conflict_detail = None
-        if len(distinct_tag_sets) > 1:
-            tag_sets = sorted(sorted(s) for s in distinct_tag_sets)
-            tag_conflict_detail = (
-                f"nodes sharing the name {scenario_name!r} carry different "
-                f"@releases.* tags: {tag_sets}"
+        misplaced = [
+            node
+            for node in nodes
+            if node.blocks and _filter_release_tags(node.tags)
+        ]
+        if misplaced:
+            aggregated.append(
+                ScenarioCoverage(
+                    feature_file=feature_file,
+                    scenario_name=scenario_name,
+                    is_outline=is_outline,
+                    example_columns=combined_columns,
+                    tag_conflict_detail=(
+                        "@releases.* tag(s) found on Scenario Outline "
+                        "instead of Examples:: "
+                        f"{sorted(_filter_release_tags(misplaced[0].tags))}"
+                    ),
+                )
             )
+            continue
 
-        aggregated.append(
-            ScenarioCoverage(
-                feature_file=feature_file,
-                scenario_name=scenario_name,
-                is_outline=all(node.is_outline for node in nodes),
-                example_columns=combined_columns,
-                combos=combined_combos,
-                tags=nodes[0].tags,
-                tag_conflict_detail=tag_conflict_detail,
+        if not (is_outline and "release" in combined_columns):
+            combined_combos: Set[Tuple[Series, MachineType]] = set()
+            for node in nodes:
+                combined_combos |= node.combos
+            distinct_tag_sets = {
+                _filter_release_tags(node.tags) for node in nodes
+            }
+            tag_conflict_detail = None
+            if len(distinct_tag_sets) > 1:
+                tag_sets = sorted(sorted(s) for s in distinct_tag_sets)
+                tag_conflict_detail = (
+                    f"nodes sharing the name {scenario_name!r} carry "
+                    f"different @releases.* tags: {tag_sets}"
+                )
+            aggregated.append(
+                ScenarioCoverage(
+                    feature_file=feature_file,
+                    scenario_name=scenario_name,
+                    is_outline=is_outline,
+                    example_columns=combined_columns,
+                    combos=combined_combos,
+                    tags=nodes[0].tags,
+                    tag_conflict_detail=tag_conflict_detail,
+                )
             )
-        )
+            continue
+
+        node_block_tagsets = [
+            [
+                frozenset(_filter_release_tags(tags))
+                for tags, _combos in node.effective_blocks()
+            ]
+            for node in nodes
+        ]
+        # The identical-tags invariant only applies when every node sharing
+        # this name has exactly one Examples block -- the classic
+        # precondition-split shape (fix.feature), where all nodes are
+        # supposed to declare the same single policy and a mismatch is
+        # unambiguously a typo. Once any node uses multiple blocks
+        # (deliberate sub-grouping), a sibling node legitimately covering
+        # only a subset of those policy groups (e.g. an `@upgrade` variant
+        # that only exercises one machine_type) is indistinguishable, from
+        # the tags alone, from someone forgetting to replicate a group --
+        # so it's accepted rather than flagged, and each tag_set is simply
+        # evaluated with whatever combos actually carry it.
+        if len(nodes) > 1 and all(
+            len(tag_sets) == 1 for tag_sets in node_block_tagsets
+        ):
+            distinct = {tag_sets[0] for tag_sets in node_block_tagsets}
+            if len(distinct) > 1:
+                tag_sets = sorted(sorted(s) for s in distinct)
+                aggregated.append(
+                    ScenarioCoverage(
+                        feature_file=feature_file,
+                        scenario_name=scenario_name,
+                        is_outline=is_outline,
+                        example_columns=combined_columns,
+                        tag_conflict_detail=(
+                            f"nodes sharing the name {scenario_name!r} carry "
+                            f"different @releases.* tags: {tag_sets}"
+                        ),
+                    )
+                )
+                continue
+
+        combos_by_tagset: Dict[
+            FrozenSet[Tag], Set[Tuple[Series, MachineType]]
+        ] = {}
+        for node in nodes:
+            for tags, combos in node.effective_blocks():
+                key = frozenset(_filter_release_tags(tags))
+                combos_by_tagset.setdefault(key, set()).update(combos)
+
+        for tag_set, combos in combos_by_tagset.items():
+            aggregated.append(
+                ScenarioCoverage(
+                    feature_file=feature_file,
+                    scenario_name=scenario_name,
+                    is_outline=is_outline,
+                    example_columns=combined_columns,
+                    combos=combos,
+                    tags=sorted(tag_set),
+                )
+            )
     return aggregated
 
 
 # ---------------------------------------------------------------------------
 # Derivation: R(S), Excepted(S), Missing(S)
 # ---------------------------------------------------------------------------
-def _resolve_order(catalog: ReleaseCatalog, release: str) -> int:
+def _resolve_order(catalog: ReleaseCatalog, release: Series) -> int:
     order = catalog.order_of(release)
     if order is None:
         raise UnknownReleaseError(f"unknown release {release!r}")
     return order
 
 
-def _line_of(release) -> str:
+# TODO can info be gathered elsewhere? Release catalog?
+def _line_of(release: Release) -> str:
     return "lts" if release.is_lts else "interim"
 
 
+# TODO rename to more natural language; no formalism
 def compute_r(
     catalog: ReleaseCatalog,
     scenario: ScenarioCoverage,
     declaration: CoverageDeclaration,
-) -> Set[Tuple[str, str]]:
+) -> Set[Tuple[Series, MachineType]]:
     """``R(S)``: every (release, machine_type) pair this scenario should
     currently cover, per its declared ``tracks``/``since``/``until``/
     ``machine_types``. Raises ``UnknownReleaseError`` if a ``since``/
@@ -235,7 +379,7 @@ def compute_r(
     if not machine_types:
         return set()
 
-    releases: Set[str] = set()
+    releases: Set[Series] = set()
     for line, statuses in (declaration.tracks or {}).items():
         since_bound = declaration.since.get(line)
         until_bound = declaration.until.get(line)
@@ -262,40 +406,53 @@ def compute_r(
         (release, machine_type)
         for release in releases
         for machine_type in machine_types
+        if _applicable(catalog, machine_type, release)
     }
+
+
+# TODO inline the _applicable_fact func here.
+def _applicable(
+    catalog: ReleaseCatalog, machine_type: MachineType, release: Series
+) -> bool:
+    try:
+        return _applicable_fact(catalog, machine_type, release)
+    except _ApplicabilityUnknownReleaseError as exc:
+        raise UnknownReleaseError(str(exc)) from exc
 
 
 def compute_excepted(
     declaration: CoverageDeclaration,
-    candidate: Set[Tuple[str, str]],
+    candidate: Set[Tuple[Series, MachineType]],
     today: date,
-) -> Set[Tuple[str, str]]:
+) -> Set[Tuple[Series, MachineType]]:
     """``Excepted(S)``: pairs in ``candidate`` covered by an unexpired
     ``@releases.skip.*`` exception -- either a specific (release,
     machine_type) or the whole release (``machine_type is None``).
     """
-    excepted: Set[Tuple[str, str]] = set()
+    excepted: Set[Tuple[Series, MachineType]] = set()
     for exception in declaration.exceptions:
         if (
             exception.expires is not None
             and date.fromisoformat(exception.expires) < today
         ):
             continue  # lapsed -- the pair is a live gap again
-        if exception.machine_type is None:
+        machine_type = exception.machine_type
+        if machine_type is None:
             excepted |= {
                 pair for pair in candidate if pair[0] == exception.release
             }
         else:
-            excepted.add((exception.release, exception.machine_type))
+            excepted.add((exception.release, machine_type))
     return excepted
 
 
+# TODO reframe in natural language
 def compute_missing(
     catalog: ReleaseCatalog,
     scenario: ScenarioCoverage,
     declaration: CoverageDeclaration,
     today: Optional[date] = None,
-) -> Set[Tuple[str, str]]:
+) -> Set[Tuple[Series, MachineType]]:
     """``Missing(S) = R(S) - Covered(S) - Excepted(S)``."""
     r = compute_r(catalog, scenario, declaration)
     excepted = compute_excepted(declaration, r, today or date.today())
@@ -317,11 +474,9 @@ class Finding:
     feature_file: str
     scenario_name: str
     status: GapStatus
-    release: str = ""
-    machine_type: str = ""
-    bucket: str = (
-        ""  # e.g. "lts.supported" -- diagnostic only, not load-bearing
-    )
+    release: Series = Series("")
+    machine_type: MachineType = MachineType("")
+    bucket: str = ""
     detail: str = ""
 
 
@@ -358,7 +513,7 @@ def find_gaps(
                         scenario.scenario_name,
                         GapStatus.NON_STANDARD_SHAPE,
                         detail="resolves release coverage without matching "
-                        "the golden Scenario Outline + Examples(release) "
+                        "the standard Scenario Outline + Examples(release) "
                         "shape",
                     )
                 )

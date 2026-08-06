@@ -24,7 +24,7 @@ what's already on disk.
 
 import posixpath
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -39,6 +39,10 @@ ALLOWED_MACHINE_TYPES = {
     "aws.pro",
     "gcp.pro",
     "azure.pro",
+    "aws.pro-fips",
+    "gcp.pro-fips",
+    "azure.pro-fips",
+    "wsl",
 }
 
 
@@ -54,8 +58,31 @@ class Combo:
 
 
 @dataclass
+class ExamplesBlock:
+    """One ``Examples:`` table within a Scenario Outline, with its own tags.
+
+    ``@releases.*`` tags are read from here, never from the enclosing
+    ``Scenario Outline:`` -- see
+    ``dev-docs/reference/release_coverage_tags.md``'s "Tag placement". A
+    scenario with a single ``Examples:`` block still gets exactly one of
+    these; there is no separate "whole-scenario" representation to keep in
+    sync with it.
+    """
+
+    name: str
+    tags: List[str]
+    combos: List[Combo]
+
+
+@dataclass
 class ScenarioSummary:
-    """A scenario's browse/select metadata (no step text)."""
+    """A scenario's browse/select metadata (no step text).
+
+    ``tags``/``combos``/``example_columns`` are the whole-scenario view,
+    unioned across every ``Examples:`` block (unchanged, pre-existing
+    behavior other consumers rely on). ``examples`` is the per-block view:
+    each block's own tags and only its own rows' combos.
+    """
 
     name: str
     type: str
@@ -63,6 +90,7 @@ class ScenarioSummary:
     requires_config: List[str]
     example_columns: List[str]
     combos: List[Combo]
+    examples: List[ExamplesBlock] = field(default_factory=list)
 
 
 @dataclass
@@ -186,8 +214,28 @@ def _add_combo(
     combos.append(Combo(release=release, machine_type=machine_type))
 
 
+def _combos_from_table(
+    table: Any,
+    step_release: Optional[str],
+    step_machine_type: Optional[str],
+) -> List[Combo]:
+    combos: List[Combo] = []
+    seen: set = set()
+    headings = list(getattr(table, "headings", []) or [])
+    for row in getattr(table, "rows", []) or []:
+        row_map = dict(zip(headings, list(getattr(row, "cells", []))))
+        _add_combo(
+            combos,
+            seen,
+            step_release or row_map.get("release"),
+            step_machine_type or row_map.get("machine_type"),
+        )
+    return combos
+
+
 def combos_from_scenario(scenario: Any) -> List[Combo]:
-    """Return the distinct ``(release, machine_type)`` combos for a scenario.
+    """Return the distinct ``(release, machine_type)`` combos for a scenario,
+    unioned across every ``Examples:`` block.
 
     Combos come from Scenario Outline ``Examples`` rows, and from a hardcoded
     first step ``Given a `<release>` `<machine_type>` machine ...`` which,
@@ -204,19 +252,40 @@ def combos_from_scenario(scenario: Any) -> List[Combo]:
             table = getattr(example, "table", None)
             if table is None:
                 continue
-            headings = list(getattr(table, "headings", []) or [])
-            for row in getattr(table, "rows", []) or []:
-                row_map = dict(zip(headings, list(getattr(row, "cells", []))))
-                _add_combo(
-                    combos,
-                    seen,
-                    step_release or row_map.get("release"),
-                    step_machine_type or row_map.get("machine_type"),
-                )
+            for combo in _combos_from_table(
+                table, step_release, step_machine_type
+            ):
+                _add_combo(combos, seen, combo.release, combo.machine_type)
     else:
         _add_combo(combos, seen, step_release, step_machine_type)
 
     return combos
+
+
+def examples_blocks_from_scenario(scenario: Any) -> List[ExamplesBlock]:
+    """Return one ``ExamplesBlock`` per ``Examples:`` table, each with its
+    own tags and only its own rows' combos -- the per-block view
+    ``@releases.*`` tag parsing needs (see ``ExamplesBlock``).
+    """
+    step_release, step_machine_type = _step_machine_override(scenario)
+    blocks: List[ExamplesBlock] = []
+    for example in getattr(scenario, "examples", None) or []:
+        table = getattr(example, "table", None)
+        combos = (
+            _combos_from_table(table, step_release, step_machine_type)
+            if table is not None
+            else []
+        )
+        blocks.append(
+            ExamplesBlock(
+                name=getattr(example, "name", "") or "",
+                tags=[
+                    str(tag) for tag in (getattr(example, "tags", []) or [])
+                ],
+                combos=combos,
+            )
+        )
+    return blocks
 
 
 def _example_columns(scenario: Any) -> List[str]:
@@ -255,6 +324,7 @@ def summarize_feature(feature: Any) -> FeatureDetail:
                 requires_config=requires_config_from_tags(effective_tags),
                 example_columns=_example_columns(scenario),
                 combos=combos_from_scenario(scenario),
+                examples=examples_blocks_from_scenario(scenario),
             )
         )
     return FeatureDetail(
