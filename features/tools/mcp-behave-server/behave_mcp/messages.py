@@ -6,11 +6,11 @@ from typing import Annotated, Any, Literal, Union
 from pydantic import BaseModel, Field
 
 # Reading/summarizing .feature files is owned by features/ (see
-# features/behave_features.py and the sys.path bridge in
-# behave_mcp/__init__.py), so these DTOs are plain dataclasses defined
-# there rather than pydantic models here. Pydantic v2 natively supports
-# stdlib dataclasses as field types below, so the JSON shape these response
-# models serialize to is unchanged.
+# features/behave_features.py, pulled in via the pro-client-features
+# dependency -- features/pyproject.toml), so these DTOs are plain
+# dataclasses defined there rather than pydantic models here. Pydantic v2
+# natively supports stdlib dataclasses as field types below, so the JSON
+# shape these response models serialize to is unchanged.
 from features.behave_features import (  # noqa: F401
     Combo,
     Dimensions,

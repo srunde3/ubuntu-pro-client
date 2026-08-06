@@ -31,7 +31,7 @@ It also exposes a health endpoint at `/healthz` for basic checks.
 From the repository root, the package can be run directly with uvx without needing to change into the package directory:
 
 ```bash
-uvx --from $(pwd)/tools/mcp-behave-server mcp-behave-server
+uvx --from $(pwd)/features/tools/mcp-behave-server mcp-behave-server
 ```
 
 If you are already inside the package directory, this also works:

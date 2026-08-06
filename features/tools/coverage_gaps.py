@@ -1,11 +1,4 @@
 #!/usr/bin/env python3
-# /// script
-# requires-python = ">=3.12"
-# dependencies = [
-#     "pyyaml",
-#     "behave",
-# ]
-# ///
 """Flag behave scenarios missing coverage for a currently-relevant release.
 
 Where ``release_catalog`` answers "what releases exist, and what's their
@@ -36,7 +29,12 @@ Design constraints:
 
 Usage::
 
-    uv run features/tools/coverage_gaps.py --repo-root .
+    uv run --project features features/tools/coverage_gaps.py --repo-root .
+
+``--project features`` is required: this script lives inside the
+``pro-client-features`` package (``features/pyproject.toml``, which
+declares its ``behave``/``pyyaml`` dependencies), but ``uv run`` doesn't
+walk into subdirectories looking for a ``pyproject.toml`` on its own.
 """
 
 import argparse
@@ -48,18 +46,10 @@ from enum import Enum
 from pathlib import Path
 from typing import Dict, FrozenSet, List, Optional, Sequence, Set, Tuple
 
-# `features/behave_features.py` is the repo's authority on how .feature
-# files are structured -- this script is one of its consumers, alongside
-# the behave MCP server. Everything else this module imports now lives
-# under `features/tools/` too, so the repo root just needs to be reachable
-# for the `features.*` package imports below to resolve.
-_REPO_ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(_REPO_ROOT))
-
-from features import behave_features  # noqa: E402
-from features.tools import machine_type_applicability  # noqa: E402
-from features.tools.release_catalog import ReleaseCatalog, Series  # noqa: E402
-from features.tools.release_tags import (  # noqa: E402
+from features import behave_features
+from features.tools import machine_type_applicability
+from features.tools.release_catalog import ReleaseCatalog, Series
+from features.tools.release_tags import (
     TAG_PREFIX,
     CoverageDeclaration,
     MachineType,

@@ -10,6 +10,7 @@ line_length = 79
 check_untyped_defs = "true"
 explicit_package_bases = "true"
 no_implicit_optional = true
+exclude = "features/tools/mcp-behave-server/build/"
 
 [[tool.mypy.overrides]]
 module = [

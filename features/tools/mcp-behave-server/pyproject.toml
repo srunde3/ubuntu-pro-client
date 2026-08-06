@@ -8,6 +8,7 @@ dependencies = [
   "uvicorn>=0.30.0",
   "behave>=1.2.6",
   "pydantic>=2,<3",
+  "pro-client-features",
 ]
 
 [project.optional-dependencies]
@@ -18,6 +19,9 @@ test = [
 
 [project.scripts]
 mcp-behave-server = "behave_mcp.server:main"
+
+[tool.uv.sources]
+pro-client-features = { path = "../..", editable = true }
 
 [build-system]
 requires = ["setuptools>=68"]

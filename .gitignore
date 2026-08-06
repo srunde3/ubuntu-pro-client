@@ -51,5 +51,8 @@ node_modules
 docs/build/
 .sphinx
 
+# transient setuptools editable-install artifact (see tox.ini's mypy env)
+features/tools/mcp-behave-server/build/
+
 # compiled translations
 debian/po/usr

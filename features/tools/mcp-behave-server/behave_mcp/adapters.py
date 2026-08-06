@@ -128,12 +128,12 @@ class InMemoryJobRegistry:
 class LocalFeatureFileReader:
     """Filesystem-backed reader for the repository's feature file catalog.
 
-    Delegates entirely to ``behave_features`` (see the sys.path bridge in
-    ``behave_mcp/__init__.py``) -- parsing and caching ``.feature`` files is
-    a repo-level concern, shared with ``tools/coverage_gaps.py``, not
-    reimplemented per consumer. This class exists only to satisfy the
-    ``FeatureFileReader`` port so ``BehaveService`` stays injectable/fakeable
-    in tests.
+    Delegates entirely to ``behave_features`` (the ``pro-client-features``
+    dependency -- see ``features/pyproject.toml``) -- parsing and caching
+    ``.feature`` files is a repo-level concern, shared with
+    ``tools/coverage_gaps.py``, not reimplemented per consumer. This class
+    exists only to satisfy the ``FeatureFileReader`` port so
+    ``BehaveService`` stays injectable/fakeable in tests.
     """
 
     def discover_feature_files(self, repo_root: Path) -> list[str]:

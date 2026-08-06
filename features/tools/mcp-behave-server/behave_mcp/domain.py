@@ -7,9 +7,9 @@ also live here.
 Reading and structurally summarizing ``.feature`` files (``summarize_feature``,
 ``combos_from_scenario``, ``catalog_entry``, etc.) is not MCP-specific --
 ``features/`` owns those conventions, and this package is one of its
-consumers (see ``features/behave_features.py`` and the ``sys.path`` bridge
-in ``behave_mcp/__init__.py``). Re-exported here for the existing
-``domain.X`` call sites in this package.
+consumers, via the ``pro-client-features`` dependency (see
+``features/behave_features.py`` and ``features/pyproject.toml``).
+Re-exported here for the existing ``domain.X`` call sites in this package.
 """
 
 from pathlib import Path
