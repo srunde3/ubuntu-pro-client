@@ -57,7 +57,8 @@ Feature: CLI collect-logs command
       | questing | lxd-container | with sudo   |
       | resolute | lxd-container | with sudo   |
 
-  @uses.config.contract_token @arm64
+  @uses.config.contract_token
+  @arm64
   Scenario Outline: Run collect-logs on an attached machine
     Given a `<release>` `<machine_type>` machine with ubuntu-advantage-tools installed
     When I attach `contract_token` with sudo

@@ -1,4 +1,7 @@
-@uses.config.contract_token @uses.config.landscape_registration_key @uses.config.landscape_api_access_key @uses.config.landscape_api_secret_key
+@uses.config.contract_token
+@uses.config.landscape_registration_key
+@uses.config.landscape_api_access_key
+@uses.config.landscape_api_secret_key
 Feature: Enable landscape on Ubuntu
 
   Scenario Outline: Enable Landscape non-interactively

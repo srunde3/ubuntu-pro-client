@@ -22,7 +22,9 @@ Feature: Pro is expected version
       THIS GETS REPLACED AT RUNTIME VIA A HACK IN steps/ubuntu_advantage_tools.py
       """
 
-    @releases.lts.supported @releases.lts.esm @releases.interim.supported
+    @releases.lts.supported
+    @releases.lts.esm
+    @releases.interim.supported
     Examples: standard
       | release  | machine_type  |
       | xenial   | lxd-container |
@@ -64,7 +66,8 @@ Feature: Pro is expected version
       | resolute | azure.generic |
       | resolute | gcp.generic   |
 
-    @releases.lts.supported @releases.lts.esm
+    @releases.lts.supported
+    @releases.lts.esm
     Examples: clouds
       | release  | machine_type   |
       | xenial   | aws.pro        |
@@ -94,7 +97,8 @@ Feature: Pro is expected version
       | resolute | azure.pro      |
       | resolute | gcp.pro        |
 
-  @uses.config.check_version @upgrade
+  @uses.config.check_version
+  @upgrade
   Scenario Outline: Check pro version
     Given a `<release>` `<machine_type>` machine with ubuntu-advantage-tools installed
     When I run `dpkg-query --showformat='${Version}' --show ubuntu-pro-client` with sudo
@@ -116,7 +120,9 @@ Feature: Pro is expected version
       THIS GETS REPLACED AT RUNTIME VIA A HACK IN steps/ubuntu_advantage_tools.py
       """
 
-    @releases.lts.supported @releases.lts.esm @releases.interim.supported
+    @releases.lts.supported
+    @releases.lts.esm
+    @releases.interim.supported
     Examples: version
       | release  | machine_type  |
       | xenial   | lxd-container |
@@ -140,7 +146,9 @@ Feature: Pro is expected version
     When I run `pro --version` with sudo
     Then I will see the uaclient version on stdout
 
-    @releases.lts.supported @releases.lts.esm @releases.interim.supported
+    @releases.lts.supported
+    @releases.lts.esm
+    @releases.interim.supported
     Examples: ubuntu release
       | release  | machine_type  |
       | bionic   | lxd-container |
@@ -225,7 +233,9 @@ Feature: Pro is expected version
       to get the latest bug fixes and new features.
       """
 
-    @releases.lts.supported @releases.lts.esm @releases.interim.supported
+    @releases.lts.supported
+    @releases.lts.esm
+    @releases.interim.supported
     Examples: ubuntu release
       | release  | machine_type  |
       | xenial   | lxd-container |

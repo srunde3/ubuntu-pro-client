@@ -183,7 +183,8 @@ Feature: Client behaviour for the API endpoints
       | questing | lxd-container |
       | resolute | lxd-container |
 
-  @uses.config.contract_token @arm64
+  @uses.config.contract_token
+  @arm64
   Scenario Outline: u.pro.status.is_attached.v1
     Given a `<release>` `<machine_type>` machine with ubuntu-advantage-tools installed
     When I run `pro api u.pro.status.is_attached.v1` with sudo

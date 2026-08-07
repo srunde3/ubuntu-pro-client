@@ -1,0 +1,12 @@
+# Auto-discovered by reformat-gherkin (see its own config.py) from any
+# ancestor of the files being formatted -- both `tox.ini`'s
+# `reformat-gherkin --check features/` and the `.pre-commit-config.yaml`
+# hook pick this up with no extra flags needed.
+#
+# One tag per line, not consecutive tags merged onto one line: a scenario
+# using several `@releases.*` tags (see dev-docs/reference/
+# release_coverage_tags.md) reads and diffs far better one per line, and
+# reformat-gherkin's single-line default silently deletes an inline
+# trailing comment when it merges tag lines -- multi-line avoids that
+# trap entirely, not just the readability cost.
+single-line-tags: false

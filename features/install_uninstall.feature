@@ -112,7 +112,8 @@ Feature: Pro Install and Uninstall related tests
       | noble    | lxd-container | ubuntu-pro-client      |
       | resolute | lxd-container | ubuntu-pro-client      |
 
-  @skip_local_environment @skip_prebuilt_environment
+  @skip_local_environment
+  @skip_prebuilt_environment
   Scenario Outline: Package ubuntu-advantage-tools now install
     Given a `<release>` `<machine_type>` machine
     When I install transition package ubuntu-advantage-tools
@@ -124,7 +125,8 @@ Feature: Pro Install and Uninstall related tests
       | bionic  | lxd-container |
       | focal   | lxd-container |
 
-  @skip_local_environment @skip_prebuilt_environment
+  @skip_local_environment
+  @skip_prebuilt_environment
   Scenario Outline: Package ubuntu-advantage-tools now install
     Given a `<release>` `<machine_type>` machine
     When I install transition package ubuntu-advantage-tools
@@ -138,7 +140,8 @@ Feature: Pro Install and Uninstall related tests
       | jammy   | aws.pro      |
       | jammy   | aws.pro      |
 
-  @skip_local_environment @skip_prebuilt_environment
+  @skip_local_environment
+  @skip_prebuilt_environment
   Scenario Outline: Does not cause deadlock when cloud-init installs ubuntu-advantage-tools
     Given a `<release>` `<machine_type>` machine with ubuntu-advantage-tools installed adding this cloud-init user_data:
       """

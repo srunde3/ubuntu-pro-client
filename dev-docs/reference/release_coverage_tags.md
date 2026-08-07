@@ -8,9 +8,9 @@ document when either changes.
 
 Tags carry every fact `Missing(S)` is computed from. `reason` text
 (Gherkin tags can't contain whitespace) lives in a comment on its own line
-directly above the tag(s) or `Examples:` table it explains -- never inline
-on the same line as a tag: `reformat-gherkin` merges multi-line tags onto
-one line and silently deletes an inline trailing comment in that merge.
+directly above the tag(s) or `Examples:` table it explains. Note that comments
+cannot be on the same line as a tag: `reformat-gherkin` silently deletes an
+inline trailing comment on a tag line.
 
 ## Delimiters
 
@@ -69,11 +69,6 @@ no inheritance between blocks. A block with no `@releases.*` tags is
   carry identical `@releases.*` tags -- a mismatch is `TAG_ERROR`. This
   doesn't apply to multiple `Examples:` blocks *within* one node
   deliberately carrying different tags (see "Tag placement" above).
-- `reformat-gherkin` should run with `--multi-line-tags` (`TagLineMode` in
-  `reformat_gherkin/options.py`) so a scenario using several
-  `@releases.*` tags reads and diffs one-per-line; not yet configured
-  repo-wide, so expect multi-tag scenarios to get merged onto one line
-  until it is.
 - Adding `@releases.*` tags doesn't interact with behave's `--tags`
   execution filtering -- nothing in CI currently selects on them.
 

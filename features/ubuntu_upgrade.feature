@@ -1,7 +1,8 @@
 @uses.config.contract_token
 Feature: Upgrade between releases when uaclient is attached
 
-  @slow @upgrade
+  @slow
+  @upgrade
   Scenario Outline: Attached upgrade
     Given a `<release>` `<machine_type>` machine with ubuntu-advantage-tools installed
     When I attach `contract_token` with sudo
@@ -57,7 +58,8 @@ Feature: Upgrade between releases when uaclient is attached
   # TODO: re-enable once AppArmor profile ubuntu_pro_esm_cache_systemd_detect_virt
   # gains capability perfmon in the resolute archive (archive package installed post-upgrade)
   # | questing | lxd-container | resolute     | normal |               | esm-infra | n/a             | esm-apps | n/a             | true           |
-  @slow @upgrade
+  @slow
+  @upgrade
   Scenario Outline: Attached FIPS upgrade across LTS releases
     Given a `<release>` `<machine_type>` machine with ubuntu-advantage-tools installed
     When I attach `contract_token` with sudo
@@ -126,7 +128,8 @@ Feature: Upgrade between releases when uaclient is attached
       | xenial  | lxd-vm       | bionic       | fips         | FIPS         | ubuntu-fips         |
       | xenial  | lxd-vm       | bionic       | fips-updates | FIPS Updates | ubuntu-fips-updates |
 
-  @slow @upgrade
+  @slow
+  @upgrade
   Scenario Outline: Check onlySeries on reboot after upgrade
     Given a `<release>` `<machine_type>` machine with ubuntu-advantage-tools installed
     When I create the file `/tmp/response-overlay.json` with the following:
@@ -209,7 +212,8 @@ Feature: Upgrade between releases when uaclient is attached
       | bionic  | lxd-container | focal        | bionic     |
       | focal   | lxd-container | jammy        | focal      |
 
-  @slow @upgrade
+  @slow
+  @upgrade
   Scenario Outline: Attached and esm-infra-legacy enabled upgrade
     Given a `<release>` `<machine_type>` machine with ubuntu-advantage-tools installed
     When I attach `contract_token_legacy` with sudo

@@ -77,8 +77,9 @@ exception:
   `@releases.skip.<release>+<machine_type>` (just that pair). Add
   `.until.<date>` if it's temporary -- the exception stops counting after
   that date and the pair becomes a live gap again automatically. Never
-  put the reason on the same line as the tag since `reformat-gherkin` deletes
-  inline trailing comments when it merges tag lines.
+  put the reason on the same line as the tag -- `reformat-gherkin` silently
+  deletes an inline trailing comment on a tag line regardless of
+  formatting mode; only a comment on its own line survives.
 
 ## Add a new release
 

@@ -78,7 +78,8 @@ Feature: CLI status command
       | questing | lxd-container |
       | resolute | lxd-container |
 
-  @uses.config.contract_token @arm64
+  @uses.config.contract_token
+  @arm64
   Scenario Outline: Non-root status can see in-progress operations
     Given a `<release>` `<machine_type>` machine with ubuntu-advantage-tools installed
     When I attach `contract_token` with sudo
@@ -374,7 +375,8 @@ Feature: CLI status command
       | release | machine_type |
       | jammy   | aws.pro      |
 
-  @uses.config.contract_token @arm64
+  @uses.config.contract_token
+  @arm64
   Scenario Outline: Attached status in a ubuntu machine
     Given a `<release>` `<machine_type>` machine with ubuntu-advantage-tools installed
     When I attach `contract_token` with sudo
@@ -421,7 +423,8 @@ Feature: CLI status command
       | release | machine_type  |
       | xenial  | lxd-container |
 
-  @uses.config.contract_token @arm64
+  @uses.config.contract_token
+  @arm64
   Scenario Outline: Attached status in a ubuntu machine
     Given a `<release>` `<machine_type>` machine with ubuntu-advantage-tools installed
     When I attach `contract_token` with sudo
@@ -462,7 +465,8 @@ Feature: CLI status command
       | release | machine_type |
       | bionic  | wsl          |
 
-  @uses.config.contract_token @arm64
+  @uses.config.contract_token
+  @arm64
   Scenario Outline: Attached status in a ubuntu machine
     Given a `<release>` `<machine_type>` machine with ubuntu-advantage-tools installed
     When I attach `contract_token` with sudo
@@ -597,7 +601,8 @@ Feature: CLI status command
       | release | machine_type  |
       | jammy   | lxd-container |
 
-  @uses.config.contract_token @arm64
+  @uses.config.contract_token
+  @arm64
   Scenario Outline: Attached status in the latest LTS ubuntu machine
     Given a `<release>` `<machine_type>` machine with ubuntu-advantage-tools installed
     When I attach `contract_token` with sudo

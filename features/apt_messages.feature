@@ -1,6 +1,7 @@
 Feature: APT Messages
 
-  @uses.config.contract_token @arm64
+  @uses.config.contract_token
+  @arm64
   Scenario Outline: APT JSON Hook prints package counts correctly on xenial
     Given a `<release>` `<machine_type>` machine with ubuntu-advantage-tools installed
     When I attach `contract_token` with sudo
@@ -131,9 +132,9 @@ Feature: APT Messages
 
     Examples: ubuntu release
       | release | machine_type  | ad_message                                                                                |
-      | xenial  | lxd-container | Learn more about Ubuntu Pro for <version>\.04 at https:\/\/ubuntu\.com\/<version>-04      |
-      | bionic  | lxd-container | Learn more about Ubuntu Pro for <version>\.04 at https:\/\/ubuntu\.com\/<version>-04      |
-      | focal   | lxd-container | Learn more about Ubuntu Pro at https:\/\/ubuntu\.com\/pro                                 |
+      | xenial  | lxd-container | Learn more about Ubuntu Pro for <version>\\.04 at https:\\/\\/ubuntu\\.com\\/<version>-04 |
+      | bionic  | lxd-container | Learn more about Ubuntu Pro for <version>\\.04 at https:\\/\\/ubuntu\\.com\\/<version>-04 |
+      | focal   | lxd-container | Learn more about Ubuntu Pro at https:\\/\\/ubuntu\\.com\\/pro                             |
 
   @uses.config.contract_token
   Scenario Outline: APT Hook advertises esm-apps on upgrade

@@ -58,7 +58,8 @@ Feature: ESM legacy service tests
       | release | machine_type  | infra-pkg |
       | xenial  | lxd-container | hello     |
 
-  @uses.config.contract_token @arm64
+  @uses.config.contract_token
+  @arm64
   Scenario Outline: Attached status with legacy contract in a ubuntu machine
     Given a `<release>` `<machine_type>` machine with ubuntu-advantage-tools installed
     When I attach `contract_token_legacy` with sudo
