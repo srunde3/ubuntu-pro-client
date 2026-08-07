@@ -1,50 +1,30 @@
 # Release coverage tags reference
 
-TODO: clean up the historical and needlessly verbose langauge in this doc. Make it a more concise reference document without all the narrative.
-
 How the [release coverage model](../explanation/release_coverage_model.md)'s
 fields (`tracks`, `since`/`until`, `machine_types`, `exceptions`) are
-expressed as `@releases.*` tags in `.feature` files. The model is
-syntax-independent; this is where it compromises for what Gherkin can
-actually carry. `features/tools/release_tags.py` implements this
-vocabulary; keep it in sync with this document when either changes.
+expressed as `@releases.*` tags in `.feature` files. `features/tools/
+release_tags.py` implements this vocabulary; keep it in sync with this
+document when either changes.
 
-## Why tags, not comments or the Examples table
+Tags carry every fact `Missing(S)` is computed from. `reason` text
+(Gherkin tags can't contain whitespace) lives in a comment on its own line
+directly above the tag(s) or `Examples:` table it explains -- never inline
+on the same line as a tag: `reformat-gherkin` merges multi-line tags onto
+one line and silently deletes an inline trailing comment in that merge.
 
-- **The Examples table stays untouched.** It drives real test execution;
-  metadata that isn't meant to run doesn't belong in it (see the golden
-  test structure doc's rejection of inlining skip rows there).
-- **Comments are free text but invisible to tooling.** `describe_feature`
-  surfaces parsed Gherkin structure, not raw comments -- behave's parser
-  doesn't expose them in an attributable way, and hand-rolling a second
-  parser to read them is exactly the duplication this whole project has
-  been avoiding. Comments are for humans only.
-- **Tags are the one structured extension point that's already free.**
-  `describe_feature` already returns every scenario's `tags: list[str]` --
-  zero MCP changes needed to consume this. The tradeoff: Gherkin tags
-  cannot contain whitespace, so free text (a `reason`) can never live in a
-  tag. That's fine -- `reason` is documentation for a human deciding what
-  to do about a flagged gap, not an input to the deterministic
-  computation. It lives in a comment next to the tag it explains.
+## Delimiters
 
-Net effect: **tags carry every fact `Missing(S)` is computed from; comments
-carry every `reason`.** Nothing load-bearing is ever comment-only.
+- `:` -- keyword, then a literal value. Machine_type names contain their
+  own dots (`aws.pro`, `gcp.pro-fips`), so `:` separates the tag's keyword
+  path from the raw value to avoid it being misread as further namespacing.
+- `+` -- pairs two identifiers into one compound key, used only where an
+  exception needs both a release *and* a specific machine_type.
 
-## Tag vocabulary
+## Vocabulary
 
 Namespace: `@releases.*`, alongside the repo's existing `@uses.config.*`
 convention. `<line>` is `lts` or `interim`; `<status>` is `supported`,
-`esm`, or `legacy`; `<release>` is a series codename; `<date>` is ISO
-8601. Two delimiters, each meaning one specific thing, never interchanged:
-
-- `:` -- "keyword, then a literal value." Machine_type names contain
-  their own dots (`aws.pro`, `gcp.pro-fips`), so `:` separates the tag's
-  keyword path from the raw value to avoid it being misread as further
-  namespacing.
-- `+` -- "these two identifiers are paired into one compound key," used
-  only where an exception needs both a release *and* a specific
-  machine_type. Reusing `:` for this too would conflate "value follows"
-  with "combine these," which are different relationships.
+`esm`, or `legacy`; `<release>` is a series codename; `<date>` is ISO 8601.
 
 | Tag | Meaning |
 | --- | --- |
@@ -58,181 +38,105 @@ convention. `<line>` is `lts` or `interim`; `<status>` is `supported`,
 | `@releases.skip.<release>+<machine_type>` | permanent exception, one (release, machine_type) pair |
 | `@releases.skip.<release>+<machine_type>.until.<date>` | temporary exception, one pair, expires `<date>` |
 
+`machine_type` values and their own release-availability windows are
+governed by `applicable(m, r)` -- see
+[machine_type_applicability.md](machine_type_applicability.md).
+
 `UNCLASSIFIED(S)` = neither any `@releases.<line>.<status>` tag nor
 `@releases.fixed` is present. `@releases.fixed` and
 `@releases.<line>.<status>` are mutually exclusive.
 
-## Tag placement: always on `Examples:`, never on `Scenario Outline:`
+## Tag placement
 
-`@releases.*` tags go above an `Examples:` block, not above
-`Scenario Outline:` -- behave supports tags on `Examples:` independently of
-the scenario's own tags, and this is the only place `@releases.*` tags are
-read from. A scenario with one `Examples:` block (the common case) tags
-that one block; a scenario whose substrate coverage splits along a policy
-boundary the release axis alone can't express (e.g. "clouds are only
-tested on LTS releases, standard substrates on every release") tags each
-block independently. Same rule either way -- there's no separate
-"whole-scenario" mechanism to reach for.
-
-- **A `@releases.*` tag on `Scenario Outline:` itself is a `TAG_ERROR`,**
-  not silently ignored and not a fallback -- exactly the kind of
-  wrong-location mistake that's easy to make out of habit and easy to miss
-  if it's just quietly unread.
-- **Untagged blocks are `UNCLASSIFIED`, not an error.** If some blocks in a
-  scenario are tagged and others aren't, the untagged ones are
-  independently undecided -- the same honest state an untagged scenario is
-  in today.
-- **Each block's tag set is complete on its own**, with no inheritance
-  from anywhere else -- a tagged `Examples:` block declares its own
-  `tracks`/`since`/`until`/`machine_types`/`exceptions` from scratch.
+`@releases.*` tags go above an `Examples:` block, never above `Scenario
+Outline:` -- a tag on `Scenario Outline:` is a `TAG_ERROR`. A scenario
+with one `Examples:` block tags that one block; a scenario whose coverage
+splits along a policy boundary the release axis alone can't express (e.g.
+"clouds tested only on LTS, standard substrates on every release") tags
+each block independently, each block's tag set complete on its own with
+no inheritance between blocks. A block with no `@releases.*` tags is
+`UNCLASSIFIED`, not an error.
 
 ## Encoding rules
 
-- **One tag per fact.** No packed/structured tag values beyond the `:`
-  value-escape and `+` pairing described above. Keeps parsing trivial
-  (split on `.`, check against a small fixed keyword set) and keeps diffs
-  small when one fact changes.
-- **Consistency across aggregated nodes is still required.** The
-  precondition-split pattern (`fix.feature`'s three `Scenario Outline`s
-  sharing one name) means `@releases.*` tags are a property of the
-  *behavior*, not the node -- when one scenario name is split across
-  multiple `Scenario Outline` nodes, every node's `Examples:` block(s) must
-  carry identical `@releases.*` tags. A mismatch is a data hygiene bug
-  worth flagging, the same way an accidental name collision would be. This
-  is a different axis from multiple `Examples:` blocks *within one node*
-  carrying deliberately *different* tags (see "Tag placement" above) --
-  that's the sub-grouping mechanism working as intended, not a mismatch.
-- **Reasons go in a comment on its own line directly above the tag (or the
-  Examples table) they explain**, not in a fixed format -- they're for
-  humans. **Never inline on the same line as a tag.** Verified against
-  this repo's actual `reformat-gherkin`: it merges multiple short tag
-  lines onto one line, and an inline trailing comment is silently
-  *deleted* in that merge --
+- One tag per fact -- no packed/structured values beyond the `:` and `+`
+  uses above.
+- When one scenario name spans multiple `Scenario Outline` nodes (the
+  precondition-split pattern), every node's `Examples:` block(s) must
+  carry identical `@releases.*` tags -- a mismatch is `TAG_ERROR`. This
+  doesn't apply to multiple `Examples:` blocks *within* one node
+  deliberately carrying different tags (see "Tag placement" above).
+- `reformat-gherkin` should run with `--multi-line-tags` (`TagLineMode` in
+  `reformat_gherkin/options.py`) so a scenario using several
+  `@releases.*` tags reads and diffs one-per-line; not yet configured
+  repo-wide, so expect multi-tag scenarios to get merged onto one line
+  until it is.
+- Adding `@releases.*` tags doesn't interact with behave's `--tags`
+  execution filtering -- nothing in CI currently selects on them.
 
-  ```diff
-  -  @releases.skip.noble.until.2026-08-15  # noble skipped: esm down due to CVE
-  -  @releases.lts.supported
-  +  @releases.skip.noble.until.2026-08-15 @releases.lts.supported
-  ```
+## Examples
 
-  A comment on its own line above the tags survives the same merge intact
-  -- confirmed with the same tool. This isn't a style preference, it's the
-  difference between a reason surviving the next `reformat-gherkin` pass
-  (a required pre-commit step per SKILL.md) and being silently destroyed
-  by it.
-- **Dates are ISO 8601**, matching every other date already in this
-  codebase (`ubuntu.csv`, skip-adjacent fields elsewhere).
-- **No interaction with behave's `--tags` execution filtering.** Nothing
-  in CI currently references `@releases.*`, so adding these tags is inert
-  for test selection. Worth a real check once these land in a file, but
-  not expected to be an issue.
-- **`reformat-gherkin` should run with `--multi-line-tags`** rather than
-  its default single-line merge. A scenario using several fields from this
-  model can end up with 3-6 `@releases.*` tags, and one-per-line reads and
-  diffs far better than one long merged line -- confirmed the flag exists
-  (`TagLineMode` in `reformat_gherkin/options.py`) and keeps tags one per
-  line without otherwise changing behavior. This is a repo-wide
-  `.pre-commit-config.yaml`/`tox.ini` configuration change (not yet made,
-  affects existing tag formatting across all 72 feature files, not just
-  new `@releases.*` ones) -- tracked here as a decision, separate from
-  actually flipping the config. It does not change the comment-placement
-  rule above; that's independent of single- vs multi-line tag mode (see
-  the destructive-inline-comment finding).
-
-## Worked translations
-
-**Anbox** (`tracks={lts:{supported}}`, everything else defaulted):
+**Ordinary LTS tracking**:
 
 ```gherkin
-  Scenario Outline: Enable Anbox cloud service in a VM
-    Given a `<release>` `<machine_type>` machine with ubuntu-advantage-tools installed
-    ...
-
-    @releases.lts.supported
-    Examples: ubuntu release
-      | release | machine_type |
-      | ...
+@releases.lts.supported
+Examples: ubuntu release
+  | release | machine_type |
+  | ...
 ```
 
-**`fix.feature`'s lifecycle-tracked scenario** (`tracks={lts:{supported,
-esm}}`):
+**Lifecycle-tracked** (`esm` too):
 
 ```gherkin
-  Scenario Outline: Fix command on a machine without security/updates source lists
-    ...
-
-    @releases.lts.supported
-    @releases.lts.esm
-    Examples: ubuntu release
-      | release | machine_type |
-      | ...
+@releases.lts.supported
+@releases.lts.esm
+Examples: ubuntu release
+  | release | machine_type |
+  | ...
 ```
 
-**Closed window** (hypothetical -- no longer Pro-gated after resolute):
+**Closed window**:
 
 ```gherkin
-  Scenario Outline: ...
-    ...
-
-    @releases.lts.supported
-    @releases.until.lts.resolute
-    Examples: ...
+@releases.lts.supported
+@releases.until.lts.resolute
+Examples: ...
 ```
 
-**Cloud-scoped** (hypothetical -- FIPS not offered on GCP):
+**Explicit bound with a reason**:
 
 ```gherkin
-  Scenario Outline: ...
-    ...
-
-    @releases.lts.supported
-    @releases.machine_types:aws.pro
-    @releases.machine_types:azure.pro
-    Examples: ...
+# apt changed its output format starting in kernel 5.5, which focal ships
+@releases.lts.supported
+@releases.since.lts.focal
+Examples: ...
 ```
 
-**Temporary mid-window hole** (the ESM-outage-from-a-CVE example):
+**Cloud-scoped**:
 
 ```gherkin
-  Scenario Outline: ...
-    ...
-
-    # noble skipped: ESM was down for months due to a CVE response;
-    # revisit after 2026-08-15
-    @releases.lts.supported
-    @releases.lts.esm
-    @releases.skip.noble.until.2026-08-15
-    Examples: ...
+@releases.lts.supported
+@releases.machine_types:aws.pro
+@releases.machine_types:azure.pro
+@releases.machine_types:gcp.pro
+Examples: ...
 ```
 
-**Cloud type with its own availability window** (GCP Pro only available
-since focal):
+**Temporary mid-window hole**:
 
 ```gherkin
-  Scenario Outline: ...
-    ...
-
-    @releases.lts.supported
-    @releases.machine_types:aws.pro
-    @releases.machine_types:azure.pro
-    @releases.machine_types:gcp.pro
-    Examples: ...
+# noble skipped: ESM was down for months due to a CVE response;
+# revisit after 2026-08-15
+@releases.lts.supported
+@releases.lts.esm
+@releases.skip.noble.until.2026-08-15
+Examples: ...
 ```
 
-No exceptions needed. `gcp.pro`'s own availability window is an
-`applicable(m, r)` fact (see
-[release_coverage_model.md](../explanation/release_coverage_model.md)'s
-"External classification facts"), external to this scenario and never
-encoded in a tag -- it already excludes xenial/bionic from `R(S)`.
-Declaring the full relevant `machine_types` set is enough.
-
-**Two Examples blocks with different testing policies** (clouds tested
-only while `supported`, standard substrates also tracked through `esm` and
-across the `interim` line):
+**Two `Examples:` blocks, different testing policies**:
 
 ```gherkin
 Scenario Outline: Check pro version
-  Given a `<release>` `<machine_type>` machine with ubuntu-advantage-tools installed
   ...
 
   @releases.lts.supported
@@ -251,62 +155,11 @@ Scenario Outline: Check pro version
     | ...     | aws.pro      |
 ```
 
-Each block's tags are independent -- "standard" also tracks `esm` and
-`interim`, "clouds" doesn't, reflecting a genuine difference in testing
-policy between the two groups. `Scenario Outline: Check pro version`
-itself carries no `@releases.*` tags -- putting any there would be a
-`TAG_ERROR`.
-
-**Explicit bound with a reason** (apt output format changed in kernel
-5.5, which focal ships):
+**Deliberately fixed**:
 
 ```gherkin
-  Scenario Outline: ...
-    ...
-
-    # apt changed its output format starting in kernel 5.5, which focal ships
-    @releases.lts.supported
-    @releases.since.lts.focal
-    Examples: ...
+@releases.fixed
+Examples: ...
 ```
 
-**Deliberately fixed** (tied to one historical CVE, never expected to
-grow):
-
-```gherkin
-  Scenario Outline: ...
-    ...
-
-    @releases.fixed
-    Examples: ...
-```
-
-**Unclassified** (the honest current state of most of the suite): no
-`@releases.*` tags on the `Examples:` block(s) at all. Nothing to show --
-that's the point.
-
-## Open items
-
-- Parsing and validation are implemented: `features/tools/release_tags.py`
-  turns a set of tags into `tracks`/`since`/`until`/`machine_types`/
-  `exceptions` per the vocabulary above and rejects malformed or
-  conflicting tags (unknown tokens, `@releases.fixed` co-occurring with a
-  `@releases.<line>.<status>` tag, an unresolvable `since`/`until`
-  release). `features/tools/coverage_gaps.py` applies this after
-  aggregation and additionally checks that every `Scenario Outline` node
-  sharing a scenario name carries identical `@releases.*` tags on its
-  `Examples:` block(s).
-- Tag placement is implemented: `features/behave_features.py` reads each
-  `Examples:` block's own tags (`ExamplesBlock`), and
-  `features/tools/coverage_gaps.py` rejects a `@releases.*` tag found on
-  `Scenario Outline:` instead (`TAG_ERROR`), and groups combos per
-  distinct `@releases.*` tag set across a scenario's block(s) rather than
-  requiring one flat tag list per scenario.
-- `applicable(m, r)` is implemented in `features/tools/coverage_gaps.py`
-  (data in `machine_types.yaml`) and wired into
-  `compute_required_coverage` -- see
-  `dev-docs/reference/machine_type_applicability.md` for sourcing and
-  current data.
-- Migration (tagging the ~180 existing scenario behaviors) is a separate,
-  bounded task -- a scenario's own historical `combos` strongly suggest its
-  `tracks` value in most cases, which could seed a first pass.
+**Unclassified**: no `@releases.*` tags on the `Examples:` block(s) at all.
