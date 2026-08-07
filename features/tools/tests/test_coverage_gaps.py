@@ -271,7 +271,7 @@ class TestFixUnattachedAggregation:
         # 3 missing releases x 3 known machine_types (lxd-container, lxd-vm,
         # wsl), minus (noble, wsl) and (resolute, wsl) -- wsl's own
         # applicability window ends at jammy (see
-        # dev-docs/reference/machine_type_applicability.md).
+        # features/tools/machine_types.yaml).
         assert len(findings) == 7
         assert {f.release for f in findings} == {"jammy", "noble", "resolute"}
         assert {f.machine_type for f in findings if f.release == "jammy"} == {
@@ -324,7 +324,7 @@ class TestFixLifecycle:
         # 4 releases x 3 known machine_types (lxd-container, lxd-vm, wsl),
         # minus (noble, wsl) and (resolute, wsl) -- wsl's own applicability
         # window ends at jammy (see
-        # dev-docs/reference/machine_type_applicability.md).
+        # features/tools/machine_types.yaml).
         assert len(findings) == 10
         assert {
             f.machine_type

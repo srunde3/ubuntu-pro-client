@@ -12,6 +12,41 @@ This document explains the three pieces that make coverage checks possible: how
 a scenario expresses what it currently tests, how it declares what it's
 supposed to test, and how the gap between the two gets found.
 
+## Terminology
+
+- **Release** -- one Ubuntu release, identified by its codename (e.g.
+  `noble`). Also called a *series*.
+- **Line** -- which release cadence a release belongs to: `lts` or
+  `interim`. Permanent -- unlike status, a release's line never changes.
+- **Status** (or **support tier**) -- a release's current lifecycle
+  phase, which *does* change over time: `devel`, `supported`, `esm`,
+  `legacy`, or `eol`. It iscomputed from the release/EOL dates. Only
+  `supported`, `esm`, and `legacy` are things a scenario can declare it
+  tracks (`@releases.<line>.<status>`) -- `devel` and `eol` aren't
+  trackable tiers, they are just states a release passes through on the way in
+  and out of the ones that are.
+- **Machine type** -- the substrate/environment a scenario runs against,
+  e.g. `lxd-container`, `aws.pro`.
+- **Tracks** -- the set of (line, status) buckets a scenario declares it
+  must currently cover, via one or more `@releases.<line>.<status>` tags.
+  This is the core declaration everything else refines.
+- **Since / until** -- an optional lower or upper release bound on one
+  line, narrowing `tracks` for a behavior that only exists from some
+  release onward, or stopped mattering after one. Unstated means
+  unbounded on that side.
+- **Applicable** -- whether a machine type is actually offered
+  as a real product for a given release. Sourced from
+  `features/tools/machine_types.yaml`, independent of anything a
+  scenario declares.
+- **Exception** (or **skip**) -- a deliberate, explained hole in
+  otherwise-required coverage, declared with `@releases.skip.*` and a
+  reason. Optionally scoped to one machine type, optionally temporary.
+- **Coverage** -- the set of `(release, machine_type)` pairs a
+  scenario's `Examples:` table actually has rows for right now.
+- **Finding** -- one reported problem from `coverage_gaps.py`: `gap`,
+  `unclassified`, `tag_error`, or `non_standard_shape` (see "Finding
+  what's missing" below).
+
 ## How a scenario expresses its current coverage
 
 The default shape for any scenario whose behavior varies by release:
@@ -106,8 +141,7 @@ terms, a scenario can declare:
 - **`@releases.fixed`**, for a scenario tied to one specific historical
   fact that will never track new releases going forward.
 
-A scenario with none of these tags is **unclassified**, and this is raised
-as a coverage gap.
+A scenario with none of these tags is **unclassified**.
 
 ## Finding what's missing
 
@@ -131,5 +165,5 @@ tag with a reason.
 
 ### Known limitations
 
-1. Machine types can be inferred from what's in the table, so deleting all examples of a certain machine type will not flag a coverage gap unless machine types are explicitly tagged on the scenario
+1. Machine types can be inferred from what's in the table, so deleting all examples of a certain machine type will not flag a coverage gap unless machine types are explicitly tagged on the scenario.
 2. There is no way to express recurring or periodic holes with a single tag. Instead, use multiple exception tags.

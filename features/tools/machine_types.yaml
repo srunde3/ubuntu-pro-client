@@ -1,10 +1,11 @@
 # applicable(m, r)'s raw data -- see
-# dev-docs/reference/machine_type_applicability.md for what this fact means
-# and why it needs its own source. Kept as data, not code: this file is the
-# actual source of record for machine_type product-availability history,
-# not an implementation detail, so it lives separately from the lookup
-# logic (coverage_gaps.py's `_applicable`) and the loading logic
-# (release_tags.py's MACHINE_TYPE_APPLICABILITY).
+# dev-docs/explanation/feature_test_coverage.md and
+# dev-docs/how-to/maintain_feature_test_coverage.md for what this fact
+# means and why it needs its own source. Kept as data, not code: this
+# file is the actual source of record for machine_type product-
+# availability history, not an implementation detail, so it lives
+# separately from the lookup logic (coverage_gaps.py's `_applicable`) and
+# the loading logic (release_tags.py's MACHINE_TYPES_TO_RELEASES).
 #
 # One entry per machine_type: the complete, explicit list of release series
 # it was, or is, offered on. Every release a machine_type applies to is

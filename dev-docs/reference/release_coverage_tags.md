@@ -39,8 +39,11 @@ convention. `<line>` is `lts` or `interim`; `<status>` is `supported`,
 | `@releases.skip.<release>+<machine_type>.until.<date>` | temporary exception, one pair, expires `<date>` |
 
 `machine_type` values and their own release-availability windows are
-governed by `applicable(m, r)` -- see
-[machine_type_applicability.md](machine_type_applicability.md).
+governed by `applicable(m, r)`, sourced from
+`features/tools/machine_types.yaml` (see the file's own header comment
+for its schema, and
+[the how-to guide](../how-to/maintain_feature_test_coverage.md) for
+keeping it current).
 
 `UNCLASSIFIED(S)` = neither any `@releases.<line>.<status>` tag nor
 `@releases.fixed` is present. `@releases.fixed` and

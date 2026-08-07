@@ -35,11 +35,13 @@ full tutorial:
 * [Run unit tests](dev-docs/how-to/unit_testing.md)
 * [Run integration tests](dev-docs/how-to/integration_testing.md)
 * [Run dep8 tests](dev-docs/how-to/run_dep8_tests.md)
+* [Maintain feature test coverage](dev-docs/how-to/maintain_feature_test_coverage.md)
 
 ## Reference
 
 * [Version string formatting](dev-docs/reference/version_string_formatting.md)
 * [Our documentation style guide](dev-docs/reference/styleguide.md)
+* [Release coverage tags](dev-docs/reference/release_coverage_tags.md)
 
 ## Explanation
 
@@ -50,3 +52,4 @@ full tutorial:
 * [Auto-attach mechanisms](dev-docs/explanation/autoattach_mechanisms.md)
 * [How auto-attach works](dev-docs/explanation/how_auto_attach_works.md)
 * [What happens during attach](dev-docs/explanation/what_happens_during_attach.md)
+* [Feature test coverage](dev-docs/explanation/feature_test_coverage.md)
