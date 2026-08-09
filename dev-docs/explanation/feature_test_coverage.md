@@ -22,14 +22,16 @@ supposed to test, and how the gap between the two gets found.
   phase, which *does* change over time: `devel`, `supported`, `esm`,
   `legacy`, or `eol`. It iscomputed from the release/EOL dates. Only
   `supported`, `esm`, and `legacy` are things a scenario can declare it
-  tracks (`@releases.<line>.<status>`) -- `devel` and `eol` aren't
+  tracks (`@releases:lts_supported`, `@releases:lts_esm`,
+  `@releases:lts_legacy`, `@releases:interim`) -- `devel` and `eol` aren't
   trackable tiers, they are just states a release passes through on the way in
   and out of the ones that are.
 - **Machine type** -- the substrate/environment a scenario runs against,
   e.g. `lxd-container`, `aws.pro`.
 - **Tracks** -- the set of (line, status) buckets a scenario declares it
-  must currently cover, via one or more `@releases.<line>.<status>` tags.
-  This is the core declaration everything else refines.
+  must currently cover, via one or more tracked-bucket tags (e.g.
+  `@releases:lts_supported`). This is the core declaration everything
+  else refines.
 - **Since / until** -- an optional lower or upper release bound on one
   line, narrowing `tracks` for a behavior that only exists from some
   release onward, or stopped mattering after one. Unstated means
@@ -39,7 +41,7 @@ supposed to test, and how the gap between the two gets found.
   `features/tools/machine_types.yaml`, independent of anything a
   scenario declares.
 - **Exception** (or **skip**) -- a deliberate, explained hole in
-  otherwise-required coverage, declared with `@releases.skip.*` and a
+  otherwise-required coverage, declared with `@releases:skip:*` and a
   reason. Optionally scoped to one machine type, optionally temporary.
 - **Coverage** -- the set of `(release, machine_type)` pairs a
   scenario's `Examples:` table actually has rows for right now.
@@ -109,36 +111,36 @@ needs `contract_token` and the others don't. Coverage for the behavior is
 the *union* of `(release, machine_type)` rows across every node sharing
 that exact name in the file. Identical names within one feature file **must** represent identical behavior.
 
-Note that this is only partially self-enforcing -- if the nodes sharing a name declare different `@releases.*` tags, that's caught as a `TAG_ERROR` (see below), but an accidental collision between two unrelated scenarios that happen to carry the same tags, or no tags at all, wouldn't be.
+Note that this is only partially self-enforcing -- if the nodes sharing a name declare different `@releases:*`/`@machine_types:*` tags, that's caught as a `TAG_ERROR` (see below), but an accidental collision between two unrelated scenarios that happen to carry the same tags, or no tags at all, wouldn't be.
 
-## What a scenario is supposed to cover: `@releases.*` tags
+## What a scenario is supposed to cover: `@releases:*`/`@machine_types:*` tags
 
 The Examples table says what's tested today. It can't say what *should*
 be tested -- that has to be a separate, deliberate declaration, or there's
 nothing to check the table against except itself. That declaration is a
-set of `@releases.*` tags on the `Examples:` block. Full syntax is in
-[the tag reference](../reference/release_coverage_tags.md); in plain
-terms, a scenario can declare:
+set of `@releases:*`/`@machine_types:*` tags on the `Examples:` block.
+Full syntax is in [the tag reference](../reference/release_coverage_tags.md);
+in plain terms, a scenario can declare:
 
 - **Which release lines and support tiers it tracks** -- e.g. "every LTS
-  release currently in standard support" (`@releases.lts.supported`), or
+  release currently in standard support" (`@releases:lts_supported`), or
   "LTS releases in standard support *or* ESM" (add
-  `@releases.lts.esm`), or both the LTS and interim lines independently.
+  `@releases:lts_esm`), or both the LTS and interim lines independently.
   This is the core declaration: it answers "which buckets of releases
   must currently be represented".
-- **A lower or upper bound on a line** (`@releases.since.lts.focal`,
-  `@releases.until.lts.resolute`), for a behavior that only exists from
+- **A lower or upper bound on a line** (`@releases:since:lts:focal`,
+  `@releases:until:lts:resolute`), for a behavior that only exists from
   some release onward, or stopped mattering after one. If absent, this means
   unbounded on that side.
-- **Which machine_types it applies to** (`@releases.machine_types:aws.pro`,
+- **Which machine_types it applies to** (`@machine_types:aws.pro`,
   repeated per type). If unstated, it defaults to whatever machine_types
   the scenario already has rows for.
-- **Deliberate, explained holes** (`@releases.skip.<release>`, optionally
+- **Deliberate, explained holes** (`@releases:skip:<release>`, optionally
   scoped to one machine_type, optionally expiring on a date) -- a release
   that's excepted from the declared tracking, with a reason in a comment
   above the tag, e.g. "ESM staging was unavailable for a few weeks due to
   outage".
-- **`@releases.fixed`**, for a scenario tied to one specific historical
+- **`@releases:fixed`**, for a scenario tied to one specific historical
   fact that will never track new releases going forward.
 
 A scenario with none of these tags is **unclassified**.
@@ -155,7 +157,7 @@ what it should currently cover in three steps:
    product.
 2. **What's covered.** The Examples table's own rows, read as-is.
 3. **What's excepted.** Any `(release, machine_type)` pair
-   covered by an unexpired `@releases.skip.*` tag. An exception with a past
+   covered by an unexpired `@releases:skip:*` tag. An exception with a past
    expiry date no longer counts; that pair goes back to being a live gap the moment the date passes.
 
 What's required, minus what's covered, minus what's excepted, is what's

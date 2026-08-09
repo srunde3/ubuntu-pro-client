@@ -182,13 +182,13 @@ def test_examples_blocks_from_scenario_carries_per_block_tags():
             _Example(
                 ["release", "machine_type"],
                 [["jammy", "lxd-container"]],
-                tags=["releases.lts.supported"],
+                tags=["releases:lts_supported"],
                 name="standard",
             ),
             _Example(
                 ["release", "machine_type"],
                 [["jammy", "aws.pro"]],
-                tags=["releases.lts.esm"],
+                tags=["releases:lts_esm"],
                 name="clouds",
             ),
         ],
@@ -196,8 +196,8 @@ def test_examples_blocks_from_scenario_carries_per_block_tags():
     blocks = behave_features.examples_blocks_from_scenario(scenario)
     assert [b.name for b in blocks] == ["standard", "clouds"]
     assert [b.tags for b in blocks] == [
-        ["releases.lts.supported"],
-        ["releases.lts.esm"],
+        ["releases:lts_supported"],
+        ["releases:lts_esm"],
     ]
     assert _combo_dicts(blocks[0].combos) == [
         {"release": "jammy", "machine_type": "lxd-container"}

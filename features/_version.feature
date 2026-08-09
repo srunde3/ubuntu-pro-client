@@ -22,9 +22,9 @@ Feature: Pro is expected version
       THIS GETS REPLACED AT RUNTIME VIA A HACK IN steps/ubuntu_advantage_tools.py
       """
 
-    @releases.lts.supported
-    @releases.lts.esm
-    @releases.interim.supported
+    @releases:lts_supported
+    @releases:lts_esm
+    @releases:interim
     Examples: standard
       | release  | machine_type  |
       | xenial   | lxd-container |
@@ -66,8 +66,8 @@ Feature: Pro is expected version
       | resolute | azure.generic |
       | resolute | gcp.generic   |
 
-    @releases.lts.supported
-    @releases.lts.esm
+    @releases:lts_supported
+    @releases:lts_esm
     Examples: clouds
       | release  | machine_type   |
       | xenial   | aws.pro        |
@@ -120,9 +120,9 @@ Feature: Pro is expected version
       THIS GETS REPLACED AT RUNTIME VIA A HACK IN steps/ubuntu_advantage_tools.py
       """
 
-    @releases.lts.supported
-    @releases.lts.esm
-    @releases.interim.supported
+    @releases:lts_supported
+    @releases:lts_esm
+    @releases:interim
     Examples: version
       | release  | machine_type  |
       | xenial   | lxd-container |
@@ -146,9 +146,9 @@ Feature: Pro is expected version
     When I run `pro --version` with sudo
     Then I will see the uaclient version on stdout
 
-    @releases.lts.supported
-    @releases.lts.esm
-    @releases.interim.supported
+    @releases:lts_supported
+    @releases:lts_esm
+    @releases:interim
     Examples: ubuntu release
       | release  | machine_type  |
       | bionic   | lxd-container |
@@ -233,9 +233,9 @@ Feature: Pro is expected version
       to get the latest bug fixes and new features.
       """
 
-    @releases.lts.supported
-    @releases.lts.esm
-    @releases.interim.supported
+    @releases:lts_supported
+    @releases:lts_esm
+    @releases:interim
     Examples: ubuntu release
       | release  | machine_type  |
       | xenial   | lxd-container |

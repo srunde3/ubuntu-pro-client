@@ -136,6 +136,12 @@ Feature: Command behaviour when auto-attached in an ubuntu PRO image
       {"_schema_version": "v1", "data": {"attributes": {"should_auto_attach": true}, "meta": {"environment_vars": \[\]}, "type": "ShouldAutoAttach"}, "errors": \[\], "result": "success", "version": ".*", "warnings": \[\]}
       """
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @releases:lts_legacy
+    @machine_types:aws.pro
+    @machine_types:azure.pro
+    @machine_types:gcp.pro
     Examples: ubuntu release
       | release | machine_type | infra-pkg | apps-pkg |
       | xenial  | aws.pro      | libkrad0  | jq       |
@@ -172,6 +178,11 @@ Feature: Command behaviour when auto-attached in an ubuntu PRO image
       "attached": true
       """
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @releases:lts_legacy
+    @machine_types:azure.pro
+    @machine_types:gcp.pro
     Examples: ubuntu release
       | release | machine_type |
       | xenial  | azure.pro    |
@@ -186,7 +197,7 @@ Feature: Command behaviour when auto-attached in an ubuntu PRO image
       | noble   | gcp.pro      |
 
   Scenario Outline: Auto-attach service works on Pro Machine on aws.pro
-    Given a `<release>` aws.pro machine with ubuntu-advantage-tools installed
+    Given a `<release>` `aws.pro` machine with ubuntu-advantage-tools installed
     When I run `systemctl start ua-auto-attach.service` with sudo
     And I create the file `/etc/ubuntu-advantage/uaclient.conf` with the following:
       """
@@ -212,6 +223,10 @@ Feature: Command behaviour when auto-attached in an ubuntu PRO image
       Skipping auto-attach. Reason: No billingProduct nor marketplaceProductCode on AWS."
       """
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @releases:lts_legacy
+    @machine_types:aws.pro
     Examples: ubuntu release
       | release |
       | xenial  |
@@ -244,6 +259,10 @@ Feature: Command behaviour when auto-attached in an ubuntu PRO image
       Skipping auto-attach. Reason: No billingProduct nor marketplaceProductCode on AWS."
       """
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @releases:lts_legacy
+    @machine_types:aws.generic
     Examples: ubuntu release
       | release | machine_type |
       | xenial  | aws.generic  |
@@ -301,6 +320,12 @@ Feature: Command behaviour when auto-attached in an ubuntu PRO image
       status: done
       """
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @releases:lts_legacy
+    @machine_types:aws.pro
+    @machine_types:azure.pro
+    @machine_types:gcp.pro
     Examples: ubuntu release
       | release | machine_type | cloud_init_key   |
       | xenial  | aws.pro      | ubuntu_advantage |
@@ -330,6 +355,10 @@ Feature: Command behaviour when auto-attached in an ubuntu PRO image
       missing instance information
       """
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @releases:lts_legacy
+    @machine_types:aws.generic
     Examples: ubuntu release
       | release | machine_type |
       | xenial  | aws.generic  |

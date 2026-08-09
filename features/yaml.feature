@@ -65,6 +65,9 @@ Feature: YAML related interactions with Pro client
       """
       """
 
+    # Regression test for LP #2007241
+    # Pinned to the release it was reported against.
+    @releases:fixed
     Examples: ubuntu release
       | release | machine_type  | python_version |
       | jammy   | lxd-container | python3.10     |

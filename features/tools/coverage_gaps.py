@@ -8,8 +8,8 @@ a scenario actually covers today, is anything missing?"
 
 See ``dev-docs/explanation/release_coverage_model.md`` for the derivation
 this implements (``R(S)``, ``Excepted(S)``, ``Missing(S)``) and
-``dev-docs/reference/release_coverage_tags.md`` for the ``@releases.*`` tag
-vocabulary ``release_tags.py`` parses.
+``dev-docs/reference/release_coverage_tags.md`` for the ``@releases:*``/
+``@machine_types:*`` tag vocabulary ``release_tags.py`` parses.
 
 Design constraints:
 
@@ -19,10 +19,10 @@ Design constraints:
   ``features/behave_features.py``), the same module the behave MCP server
   uses. Investigation and execution of the suite live in the MCP; this
   module only does the gap arithmetic.
-* Applicability is read entirely from ``@releases.*`` tags -- there is no
-  separate skip-record log or other side artifact. A scenario with no
-  ``@releases.*`` tags is reported ``UNCLASSIFIED``, never silently treated
-  as either fully covered or a gap
+* Applicability is read entirely from ``@releases:*``/``@machine_types:*``
+  tags -- there is no separate skip-record log or other side artifact. A
+  scenario with no ``@releases:*`` tags is reported ``UNCLASSIFIED``,
+  never silently treated as either fully covered or a gap
 * Every release whose *current* (line, status) matches one of a scenario's
   declared buckets is checked, not just the newest -- LTS support windows
   overlap, so multiple releases can be simultaneously ``supported``.
@@ -49,8 +49,8 @@ from typing import Dict, FrozenSet, List, Optional, Sequence, Set, Tuple
 from features import behave_features
 from features.tools.release_catalog import ReleaseCatalog, Series
 from features.tools.release_tags import (
+    COVERAGE_TAG_PREFIXES,
     MACHINE_TYPES_TO_RELEASES,
-    TAG_PREFIX,
     CoverageDeclaration,
     MachineType,
     Tag,
@@ -90,7 +90,8 @@ class ScenarioCoverage:
     )  # (release, machine_type)
     tags: List[Tag] = field(default_factory=list)
     #: Set by aggregate_scenarios when nodes sharing a name carry different
-    #: @releases.* tags. Non-None means "don't trust this record's tags."
+    #: @releases:*/@machine_types:* tags. Non-None means "don't trust
+    #: this record's tags."
     tag_conflict_detail: Optional[str] = None
     #: Per-`Examples:` block tags+combos, when known. Real parsed Scenario
     #: Outlines always populate one entry per Examples table (even a single
@@ -163,7 +164,9 @@ def load_scenario_coverage(repo_root: Path) -> List[ScenarioCoverage]:
 
 
 def _filter_release_tags(tags: Sequence[Tag]) -> FrozenSet[Tag]:
-    return frozenset(tag for tag in tags if tag.startswith(TAG_PREFIX))
+    return frozenset(
+        tag for tag in tags if tag.startswith(COVERAGE_TAG_PREFIXES)
+    )
 
 
 def aggregate_scenarios(
@@ -172,8 +175,8 @@ def aggregate_scenarios(
     """Group scenario/outline nodes that share an exact (feature_file,
     scenario_name) -- the ``fix.feature`` "split by precondition" pattern --
     and, within a golden-shaped group, further split by each ``Examples:``
-    block's own ``@releases.*`` tag content -- the "two Examples blocks with
-    different testing policies" pattern (see
+    block's own ``@releases:*``/``@machine_types:*`` tag content -- the
+    "two Examples blocks with different testing policies" pattern (see
     ``dev-docs/reference/release_coverage_tags.md``). One
     (scenario_name, tag_set) pair produces one output ``ScenarioCoverage``,
     with combos unioned from every block -- in any node sharing this
@@ -182,11 +185,12 @@ def aggregate_scenarios(
     Two invariants are enforced, both producing a ``tag_conflict_detail``
     result rather than silently resolving:
 
-    * **Tag placement.** A ``@releases.*`` tag directly on ``Scenario
-      Outline:`` (rather than ``Examples:``) is always wrong, never a
-      fallback -- checkable whenever a node's per-block tags are actually
-      known (``node.blocks`` non-empty; real parsed outlines always
-      populate this, even for a single Examples block).
+    * **Tag placement.** A ``@releases:*``/``@machine_types:*`` tag
+      directly on ``Scenario Outline:`` (rather than ``Examples:``) is
+      always wrong, never a fallback -- checkable whenever a node's
+      per-block tags are actually known (``node.blocks`` non-empty; real
+      parsed outlines always populate this, even for a single Examples
+      block).
     * **Cross-node consistency, for the classic single-block split.** When
       one scenario name spans multiple Scenario Outline nodes and every one
       of them has exactly one Examples block (the ``fix.feature`` shape),
@@ -233,8 +237,8 @@ def aggregate_scenarios(
                     is_outline=is_outline,
                     example_columns=combined_columns,
                     tag_conflict_detail=(
-                        "@releases.* tag(s) found on Scenario Outline "
-                        "instead of Examples:: "
+                        "@releases:*/@machine_types:* tag(s) found on "
+                        "Scenario Outline instead of Examples:: "
                         f"{sorted(_filter_release_tags(misplaced[0].tags))}"
                     ),
                 )
@@ -253,7 +257,7 @@ def aggregate_scenarios(
                 tag_sets = sorted(sorted(s) for s in distinct_tag_sets)
                 tag_conflict_detail = (
                     f"nodes sharing the name {scenario_name!r} carry "
-                    f"different @releases.* tags: {tag_sets}"
+                    f"different @releases:*/@machine_types:* tags: {tag_sets}"
                 )
             aggregated.append(
                 ScenarioCoverage(
@@ -299,8 +303,9 @@ def aggregate_scenarios(
                         is_outline=is_outline,
                         example_columns=combined_columns,
                         tag_conflict_detail=(
-                            f"nodes sharing the name {scenario_name!r} carry "
-                            f"different @releases.* tags: {tag_sets}"
+                            f"nodes sharing the name {scenario_name!r} "
+                            "carry different @releases:*/@machine_types:*"
+                            f" tags: {tag_sets}"
                         ),
                     )
                 )
@@ -412,7 +417,7 @@ def compute_excepted(
     today: date,
 ) -> Set[Tuple[Series, MachineType]]:
     """``Excepted(S)``: pairs in ``candidate`` covered by an unexpired
-    ``@releases.skip.*`` exception -- either a specific (release,
+    ``@releases:skip:*`` exception -- either a specific (release,
     machine_type) or the whole release (``machine_type is None``).
     """
     excepted: Set[Tuple[Series, MachineType]] = set()
@@ -452,7 +457,7 @@ def compute_missing(
 # ---------------------------------------------------------------------------
 class GapStatus(str, Enum):
     GAP = "gap"  # in Missing(S) -- needs a new Examples row or a skip tag
-    UNCLASSIFIED = "unclassified"  # no @releases.* tags at all -- undecided
+    UNCLASSIFIED = "unclassified"  # no @releases:* tags at all -- undecided
     NON_STANDARD_SHAPE = "non_standard_shape"  # doesn't match the golden shape
     TAG_ERROR = "tag_error"  # malformed/conflicting/unresolvable tags
 
@@ -545,7 +550,7 @@ def find_gaps(
 
         for release, machine_type in sorted(missing):
             found = catalog.get(release)
-            bucket = f"{found.line}.{found.status}" if found else ""
+            bucket = f"{found.line}_{found.status}" if found else ""
             findings.append(
                 Finding(
                     scenario.feature_file,

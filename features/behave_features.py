@@ -61,8 +61,8 @@ class Combo:
 class ExamplesBlock:
     """One ``Examples:`` table within a Scenario Outline, with its own tags.
 
-    ``@releases.*`` tags are read from here, never from the enclosing
-    ``Scenario Outline:`` -- see
+    ``@releases:*``/``@machine_types:*`` tags are read from here, never
+    from the enclosing ``Scenario Outline:`` -- see
     ``dev-docs/reference/release_coverage_tags.md``'s "Tag placement". A
     scenario with a single ``Examples:`` block still gets exactly one of
     these; there is no separate "whole-scenario" representation to keep in
