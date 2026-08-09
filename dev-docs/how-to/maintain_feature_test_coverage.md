@@ -64,7 +64,12 @@ its `Examples:` block:
    that row may just be a release that's mid-deprecation and hasn't been
    pruned yet, not a deliberate policy of testing into legacy. Add
    `lts_legacy` only when there's actual evidence the behavior needs
-   checking that far into a release's life.
+   checking that far into a release's life. If a scenario's name or
+   comments say it targets "the latest LTS" specifically (a rolling
+   pointer, meant to be updated in place as new LTS releases ship), use
+   `@releases:latest_lts` -- *not* `@releases:lts_supported`, which
+   currently matches several LTS releases at once and can't express "just
+   the newest one".
 2. If the behavior only exists from some release onward, or stopped
    applying after one, add `@releases:since:<line>:<release>` and/or
    `@releases:until:<line>:<release>`. Otherwise leave both unstated --
@@ -78,6 +83,15 @@ its `Examples:` block:
 4. Re-run the checker. Any `(release, machine_type)` pair it now reports
    as `gap` needs either a real `Examples:` row or a skip exception (next
    section).
+5. Before deciding a missing release/machine_type is unexplained, check
+   the surrounding lines, not just directly above the `Examples:` block --
+   a pre-existing "why this row is missing" comment is sometimes found
+   misplaced below the `Examples:` table or above the *next* scenario
+   instead of directly above the tags it explains (a recurring authoring
+   slip in this repo, not a one-off). If you find one, fold its reason
+   into a proper `@releases:skip:*` tag (moving/rewording the comment to
+   sit directly above the tag, per "Fix a gap" below) rather than treating
+   the gap as unexplained.
 
 ## Fix a gap
 

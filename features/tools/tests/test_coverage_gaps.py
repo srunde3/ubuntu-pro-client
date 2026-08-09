@@ -553,6 +553,40 @@ class TestWorkedExamplesStandalone:
         assert len(findings) == 1
         assert findings[0].status == GapStatus.UNCLASSIFIED
 
+    def test_latest_lts_requires_only_the_newest_lts(self, catalog):
+        # jammy, noble, and resolute are all "supported" at TODAY -- unlike
+        # lts_supported, latest_lts requires only resolute, the single
+        # newest one.
+        scenario = _scenario(
+            combos={("jammy", "lxd-container"), ("noble", "lxd-container")},
+            tags=["releases:latest_lts"],
+        )
+        findings = find_gaps(catalog, [scenario], today=TODAY)
+        assert {(f.release, f.machine_type) for f in findings} == {
+            ("resolute", "lxd-container")
+        }
+
+    def test_latest_lts_tracks_forward_as_a_new_release_ships(self, catalog):
+        # No row anywhere for resolute is fine as long as it's covered --
+        # the requirement itself moves; nothing needs updating by hand.
+        scenario = _scenario(
+            combos={("resolute", "lxd-container")},
+            tags=["releases:latest_lts"],
+        )
+        assert find_gaps(catalog, [scenario], today=TODAY) == []
+
+    def test_latest_lts_respects_a_since_bound(self, catalog):
+        # A since bound still applies to whichever release "latest"
+        # resolves to. `stonking` is interim, not lts, but the bound only
+        # compares catalog order, not line -- its order (7) is newer than
+        # resolute's (6), the only way to construct an excluding bound
+        # against this fixture's newest-known lts release.
+        scenario = _scenario(
+            combos=set(),
+            tags=["releases:latest_lts", "releases:since:lts:stonking"],
+        )
+        assert find_gaps(catalog, [scenario], today=TODAY) == []
+
 
 # ---------------------------------------------------------------------------
 # Multiple `Examples:` blocks within one Scenario Outline node, each

@@ -138,6 +138,24 @@ class TestLookups:
     def test_newer_than(self, catalog):
         assert [r.series for r in catalog.newer_than(6)] == ["stonking"]
 
+    def test_latest_lts_excludes_devel(self, catalog):
+        # resolute (supported) is the newest LTS; stonking (interim, devel)
+        # doesn't count as "the latest" of anything until it ships.
+        assert catalog.latest("lts") == "resolute"
+
+    def test_latest_interim_excludes_devel(self, catalog):
+        # stonking is the newest interim release but is still devel, so
+        # questing (eol) is "the latest" until stonking actually ships.
+        assert catalog.latest("interim") == "questing"
+
+    def test_latest_of_unknown_line_is_none(self, catalog):
+        assert catalog.latest("nonexistent") is None
+
+    def test_latest_becomes_the_new_release_once_it_ships(self):
+        catalog = ReleaseCatalog.from_rows(ROWS, today=date(2026, 10, 20))
+        assert catalog.get("stonking").status != "devel"
+        assert catalog.latest("interim") == "stonking"
+
     def test_relevant_excludes_eol(self, catalog):
         relevant = [r.series for r in catalog.relevant()]
         assert "xenial" not in relevant  # eol

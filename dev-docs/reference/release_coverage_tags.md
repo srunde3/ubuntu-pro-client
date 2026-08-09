@@ -39,6 +39,7 @@ namespace, not nested under `releases`). `<line>` is `lts` or `interim`;
 | `@releases:lts_esm` | tracks `lts` in ESM |
 | `@releases:lts_legacy` | tracks `lts` in legacy support |
 | `@releases:interim` | tracks `interim` (one status only, so no suffix) |
+| `@releases:latest_lts` | tracks exactly the single newest-shipped `lts` release, whatever it currently is |
 | `@releases:fixed` | `tracks(S) = {}` explicitly -- deliberately tracks nothing, forever |
 | `@releases:since:<line>:<release>` | lower bound for `line` |
 | `@releases:until:<line>:<release>` | upper bound for `line` |
@@ -55,9 +56,21 @@ for its schema, and
 [the how-to guide](../how-to/maintain_feature_test_coverage.md) for
 keeping it current).
 
-`UNCLASSIFIED(S)` = neither any tracked-bucket tag nor `@releases:fixed`
-is present. `@releases:fixed` and a tracked-bucket tag are mutually
-exclusive.
+`@releases:latest_lts` exists because no combination of the ordinary
+bucket tags can express "just the newest one": LTS support windows
+overlap (it's normal for two or three LTS releases to be simultaneously
+`supported`/`esm` at once), so `@releases:lts_supported` alone matches all
+of them, not a single release. `latest_lts` instead resolves dynamically,
+via `ReleaseCatalog.latest("lts")`, to whichever `lts` release currently
+has the highest catalog order and isn't still `devel` -- a release that
+hasn't shipped yet isn't "the latest" of anything until it does. It's
+additive and independent of `tracks`: it can be combined with ordinary
+bucket tags, and with `since`/`until` bounds on the same line (the bound
+applies to whichever release `latest` currently resolves to).
+
+`UNCLASSIFIED(S)` = no tracked-bucket tag, no `latest_lts`-style marker,
+and no `@releases:fixed` tag is present. `@releases:fixed` is mutually
+exclusive with both tracked-bucket tags and `latest_lts`.
 
 ## Tag placement
 
@@ -162,6 +175,17 @@ Scenario Outline: Check pro version
   Examples: clouds
     | release | machine_type |
     | ...     | aws.pro      |
+```
+
+**Rolling "latest LTS" pointer**:
+
+```gherkin
+# Kept up to date against whichever LTS is newest; update the row in
+# place when a new one ships, rather than adding another row.
+@releases:latest_lts
+Examples: ubuntu release
+  | release  | machine_type  |
+  | resolute | lxd-container |
 ```
 
 **Deliberately fixed**:

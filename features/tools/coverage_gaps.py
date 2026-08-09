@@ -343,15 +343,32 @@ def _resolve_order(catalog: ReleaseCatalog, release: Series) -> int:
     return order
 
 
+def _bound_orders(
+    catalog: ReleaseCatalog, declaration: CoverageDeclaration, line: str
+) -> Tuple[Optional[int], Optional[int]]:
+    """The resolved (since_order, until_order) for ``line``, shared by both
+    the ordinary bucket loop and the ``latest`` loop below -- a bound
+    applies to a line regardless of which mechanism is requiring it."""
+    since_bound = declaration.since.get(line)
+    until_bound = declaration.until.get(line)
+    since_order = (
+        _resolve_order(catalog, since_bound.release) if since_bound else None
+    )
+    until_order = (
+        _resolve_order(catalog, until_bound.release) if until_bound else None
+    )
+    return since_order, until_order
+
+
 def compute_required_coverage(
     catalog: ReleaseCatalog,
     scenario: ScenarioCoverage,
     declaration: CoverageDeclaration,
 ) -> Set[Tuple[Series, MachineType]]:
     """``R(S)``: every (release, machine_type) pair this scenario should
-    currently cover, per its declared ``tracks``/``since``/``until``/
-    ``machine_types``. Raises ``UnknownReleaseError`` if a ``since``/
-    ``until`` tag names a release the catalog doesn't recognize.
+    currently cover, per its declared ``tracks``/``latest``/``since``/
+    ``until``/``machine_types``. Raises ``UnknownReleaseError`` if a
+    ``since``/``until`` tag names a release the catalog doesn't recognize.
 
     ``since``/``until`` are never inferred from ``scenario``'s current
     coverage -- unstated means unbounded on that side, same as ``until``
@@ -368,18 +385,7 @@ def compute_required_coverage(
 
     releases: Set[Series] = set()
     for line, statuses in (declaration.tracks or {}).items():
-        since_bound = declaration.since.get(line)
-        until_bound = declaration.until.get(line)
-        since_order = (
-            _resolve_order(catalog, since_bound.release)
-            if since_bound
-            else None
-        )
-        until_order = (
-            _resolve_order(catalog, until_bound.release)
-            if until_bound
-            else None
-        )
+        since_order, until_order = _bound_orders(catalog, declaration, line)
         for release in catalog.ordered:
             if release.line != line or release.status not in statuses:
                 continue
@@ -388,6 +394,18 @@ def compute_required_coverage(
             if until_order is not None and release.order > until_order:
                 continue
             releases.add(release.series)
+
+    for line in declaration.latest:
+        latest_series = catalog.latest(line)
+        if latest_series is None:
+            continue
+        since_order, until_order = _bound_orders(catalog, declaration, line)
+        order = _resolve_order(catalog, latest_series)
+        if since_order is not None and order < since_order:
+            continue
+        if until_order is not None and order > until_order:
+            continue
+        releases.add(latest_series)
 
     return {
         (release, machine_type)

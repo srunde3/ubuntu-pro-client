@@ -60,6 +60,16 @@ BUCKETS: Dict[str, Tuple[str, str]] = {
     "lts_legacy": ("lts", "legacy"),
     "interim": ("interim", "supported"),
 }
+#: Flat "rolling latest" marker -> the line it tracks. Unlike ``BUCKETS``,
+#: this doesn't match a (line, status) pair -- it always resolves to
+#: exactly one release, whichever currently has the highest ``order`` on
+#: that line (see ``ReleaseCatalog.latest``), regardless of its status.
+#: Exists because a bucket tag can't express "just the newest one": LTS
+#: support windows overlap, so `lts_supported` alone can match several
+#: releases at once.
+LATEST_MARKERS: Dict[str, str] = {
+    "latest_lts": "lts",
+}
 
 MachineType = NewType("MachineType", str)
 Tag = NewType("Tag", str)
@@ -118,11 +128,19 @@ class CoverageDeclaration:
 
     ``tracks`` has three states, per the information model:
 
-    * ``None`` -- no bucket tag (``@releases:lts_supported`` etc.) or
-      ``@releases:fixed`` tag was present. ``UNCLASSIFIED``.
-    * ``{}`` -- ``@releases:fixed`` was present. Deliberately tracks
-      nothing, forever.
+    * ``None`` -- no bucket tag (``@releases:lts_supported`` etc.), no
+      ``@releases:latest_lts``-style marker, and no ``@releases:fixed`` tag
+      was present. ``UNCLASSIFIED``.
+    * ``{}`` -- ``@releases:fixed`` was present (or only a ``latest``
+      marker was), so there are no ordinary (line, status) buckets.
+      ``@releases:fixed`` means deliberately tracks nothing, forever;
+      a ``latest`` marker means tracking is entirely driven by ``latest``
+      instead.
     * non-empty -- the declared ``{line: {status, ...}}`` buckets.
+
+    ``latest`` is a separate, additive requirement: each line in it
+    contributes exactly one release (whichever is currently
+    ``ReleaseCatalog.latest(line)``), regardless of that release's status.
     """
 
     tracks: Optional[Dict[str, Set[str]]] = None
@@ -130,6 +148,7 @@ class CoverageDeclaration:
     until: Dict[str, Bound] = field(default_factory=dict)
     machine_types: Set[MachineType] = field(default_factory=set)
     exceptions: List[SkipException] = field(default_factory=list)
+    latest: Set[str] = field(default_factory=set)
 
     @property
     def is_unclassified(self) -> bool:
@@ -232,9 +251,10 @@ def parse_tags(tags: Sequence[Tag]) -> CoverageDeclaration:
 
     Raises ``TagValidationError`` on any malformed tag, an unknown
     line/status/machine_type token, ``@releases:fixed`` co-occurring with a
-    tracked bucket tag, more than one ``since``/``until`` for the same
-    line, or more than one ``@releases:skip:*`` for the same (release,
-    machine_type) key. Nothing is silently dropped.
+    tracked bucket tag or a ``latest`` marker, more than one
+    ``since``/``until`` for the same line, or more than one
+    ``@releases:skip:*`` for the same (release, machine_type) key. Nothing
+    is silently dropped.
     """
     tracks: Dict[str, Set[str]] = {}
     classified = False
@@ -244,6 +264,7 @@ def parse_tags(tags: Sequence[Tag]) -> CoverageDeclaration:
     machine_types: Set[MachineType] = set()
     exceptions: List[SkipException] = []
     seen_exception_keys: Set[Tuple[Series, Optional[MachineType]]] = set()
+    latest_lines: Set[str] = set()
 
     for tag in tags:
         if tag.startswith(MACHINE_TYPE_PREFIX):
@@ -269,6 +290,9 @@ def parse_tags(tags: Sequence[Tag]) -> CoverageDeclaration:
             line, status = BUCKETS[parts[0]]
             tracks.setdefault(line, set()).add(status)
             classified = True
+        elif len(parts) == 1 and parts[0] in LATEST_MARKERS:
+            latest_lines.add(LATEST_MARKERS[parts[0]])
+            classified = True
         elif len(parts) == 3 and parts[0] in ("since", "until"):
             _apply_bound(tag, parts[0], parts[1], parts[2], since, until)
         elif len(parts) >= 2 and parts[0] == "skip":
@@ -276,9 +300,10 @@ def parse_tags(tags: Sequence[Tag]) -> CoverageDeclaration:
         else:
             raise TagValidationError(f"{tag!r}: unrecognized @releases:* tag")
 
-    if fixed and tracks:
+    if fixed and (tracks or latest_lines):
         raise TagValidationError(
-            "@releases:fixed cannot co-occur with a tracked bucket tag"
+            "@releases:fixed cannot co-occur with a tracked bucket tag "
+            "or a latest marker"
         )
 
     return CoverageDeclaration(
@@ -287,4 +312,5 @@ def parse_tags(tags: Sequence[Tag]) -> CoverageDeclaration:
         until=until,
         machine_types=machine_types,
         exceptions=exceptions,
+        latest=latest_lines,
     )

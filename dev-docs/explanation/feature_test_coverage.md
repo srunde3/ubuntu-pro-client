@@ -128,6 +128,11 @@ in plain terms, a scenario can declare:
   `@releases:lts_esm`), or both the LTS and interim lines independently.
   This is the core declaration: it answers "which buckets of releases
   must currently be represented".
+- **Exactly the newest release on a line** (`@releases:latest_lts`), for a
+  scenario meant to track "whatever the latest LTS is" as a rolling
+  pointer, rather than every release in a status tier -- LTS support
+  windows overlap, so `lts_supported` alone can't express "just the
+  newest one".
 - **A lower or upper bound on a line** (`@releases:since:lts:focal`,
   `@releases:until:lts:resolute`), for a behavior that only exists from
   some release onward, or stopped mattering after one. If absent, this means

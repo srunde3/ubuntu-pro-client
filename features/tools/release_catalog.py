@@ -111,6 +111,18 @@ class ReleaseCatalog:
     def relevant(self) -> List[Release]:
         return [r for r in self.ordered if r.is_relevant]
 
+    def latest(self, line: str) -> Optional[Series]:
+        """The most recently *released* series on ``line`` -- the
+        highest-``order`` release whose status isn't ``devel``. A release
+        still in development isn't "the latest" anything yet; it becomes
+        the answer the moment it ships. ``None`` if ``line`` has no such
+        release in the catalog.
+        """
+        candidates = [
+            r for r in self.ordered if r.line == line and r.status != "devel"
+        ]
+        return candidates[-1].series if candidates else None
+
     # -- constructors -----------------------------------------------------
     @classmethod
     def from_rows(

@@ -96,6 +96,17 @@ class TestVocabulary:
         d = parse_tags(["releases:lts_supported", "releases:interim"])
         assert d.tracks == {"lts": {"supported"}, "interim": {"supported"}}
 
+    def test_latest_lts(self):
+        d = parse_tags(["releases:latest_lts"])
+        assert d.latest == {"lts"}
+        assert d.tracks == {}
+        assert not d.is_unclassified
+
+    def test_latest_lts_combined_with_a_bound(self):
+        d = parse_tags(["releases:latest_lts", "releases:since:lts:jammy"])
+        assert d.latest == {"lts"}
+        assert d.since == {"lts": Bound("jammy")}
+
     def test_returns_a_fresh_declaration_instance(self):
         # No shared mutable state leaking between calls via dataclass defaults.
         first = parse_tags(["releases:lts_supported"])
@@ -112,6 +123,10 @@ class TestValidation:
     def test_fixed_conflicts_regardless_of_order(self):
         with pytest.raises(TagValidationError, match="cannot co-occur"):
             parse_tags(["releases:lts_supported", "releases:fixed"])
+
+    def test_fixed_conflicts_with_latest_marker(self):
+        with pytest.raises(TagValidationError, match="cannot co-occur"):
+            parse_tags(["releases:fixed", "releases:latest_lts"])
 
     def test_unknown_line_in_since(self):
         with pytest.raises(TagValidationError, match="unknown line"):
