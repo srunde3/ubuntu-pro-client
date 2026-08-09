@@ -138,7 +138,6 @@ Feature: Command behaviour when auto-attached in an ubuntu PRO image
 
     @releases:lts_supported
     @releases:lts_esm
-    @releases:lts_legacy
     @machine_types:aws.pro
     @machine_types:azure.pro
     @machine_types:gcp.pro
@@ -180,7 +179,6 @@ Feature: Command behaviour when auto-attached in an ubuntu PRO image
 
     @releases:lts_supported
     @releases:lts_esm
-    @releases:lts_legacy
     @machine_types:azure.pro
     @machine_types:gcp.pro
     Examples: ubuntu release
@@ -225,7 +223,6 @@ Feature: Command behaviour when auto-attached in an ubuntu PRO image
 
     @releases:lts_supported
     @releases:lts_esm
-    @releases:lts_legacy
     @machine_types:aws.pro
     Examples: ubuntu release
       | release |
@@ -261,7 +258,6 @@ Feature: Command behaviour when auto-attached in an ubuntu PRO image
 
     @releases:lts_supported
     @releases:lts_esm
-    @releases:lts_legacy
     @machine_types:aws.generic
     Examples: ubuntu release
       | release | machine_type |
@@ -322,7 +318,6 @@ Feature: Command behaviour when auto-attached in an ubuntu PRO image
 
     @releases:lts_supported
     @releases:lts_esm
-    @releases:lts_legacy
     @machine_types:aws.pro
     @machine_types:azure.pro
     @machine_types:gcp.pro
@@ -357,7 +352,6 @@ Feature: Command behaviour when auto-attached in an ubuntu PRO image
 
     @releases:lts_supported
     @releases:lts_esm
-    @releases:lts_legacy
     @machine_types:aws.generic
     Examples: ubuntu release
       | release | machine_type |

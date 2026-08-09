@@ -59,6 +59,12 @@ its `Examples:` block:
    expected to hold across every release -- is usually `@releases:fixed`,
    not a tracked bucket. If it's still ambiguous, try to get additional
    information from past team members or other authorities on the domain.
+   Treat `@releases:lts_legacy` with particular caution: don't infer it
+   just because a currently-legacy release (e.g. `xenial`) has a row --
+   that row may just be a release that's mid-deprecation and hasn't been
+   pruned yet, not a deliberate policy of testing into legacy. Add
+   `lts_legacy` only when there's actual evidence the behavior needs
+   checking that far into a release's life.
 2. If the behavior only exists from some release onward, or stopped
    applying after one, add `@releases:since:<line>:<release>` and/or
    `@releases:until:<line>:<release>`. Otherwise leave both unstated --

@@ -68,6 +68,10 @@ Feature: CLI status command
       """
     And I verify that `/var/lib/ubuntu-advantage/status.json` is owned by `root:root` with permission `644`
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @releases:interim
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release  | machine_type  |
       | bionic   | lxd-container |
@@ -111,6 +115,9 @@ Feature: CLI status command
       active
       """
 
+    # Canary for the pro-refresh-vs-status race; one release is enough to
+    # exercise this behavior, not a per-release testing policy.
+    @releases:fixed
     Examples: ubuntu release
       | release | machine_type  |
       | xenial  | lxd-container |
@@ -151,6 +158,9 @@ Feature: CLI status command
       livepatch        +yes      +warning  +Current kernel is not covered by livepatch
       """
 
+    # One-off fork: gcp's old-kernel livepatch warning text differs from the
+    # generic Pro-machine assertion, not a per-release testing policy.
+    @releases:fixed
     Examples: ubuntu release
       | release | machine_type |
       | xenial  | gcp.pro      |
@@ -191,6 +201,13 @@ Feature: CLI status command
       livepatch        +yes      +enabled  +Canonical Livepatch service
       """
 
+    # This wording covers xenial/bionic only; focal+ each fork into their
+    # own scenario below as the entitlement set changes per release.
+    @releases:lts_esm
+    @releases:until:lts:bionic
+    @machine_types:aws.pro
+    @machine_types:azure.pro
+    @machine_types:gcp.pro
     Examples: ubuntu release
       | release | machine_type |
       | xenial  | aws.pro      |
@@ -237,6 +254,7 @@ Feature: CLI status command
       usg              +yes      +disabled +Security compliance and audit tools
       """
 
+    @releases:fixed
     Examples: ubuntu release
       | release | machine_type |
       | focal   | azure.pro    |
@@ -281,6 +299,7 @@ Feature: CLI status command
       usg              +yes      +disabled +Security compliance and audit tools
       """
 
+    @releases:fixed
     Examples: ubuntu release
       | release | machine_type |
       | focal   | aws.pro      |
@@ -323,6 +342,7 @@ Feature: CLI status command
       usg              +yes      +disabled +Security compliance and audit tools
       """
 
+    @releases:fixed
     Examples: ubuntu release
       | release | machine_type |
       | jammy   | azure.pro    |
@@ -371,6 +391,7 @@ Feature: CLI status command
       usg              +yes      +disabled +Security compliance and audit tools
       """
 
+    @releases:fixed
     Examples: ubuntu release
       | release | machine_type |
       | jammy   | aws.pro      |
@@ -419,6 +440,9 @@ Feature: CLI status command
       Enable services with: pro enable <service>
       """
 
+    # One scenario name, one node per (release, machine_type) fork as the
+    # entitlement set/output changes -- not a per-release testing policy.
+    @releases:fixed
     Examples: ubuntu release
       | release | machine_type  |
       | xenial  | lxd-container |
@@ -461,6 +485,7 @@ Feature: CLI status command
       Enable services with: pro enable <service>
       """
 
+    @releases:fixed
     Examples: ubuntu release
       | release | machine_type |
       | bionic  | wsl          |
@@ -503,6 +528,7 @@ Feature: CLI status command
       Enable services with: pro enable <service>
       """
 
+    @releases:fixed
     Examples: ubuntu release
       | release | machine_type |
       | focal   | wsl          |
@@ -549,6 +575,7 @@ Feature: CLI status command
       Enable services with: pro enable <service>
       """
 
+    @releases:fixed
     Examples: ubuntu release
       | release | machine_type  |
       | focal   | lxd-container |
@@ -597,6 +624,7 @@ Feature: CLI status command
       Enable services with: pro enable <service>
       """
 
+    @releases:fixed
     Examples: ubuntu release
       | release | machine_type  |
       | jammy   | lxd-container |
@@ -641,6 +669,12 @@ Feature: CLI status command
       Enable services with: pro enable <service>
       """
 
+    # "Latest LTS" in the name, but lts_supported currently matches jammy,
+    # noble, *and* resolute at once (overlapping support windows) -- there's
+    # no tag for "just the newest one." Same named-release fork pattern as
+    # its siblings; update the row in place when a new LTS needs its own
+    # fork of this scenario's assertions.
+    @releases:fixed
     Examples: ubuntu release
       | release  | machine_type  |
       | resolute | lxd-container |
@@ -691,6 +725,10 @@ Feature: CLI status command
       warnings: \[\]
       """
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @releases:interim
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release  | machine_type  |
       | bionic   | lxd-container |
@@ -783,6 +821,12 @@ Feature: CLI status command
       See https://ubuntu.com/pro
       """
 
+    # One scenario name, one node per release fork as the AVAILABLE column
+    # changes; resolute forks into its own scenario below.
+    @releases:lts_esm
+    @releases:lts_supported
+    @releases:until:lts:noble
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release | machine_type  |
       | xenial  | lxd-container |
@@ -865,6 +909,10 @@ Feature: CLI status command
       See https://ubuntu.com/pro
       """
 
+    @releases:lts_esm
+    @releases:lts_supported
+    @releases:until:lts:noble
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release | machine_type  |
       | bionic  | lxd-container |
@@ -942,6 +990,10 @@ Feature: CLI status command
       See https://ubuntu.com/pro
       """
 
+    @releases:lts_esm
+    @releases:lts_supported
+    @releases:until:lts:noble
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release | machine_type  |
       | focal   | lxd-container |
@@ -1019,6 +1071,10 @@ Feature: CLI status command
       See https://ubuntu.com/pro
       """
 
+    @releases:lts_esm
+    @releases:lts_supported
+    @releases:until:lts:noble
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release | machine_type  |
       | jammy   | lxd-container |
@@ -1096,6 +1152,10 @@ Feature: CLI status command
       See https://ubuntu.com/pro
       """
 
+    @releases:lts_esm
+    @releases:lts_supported
+    @releases:until:lts:noble
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release | machine_type  |
       | noble   | lxd-container |
@@ -1167,6 +1227,9 @@ Feature: CLI status command
       See https://ubuntu.com/pro
       """
 
+    # Named-release fork (see the shared-name group above); not a rolling
+    # "latest LTS" pointer.
+    @releases:fixed
     Examples: ubuntu release
       | release  | machine_type  |
       | resolute | lxd-container |
@@ -1212,6 +1275,12 @@ Feature: CLI status command
       ros-updates      +yes       +yes       +no           +All Updates for the Robot Operating System
       """
 
+    # Same shared-name, one-node-per-release pattern as the "Unattached
+    # status" group above, but no separate fork exists yet for resolute --
+    # that's a real, unfixed gap this exposes.
+    @releases:lts_esm
+    @releases:lts_supported
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release | machine_type  |
       | xenial  | lxd-container |
@@ -1255,6 +1324,9 @@ Feature: CLI status command
       ros-updates      +yes       +yes       +no           +All Updates for the Robot Operating System
       """
 
+    @releases:lts_esm
+    @releases:lts_supported
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release | machine_type  |
       | bionic  | lxd-container |
@@ -1296,6 +1368,9 @@ Feature: CLI status command
       usg              +yes       +yes       +no           +Security compliance and audit tools
       """
 
+    @releases:lts_esm
+    @releases:lts_supported
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release | machine_type  |
       | focal   | lxd-container |
@@ -1337,6 +1412,9 @@ Feature: CLI status command
       usg              +yes       +yes       +no           +Security compliance and audit tools
       """
 
+    @releases:lts_esm
+    @releases:lts_supported
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release | machine_type  |
       | jammy   | lxd-container |
@@ -1378,6 +1456,9 @@ Feature: CLI status command
       usg              +yes       +yes       +no           +Security compliance and audit tools
       """
 
+    @releases:lts_esm
+    @releases:lts_supported
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release | machine_type  |
       | noble   | lxd-container |
@@ -1428,6 +1509,11 @@ Feature: CLI status command
       ros-updates      +yes       +no        +no           +All Updates for the Robot Operating System
       """
 
+    # Same shared-name, one-node-per-release pattern; no fork exists yet
+    # for noble/resolute -- real, unfixed gaps this exposes.
+    @releases:lts_esm
+    @releases:lts_supported
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release | machine_type  |
       | xenial  | lxd-container |
@@ -1476,6 +1562,9 @@ Feature: CLI status command
       ros-updates      +yes       +no        +no           +All Updates for the Robot Operating System
       """
 
+    @releases:lts_esm
+    @releases:lts_supported
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release | machine_type  |
       | bionic  | lxd-container |
@@ -1522,6 +1611,9 @@ Feature: CLI status command
       usg             +yes       +yes       +no           +Security compliance and audit tools
       """
 
+    @releases:lts_esm
+    @releases:lts_supported
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release | machine_type  |
       | focal   | lxd-container |
@@ -1567,6 +1659,9 @@ Feature: CLI status command
       livepatch       +yes       +yes       +yes          +Canonical Livepatch service
       """
 
+    @releases:lts_esm
+    @releases:lts_supported
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release | machine_type  |
       | jammy   | lxd-container |
@@ -1611,6 +1706,9 @@ Feature: CLI status command
       warnings: []
       """
 
+    @releases:lts_esm
+    @releases:lts_supported
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release | machine_type  |
       | xenial  | lxd-container |
@@ -1633,6 +1731,10 @@ Feature: CLI status command
       System reboot required
       """
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @releases:interim
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release  | machine_type  |
       | xenial   | lxd-container |
@@ -1728,6 +1830,10 @@ Feature: CLI status command
       """
       """
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @releases:interim
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release  | machine_type  |
       | xenial   | lxd-container |
