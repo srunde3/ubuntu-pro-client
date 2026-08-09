@@ -50,7 +50,7 @@ namespace, not nested under `releases`). `<line>` is `lts` or `interim`;
 
 `machine_type` values and their own release-availability windows are
 governed by `applicable(m, r)`, sourced from
-`features/tools/machine_types.yaml` (see the file's own header comment
+`features/machine_types.yaml` (see the file's own header comment
 for its schema, and
 [the how-to guide](../how-to/maintain_feature_test_coverage.md) for
 keeping it current).

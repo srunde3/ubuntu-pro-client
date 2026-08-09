@@ -38,7 +38,7 @@ supposed to test, and how the gap between the two gets found.
   unbounded on that side.
 - **Applicable** -- whether a machine type is actually offered
   as a real product for a given release. Sourced from
-  `features/tools/machine_types.yaml`, independent of anything a
+  `features/machine_types.yaml`, independent of anything a
   scenario declares.
 - **Exception** (or **skip**) -- a deliberate, explained hole in
   otherwise-required coverage, declared with `@releases:skip:*` and a

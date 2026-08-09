@@ -102,7 +102,7 @@ resolve that explicitly -- add a row, or add a dated skip with a reason.
 
 ## Keep `machine_types.yaml` current
 
-`features/tools/machine_types.yaml` is the hand-maintained record of which
+`features/machine_types.yaml` is the hand-maintained record of which
 machine_types are actually offered on which releases. New releases must be
 added to the applicable machine types when they are ready to be tested.
 

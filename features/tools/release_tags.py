@@ -25,9 +25,9 @@ TODO: strip reason from this model entirely, if we can't support it here.
 Simpler to add back later.
 """
 
-import os
 from dataclasses import dataclass, field
 from datetime import date
+from pathlib import Path
 from typing import (
     Dict,
     FrozenSet,
@@ -64,13 +64,11 @@ BUCKETS: Dict[str, Tuple[str, str]] = {
 MachineType = NewType("MachineType", str)
 Tag = NewType("Tag", str)
 
-_MACHINE_TYPES_PATH = os.path.join(
-    os.path.dirname(__file__), "machine_types.yaml"
-)
+_MACHINE_TYPES_PATH = Path(__file__).parent.parent / "machine_types.yaml"
 
 
 def _load_machine_types() -> Dict[MachineType, Set[Series]]:
-    with open(_MACHINE_TYPES_PATH, encoding="utf-8") as handle:
+    with _MACHINE_TYPES_PATH.open(encoding="utf-8") as handle:
         raw = yaml.safe_load(handle) or {}
     return {
         MachineType(machine_type): {Series(release) for release in releases}
