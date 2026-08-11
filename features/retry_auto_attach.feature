@@ -115,6 +115,8 @@ Feature: auto-attach retries periodically on failures
       You can try manually with `sudo pro auto-attach`.
       """
 
+    @releases:lts_supported
+    @releases:lts_esm
     Examples: ubuntu release
       | release | machine_type  |
       | xenial  | azure.generic |
@@ -239,6 +241,8 @@ Feature: auto-attach retries periodically on failures
       You can try manually with `sudo pro auto-attach`.
       """
 
+    @releases:lts_supported
+    @releases:lts_esm
     Examples: ubuntu release
       | release | machine_type |
       | xenial  | aws.generic  |
@@ -321,6 +325,11 @@ Feature: auto-attach retries periodically on failures
       Failed to automatically attach to an Ubuntu Pro subscription
       """
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @machine_types:aws.pro
+    @machine_types:azure.pro
+    @machine_types:gcp.pro
     Examples: ubuntu release
       | release | machine_type |
       | xenial  | aws.pro      |
@@ -396,6 +405,9 @@ Feature: auto-attach retries periodically on failures
       Failed to automatically attach to an Ubuntu Pro subscription
       """
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @machine_types:gcp.pro
     Examples: ubuntu release
       | release | machine_type |
       | xenial  | gcp.pro      |
@@ -480,6 +492,11 @@ Feature: auto-attach retries periodically on failures
       Failed to automatically attach to an Ubuntu Pro subscription
       """
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @machine_types:aws.pro
+    @machine_types:azure.pro
+    @machine_types:gcp.pro
     Examples: ubuntu release
       | release  | machine_type |
       | xenial   | aws.pro      |

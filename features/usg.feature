@@ -45,6 +45,10 @@ Feature: Enable usg on Ubuntu
       """
     And I verify that `usg` is disabled
 
+    # This scenario tests the message for the change from cis to usg.
+    # The message text names Ubuntu 20.04. The test uses release focal
+    # only. It does not need to run on every release.
+    @releases:fixed
     Examples: cis service
       | release | machine_type  |
       | focal   | lxd-container |

@@ -172,6 +172,9 @@ Feature: Fix plan API endpoints
       }
       """
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @machine_types:lxd-container
     Examples: ubuntu release details
       | release  | machine_type  |
       | xenial   | lxd-container |
@@ -761,6 +764,9 @@ Feature: Fix plan API endpoints
       }
       """
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @machine_types:lxd-container
     Examples: ubuntu release details
       | release | machine_type  |
       | focal   | lxd-container |
@@ -1903,6 +1909,9 @@ Feature: Fix plan API endpoints
       }
       """
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @machine_types:lxd-container
     Examples: ubuntu release details
       | release | machine_type  |
       | xenial  | lxd-container |
@@ -2984,6 +2993,9 @@ Feature: Fix plan API endpoints
       }
       """
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @machine_types:lxd-container
     Examples: ubuntu release details
       | release | machine_type  |
       | bionic  | lxd-container |
@@ -3030,6 +3042,9 @@ Feature: Fix plan API endpoints
       """
 
     # TODO: Add resolute lxd-vm once AppArmor ubuntu_pro_esm_cache//ps profile is fixed
+    @releases:lts_supported
+    @releases:lts_esm
+    @machine_types:lxd-container
     Examples: ubuntu release details
       | release  | machine_type |
       | questing | lxd-vm       |

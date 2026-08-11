@@ -14,6 +14,7 @@ Feature: API security/security status tests
       "type": "LivepatchCVEs"
       """
 
+    @releases:fixed
     Examples:
       | release | machine_type |
       | xenial  | lxd-vm       |
@@ -67,11 +68,16 @@ Feature: API security/security status tests
       oval:com.ubuntu.<release>:def:<CVE_ID>:\s+true
       """
 
+    # This test stops at jammy. The test needs a refactor to work on
+    # noble and later releases. Package libgnutls30 is not available on
+    # noble and later releases.
+    @releases:lts_supported
+    @releases:lts_esm
+    @releases:until:lts:jammy
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release | machine_type  | base_version    | CVE_ID      |
       | xenial  | lxd-container | 3.4.10-4ubuntu1 | 39991000000 |
       | bionic  | lxd-container | 3.5.18-1ubuntu1 | 55501000000 |
       | focal   | lxd-container | 3.6.13-2ubuntu1 | 55501000000 |
       | jammy   | lxd-container | 3.7.3-4ubuntu1  | 55501000000 |
-
-# TODO(srunde3): refactor test to work with Noble+. libgnutls30 is not available there.

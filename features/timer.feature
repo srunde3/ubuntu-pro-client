@@ -12,6 +12,9 @@ Feature: Timer for regular background jobs while attached
     When I run `pro detach --assume-yes` with sudo
     Then I verify the `ua-timer` systemd timer is disabled
 
+    @releases:lts_supported
+    @releases:interim
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release  | machine_type  |
       | xenial   | lxd-container |
@@ -87,6 +90,10 @@ Feature: Timer for regular background jobs while attached
       "update_messaging"
       """
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @releases:interim
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release  | machine_type  |
       | xenial   | lxd-container |
@@ -161,6 +168,9 @@ Feature: Timer for regular background jobs while attached
       \"metering\"
       """
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release  | machine_type  |
       | xenial   | lxd-container |

@@ -60,6 +60,16 @@ Feature: Upgrade between releases when uaclient is unattached
       esm-infra +yes +<service_status>
       """
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @releases:interim
+    @machine_types:lxd-container
+    # This skips questing. The AppArmor profile
+    # ubuntu_pro_esm_cache_systemd_detect_virt needs the perfmon
+    # capability in the resolute archive. The system installs the
+    # archive package after the upgrade. Add questing back once the
+    # profile has this fix.
+    @releases:skip:questing
     Examples: ubuntu release
       | release | machine_type  | next_release | prompt | devel_release   | service_status |
       | xenial  | lxd-container | bionic       | lts    |                 | enabled        |
@@ -70,5 +80,3 @@ Feature: Upgrade between releases when uaclient is unattached
       # gains capability perfmon in the resolute archive (archive package installed post-upgrade)
       # | noble    | lxd-container | resolute     | lts    |               | enabled        |
       | noble   | lxd-container | resolute     | normal | --devel-release | n/a            |
-
-# | questing | lxd-container | resolute     | normal |               | n/a            |

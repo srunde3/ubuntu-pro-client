@@ -63,6 +63,7 @@ Feature: CLI cves command
       No fixable CVES found that affect this system
       """
 
+    @releases:fixed
     Examples: ubuntu release
       | release | machine_type  |
       | xenial  | lxd-container |
@@ -129,6 +130,7 @@ Feature: CLI cves command
       nodejs-doc +high +- +CVE-2023-44487
       """
 
+    @releases:fixed
     Examples: ubuntu release
       | release | machine_type  |
       | jammy   | lxd-container |
@@ -143,6 +145,7 @@ Feature: CLI cves command
       Vulnerability data not found for the current Ubuntu release
       """
 
+    @releases:fixed
     Examples: ubuntu release
       | release | machine_type  |
       | xenial  | lxd-container |

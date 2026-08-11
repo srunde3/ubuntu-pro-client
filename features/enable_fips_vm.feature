@@ -124,6 +124,13 @@ Feature: FIPS enablement in lxd VMs
       """
     And I verify that `fips` is disabled
 
+    # FIPS crypto module certification stops at focal. There is no
+    # evidence that certification extends further. This differs from
+    # fips-updates below.
+    @releases:lts_supported
+    @releases:lts_esm
+    @releases:until:lts:focal
+    @machine_types:lxd-vm
     Examples: ubuntu release
       | release | machine_type | fips-apt-source                                | fips-packages                                                                                    |
       | xenial  | lxd-vm       | https://esm.ubuntu.com/fips/ubuntu xenial/main | openssh-server openssh-client strongswan openssh-server-hmac openssh-client-hmac strongswan-hmac |
@@ -221,6 +228,12 @@ Feature: FIPS enablement in lxd VMs
       """
     And I verify that `fips-updates` is disabled
 
+    # FIPS-updates certification extends one release further than plain
+    # fips. It extends through jammy.
+    @releases:lts_supported
+    @releases:lts_esm
+    @releases:until:lts:jammy
+    @machine_types:lxd-vm
     Examples: ubuntu release
       | release | machine_type | fips-packages                                                                                    | fips-regex |
       | xenial  | lxd-vm       | openssh-server openssh-client strongswan openssh-server-hmac openssh-client-hmac strongswan-hmac | fips       |
@@ -286,6 +299,10 @@ Feature: FIPS enablement in lxd VMs
       1
       """
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @releases:until:lts:focal
+    @machine_types:lxd-vm
     Examples: ubuntu release
       | release | machine_type |
       | xenial  | lxd-vm       |
@@ -304,6 +321,10 @@ Feature: FIPS enablement in lxd VMs
       """
     And I verify that `fips` is enabled
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @releases:until:lts:focal
+    @machine_types:lxd-vm
     Examples: ubuntu release
       | release | machine_type |
       | xenial  | lxd-vm       |
@@ -346,6 +367,10 @@ Feature: FIPS enablement in lxd VMs
       livepatch +yes +n/a
       """
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @releases:until:lts:focal
+    @machine_types:lxd-vm
     Examples: ubuntu release
       | release | machine_type |
       | bionic  | lxd-vm       |
@@ -379,6 +404,10 @@ Feature: FIPS enablement in lxd VMs
       FIPS Preview cannot be enabled with Real-time kernel.
       """
 
+    # This is a canary test for the mutual-exclusion mechanism between
+    # fips-preview, livepatch, and realtime-kernel. The test uses
+    # release jammy only. It does not need to run on every release.
+    @releases:fixed
     Examples: ubuntu release
       | release | machine_type |
       | jammy   | lxd-vm       |
@@ -394,6 +423,10 @@ Feature: FIPS enablement in lxd VMs
     And I run `pro enable fips-updates --assume-yes` with sudo
     Then I verify that `fips-updates` is enabled
 
+    # This is a canary test for enabling fips-updates without the
+    # -updates pocket. The test uses release jammy only. It does not
+    # need to run on every release.
+    @releases:fixed
     Examples: ubuntu release
       | release | machine_type |
       | jammy   | lxd-vm       |
@@ -483,6 +516,10 @@ Feature: FIPS enablement in lxd VMs
       fips
       """
 
+    # This is a canary test for the fips-updates access-only mechanism.
+    # It also tests the missing-package mechanism. The test uses release
+    # jammy only. It does not need to run on every release.
+    @releases:fixed
     Examples: ubuntu release
       | release | machine_type |
       | jammy   | lxd-vm       |

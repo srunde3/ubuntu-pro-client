@@ -54,6 +54,10 @@ Feature: ESM legacy service tests
     Then I verify that `esm-infra-legacy` is enabled
     And I verify that `esm-infra` is disabled
 
+    # The contract_token_legacy test fixture is defined against xenial.
+    # This scenario uses release xenial by design. It does not need to
+    # run on every release.
+    @releases:fixed
     Examples: ubuntu release
       | release | machine_type  | infra-pkg |
       | xenial  | lxd-container | hello     |
@@ -106,6 +110,10 @@ Feature: ESM legacy service tests
       Enable services with: pro enable <service>
       """
 
+    # The contract_token_legacy test fixture is defined against xenial.
+    # This scenario uses release xenial by design. It does not need to
+    # run on every release.
+    @releases:fixed
     Examples: ubuntu release
       | release | machine_type  |
       | xenial  | lxd-container |
@@ -151,6 +159,10 @@ Feature: ESM legacy service tests
       ros-updates      +yes       +yes       +no           +All Updates for the Robot Operating System
       """
 
+    # The contract_token_legacy test fixture is defined against xenial.
+    # This scenario uses release xenial by design. It does not need to
+    # run on every release.
+    @releases:fixed
     Examples: ubuntu release
       | release | machine_type  |
       | xenial  | lxd-container |

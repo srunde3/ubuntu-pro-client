@@ -5,6 +5,10 @@ Feature: Pro Install and Uninstall related tests
     When I delete the file `/run/cloud-init/instance-data.json`
     Then I verify that running `dpkg-reconfigure <pkg_name>` `with sudo` exits `0`
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @releases:interim
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release  | machine_type  | pkg_name               |
       | xenial   | lxd-container | ubuntu-advantage-tools |
@@ -38,6 +42,12 @@ Feature: Pro Install and Uninstall related tests
     And I verify that no files exist matching `/etc/apt/trusted.gpg.d/ubuntu-pro-*`
     And I verify that no files exist matching `/etc/apt/preferences.d/ubuntu-*`
 
+    # This test uses the pre-deb822 apt sources format. The deb822
+    # variant below takes over from noble onward.
+    @releases:lts_supported
+    @releases:lts_esm
+    @releases:until:lts:jammy
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release | machine_type  |
       | xenial  | lxd-container |
@@ -67,6 +77,10 @@ Feature: Pro Install and Uninstall related tests
     And I verify that no files exist matching `/etc/apt/trusted.gpg.d/ubuntu-pro-*`
     And I verify that no files exist matching `/etc/apt/preferences.d/ubuntu-*`
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @releases:since:lts:noble
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release  | machine_type  |
       | noble    | lxd-container |
@@ -103,6 +117,9 @@ Feature: Pro Install and Uninstall related tests
       """
     Then I verify that running `dpkg-reconfigure <pkg_name>` `with sudo` exits `0`
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release  | machine_type  | pkg_name               |
       | xenial   | lxd-container | ubuntu-advantage-tools |
@@ -119,26 +136,38 @@ Feature: Pro Install and Uninstall related tests
     When I install transition package ubuntu-advantage-tools
     Then I verify that `ubuntu-pro-client` is installed
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release | machine_type  |
       | xenial  | lxd-container |
       | bionic  | lxd-container |
       | focal   | lxd-container |
 
+  # This scenario differs from the "Package ubuntu-advantage-tools now
+  # install" scenario above, despite the similar name. This scenario
+  # tests ubuntu-pro-auto-attach on aws.pro. Before this fix, it shared
+  # the exact same name as the other scenario by accident. This fix
+  # also corrects a duplicated jammy|aws.pro row. The row most likely
+  # was meant to be noble|aws.pro.
   @skip_local_environment
   @skip_prebuilt_environment
-  Scenario Outline: Package ubuntu-advantage-tools now install
+  Scenario Outline: Package ubuntu-advantage-tools now installs ubuntu-pro-auto-attach on aws.pro
     Given a `<release>` `<machine_type>` machine
     When I install transition package ubuntu-advantage-tools
     Then I verify that `ubuntu-pro-auto-attach` is installed
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @machine_types:aws.pro
     Examples: ubuntu release
       | release | machine_type |
       | xenial  | aws.pro      |
       | bionic  | aws.pro      |
       | focal   | aws.pro      |
       | jammy   | aws.pro      |
-      | jammy   | aws.pro      |
+      | noble   | aws.pro      |
 
   @skip_local_environment
   @skip_prebuilt_environment
@@ -153,6 +182,10 @@ Feature: Pro Install and Uninstall related tests
     When I run `cloud-init status --wait` with sudo
     Then I verify that `ubuntu-advantage-tools` is installed
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @releases:interim
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release  | machine_type  | user_data_field  |
       | xenial   | lxd-container | ubuntu-advantage |
@@ -179,6 +212,10 @@ Feature: Pro Install and Uninstall related tests
     # package is ubuntu-pro-client, whose postinst delegates to
     # postinst-migrations.sh and has no public-token recreation step, so this
     # upgrade-migration behavior does not apply.
+    @releases:lts_supported
+    @releases:lts_esm
+    @releases:until:lts:jammy
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release | machine_type  |
       | xenial  | lxd-container |

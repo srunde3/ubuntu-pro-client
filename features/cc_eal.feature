@@ -23,6 +23,10 @@ Feature: Enable cc-eal on Ubuntu
       Please follow instructions in /usr/share/doc/ubuntu-commoncriteria/README to configure EAL2
       """
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @releases:interim
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release | machine_type  |
       | xenial  | lxd-container |
@@ -43,6 +47,7 @@ Feature: Enable cc-eal on Ubuntu
       """
     Then I verify that running `apt-get install ubuntu-commoncriteria` `with sudo` exits `0`
 
+    @releases:fixed
     Examples: ubuntu release
       | release | machine_type  |
       | xenial  | lxd-container |
@@ -64,6 +69,10 @@ Feature: Enable cc-eal on Ubuntu
       Could not enable CC EAL2.
       """
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @releases:interim
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release  | machine_type  | version   | full_name        |
       | focal    | lxd-container | 20.04 LTS | Focal Fossa      |

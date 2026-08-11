@@ -45,9 +45,19 @@ Feature: Ensure network errors are handled gracefully across various services
       """
     Then the machine is unattached
 
-    Examples: ubuntu release
+    # This test uses release xenial only, by design. It also checks this
+    # behavior on a legacy release. The newest LTS release is tested below.
+    # It does not need to run on every release.
+    @releases:fixed
+    Examples: xenial
+      | release | machine_type  |
+      | xenial  | lxd-container |
+
+    # This table always uses the newest LTS release. Update the row in
+    # place when a new LTS release ships. Do not add another row.
+    @releases:latest_lts
+    Examples: latest lts
       | release  | machine_type  |
-      | xenial   | lxd-container |
       | resolute | lxd-container |
 
   Scenario Outline: Network errors for attaching contract token are handled gracefully
@@ -62,9 +72,19 @@ Feature: Ensure network errors are handled gracefully across various services
       """
     Then the machine is unattached
 
-    Examples: ubuntu release
+    # This test uses release xenial only, by design. It also checks this
+    # behavior on a legacy release. The newest LTS release is tested below.
+    # It does not need to run on every release.
+    @releases:fixed
+    Examples: xenial
+      | release | machine_type  |
+      | xenial  | lxd-container |
+
+    # This table always uses the newest LTS release. Update the row in
+    # place when a new LTS release ships. Do not add another row.
+    @releases:latest_lts
+    Examples: latest lts
       | release  | machine_type  |
-      | xenial   | lxd-container |
       | resolute | lxd-container |
 
   Scenario Outline: Network errors for enabling Realtime kernel and Livepatch are handled gracefully
@@ -82,12 +102,28 @@ Feature: Ensure network errors are handled gracefully across various services
       """
     Then I verify that `<service>` is disabled
 
-    # Realtime kernel is not supported on LXD containers so we must use a VM
-    # Beginning in Resolute, realtime-kernel is in the archives and is no
-    # longer managed by Pro.
-    Examples: ubuntu release
-      | release  | machine_type  | service         |
-      | xenial   | lxd-vm        | realtime-kernel |
-      | noble    | lxd-vm        | realtime-kernel |
-      | xenial   | lxd-container | livepatch       |
-      | resolute | lxd-container | livepatch       |
+    # Realtime kernel does not work on LXD containers. This test uses a VM
+    # instead. From release resolute onward, realtime-kernel is in the
+    # archives. Pro no longer manages it there. This coverage stays fixed
+    # at releases xenial and noble, by design. It does not need to run on
+    # every release.
+    @releases:fixed
+    Examples: realtime-kernel
+      | release | machine_type | service         |
+      | xenial  | lxd-vm       | realtime-kernel |
+      | noble   | lxd-vm       | realtime-kernel |
+
+    # This test uses release xenial only, by design. It also checks this
+    # behavior on a legacy release. The newest LTS release is tested below.
+    # It does not need to run on every release.
+    @releases:fixed
+    Examples: livepatch xenial
+      | release | machine_type  | service   |
+      | xenial  | lxd-container | livepatch |
+
+    # This table always uses the newest LTS release. Update the row in
+    # place when a new LTS release ships. Do not add another row.
+    @releases:latest_lts
+    Examples: livepatch latest lts
+      | release  | machine_type  | service   |
+      | resolute | lxd-container | livepatch |

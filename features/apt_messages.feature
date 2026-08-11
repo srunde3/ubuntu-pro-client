@@ -73,6 +73,9 @@ Feature: APT Messages
       esm-apps
       """
 
+    # This scenario uses release xenial only, by design.
+    # It does not need to run on every release.
+    @releases:fixed
     Examples: ubuntu release
       | release | machine_type  | standard-pkg              | infra-pkg                                            | apps-pkg     |
       | xenial  | lxd-container | apparmor=2.10.95-0ubuntu2 | curl=7.47.0-1ubuntu2 libcurl3-gnutls=7.47.0-1ubuntu2 | hello=2.10-1 |
@@ -130,6 +133,9 @@ Feature: APT Messages
       0 upgraded, 0 newly installed, 0 to remove and 0 not upgraded\.
       """
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release | machine_type  | ad_message                                                                                |
       | xenial  | lxd-container | Learn more about Ubuntu Pro for <version>\\.04 at https:\\/\\/ubuntu\\.com\\/<version>-04 |
@@ -189,16 +195,21 @@ Feature: APT Messages
       0 upgraded, 0 newly installed, 0 to remove and \d+ not upgraded\.
       """
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @machine_types:lxd-container
+    @machine_types:wsl
+    # This skips noble. Noble needs a package in esm with a higher version
+    # than the version already in noble. The package hello does not meet
+    # this need on noble.
+    @releases:skip:noble
+    # This skips resolute. Packages are not ready yet.
+    @releases:skip:resolute
     Examples: ubuntu release
       | release | machine_type  | package | more_msg                | learn_more_msg                                        |
-      # TODO add noble when there is a package available in esm with a higher version than in noble (not true of hello)
-      # | noble   | lxd-container | hello   | another security update | Learn more about Ubuntu Pro at https://ubuntu.com/pro |
       | jammy   | lxd-container | hello   | another security update | Learn more about Ubuntu Pro at https://ubuntu.com/pro |
       | jammy   | wsl           | hello   | another security update | Learn more about Ubuntu Pro at https://ubuntu.com/pro |
 
-  # TODO add resolute when packages are ready
-  # | resolute| lxd-container | hello   | another security update | Learn more about Ubuntu Pro at https://ubuntu.com/pro |
-  # | resolute| wsl           | hello   | another security update | Learn more about Ubuntu Pro at https://ubuntu.com/pro |
   @uses.config.contract_token
   Scenario Outline: APT News
     Given a `<release>` `<machine_type>` machine with ubuntu-advantage-tools installed
@@ -649,6 +660,18 @@ Feature: APT Messages
       "*Your Ubuntu Pro subscription has EXPIRED*\nRenew your subscription at https://ubuntu.com/pro/dashboard"
       """
 
+    # This scenario shares its name with the "subset for Questing+" node
+    # below. Both nodes must carry the same tags. Together, their rows
+    # cover every required release and machine_type pair.
+    @releases:lts_supported
+    @releases:lts_esm
+    @machine_types:lxd-container
+    @machine_types:lxd-vm
+    # This skips resolute with lxd-vm. The AppArmor profile
+    # ubuntu_pro_esm_cache_systemd_detect_virt needs the perfmon capability
+    # on resolute. systemd-detect-virt needs perfmon at boot. Add resolute
+    # with lxd-vm back once the profile has this fix.
+    @releases:skip:resolute+lxd-vm
     Examples: ubuntu release
       | release | machine_type  |
       | xenial  | lxd-container |
@@ -726,15 +749,21 @@ Feature: APT Messages
       (Calculating upgrade...\n)+0 upgraded, 0 newly installed, 0 to remove and 0 not upgraded.
       """
 
+    # This is the subset for Questing and later releases. This scenario
+    # shares its name with the node above. Both nodes must carry the same
+    # tags. Together, their rows cover every required release and
+    # machine_type pair.
+    @releases:lts_supported
+    @releases:lts_esm
+    @machine_types:lxd-container
+    @machine_types:lxd-vm
+    @releases:skip:resolute+lxd-vm
     Examples: ubuntu release
       | release  | machine_type  |
       | questing | lxd-container |
       | questing | lxd-vm        |
       | resolute | lxd-container |
 
-  # TODO: re-enable once AppArmor profile ubuntu_pro_esm_cache_systemd_detect_virt
-  # gains capability perfmon on resolute (needed by systemd-detect-virt at boot)
-  # | resolute | lxd-vm        |
   Scenario Outline: Cloud and series-specific URLs
     Given a `<release>` `<machine_type>` machine with ubuntu-advantage-tools installed
     When I apt install `ansible`
@@ -747,6 +776,11 @@ Feature: APT Messages
       <msg>
       """
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @machine_types:aws.generic
+    @machine_types:azure.generic
+    @machine_types:gcp.generic
     Examples: release-per-machine-type
       | release | machine_type  | msg                                                                              |
       | xenial  | aws.generic   | Learn more about Ubuntu Pro for 16.04 at https://ubuntu.com/16-04                |
@@ -1155,6 +1189,14 @@ Feature: APT Messages
       0 upgraded, 0 newly installed, 0 to remove and 1 not upgraded.
       """
 
+    # This scenario shares its name with the empty-table node below. That
+    # node holds the newer "Summary:"-style assertions and is not yet
+    # filled in. Both nodes must carry the same tags. See that node's
+    # comment for the reason to skip resolute.
+    @releases:lts_supported
+    @releases:lts_esm
+    @machine_types:lxd-container
+    @releases:skip:resolute
     Examples: ubuntu release
       | release | machine_type  | wrong_release | package         | installed_version |
       | xenial  | lxd-container | bionic        | libcurl3-gnutls | 7.47.0-1ubuntu2   |
@@ -1561,14 +1603,19 @@ Feature: APT Messages
         Upgrading: 0, Installing: 0, Removing: 0, Not Upgrading: 1
       """
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @machine_types:lxd-container
+    # This skips resolute. The fix needs a package with three properties.
+    # The package must exist on resolute and on at least one other release,
+    # for wrong_release coverage. The package must have an installable
+    # exact version on resolute, for the package selector. The package must
+    # have a newer candidate on resolute, so apt upgrade reports it as held
+    # in "Not upgrading". Add resolute back once such a package exists.
+    @releases:skip:resolute
     Examples: ubuntu release
       | release | machine_type | wrong_release | package | installed_version |
 
-  # BLOCKED: re-enable resolute once we identify a package that:
-  # - exists on resolute and on at least one different Ubuntu release for wrong_release coverage
-  # - has an installable exact version on resolute for the package selector
-  # - also has a newer candidate on resolute so apt upgrade reports it as held in "Not upgrading"
-  # | resolute | lxd-container | noble         | ... | ... |
   Scenario Outline: APT Hook does not error when run as non-root
     Given a `<release>` `<machine_type>` machine with ubuntu-advantage-tools installed
     When I run `apt upgrade --simulate` as non-root
@@ -1577,6 +1624,10 @@ Feature: APT Messages
       WARNING: apt does not have a stable CLI interface. Use with caution in scripts.
       """
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @releases:interim
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release  | machine_type  |
       | xenial   | lxd-container |
@@ -1632,6 +1683,8 @@ Feature: APT Messages
         Upgrading: 0, Installing: 0, Removing: 0, Not Upgrading: 0
       """
 
+    @releases:interim
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release  | machine_type  |
       | questing | lxd-container |

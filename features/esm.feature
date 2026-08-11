@@ -26,6 +26,9 @@ Feature: ESM Resource Specificities
       # deb https://esm.ubuntu.com/infra/ubuntu <release>-infra-updates main
       """
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release | machine_type  |
       | xenial  | lxd-container |
@@ -59,6 +62,9 @@ Feature: ESM Resource Specificities
       <release>-infra-updates
       """
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release  | machine_type  |
       | noble    | lxd-container |
@@ -94,6 +100,9 @@ Feature: ESM Resource Specificities
       machine snapshot.apps-updates.esm.ubuntu.com/apps/ubuntu/ login bearer password m
       """
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release  | machine_type  |
       | xenial   | lxd-container |

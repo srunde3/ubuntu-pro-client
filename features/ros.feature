@@ -113,6 +113,10 @@ Feature: Enable ROS on ubuntu
       """
     And the machine is unattached
 
+    # This test uses release xenial and release bionic only. ROS ESM is
+    # offered only for these releases. ROS1 predates newer LTS releases.
+    # The test does not need to run on every release.
+    @releases:fixed
     Examples: ubuntu release
       | release | machine_type  | ros-security-source                                    | ros-updates-source                                            |
       | xenial  | lxd-container | https://esm.ubuntu.com/ros/ubuntu xenial-security/main | https://esm.ubuntu.com/ros-updates/ubuntu xenial-updates/main |

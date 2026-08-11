@@ -10,6 +10,10 @@ Feature: Pro Upgrade Daemon only runs in environments where necessary
       Unit ubuntu-advantage-cloud-id-shim.service could not be found.
       """
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @releases:interim
+    @machine_types:lxd-container
     Examples: version
       | release  | machine_type  |
       | bionic   | lxd-container |
@@ -52,6 +56,11 @@ Feature: Pro Upgrade Daemon only runs in environments where necessary
       lxd
       """
 
+    # This scenario complements the scenario above named "cloud-id-shim
+    # service is not installed on anything other than xenial." Xenial
+    # is the only release where cloud-id-shim exists. The test uses
+    # release xenial only. It does not need to run on every release.
+    @releases:fixed
     Examples: version
       | release | machine_type  |
       | xenial  | lxd-container |
@@ -199,6 +208,9 @@ Feature: Pro Upgrade Daemon only runs in environments where necessary
       Active: inactive \(dead\)
       """
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @machine_types:gcp.generic
     Examples: version
       | release | machine_type | pkg_name               |
       | xenial  | gcp.generic  | ubuntu-advantage-tools |
@@ -266,6 +278,9 @@ Feature: Pro Upgrade Daemon only runs in environments where necessary
       inactive
       """
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @machine_types:azure.generic
     Examples: version
       | release | machine_type  |
       | xenial  | azure.generic |
@@ -292,6 +307,9 @@ Feature: Pro Upgrade Daemon only runs in environments where necessary
       daemon ending
       """
 
+    @releases:interim
+    @machine_types:azure.generic
+    @machine_types:gcp.generic
     Examples: version
       | release  | machine_type  |
       | questing | azure.generic |
@@ -316,6 +334,10 @@ Feature: Pro Upgrade Daemon only runs in environments where necessary
       \s*Condition: start condition (failed|unmet).*
       """
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @releases:interim
+    @machine_types:aws.generic
     Examples: version
       | release  | machine_type |
       | xenial   | aws.generic  |
@@ -325,7 +347,12 @@ Feature: Pro Upgrade Daemon only runs in environments where necessary
       | noble    | aws.generic  |
       | questing | aws.generic  |
 
-  Scenario Outline: daemon does not start when not on gcpgeneric or azuregeneric
+  # This scenario differs from the "not on gcpgeneric or azuregeneric"
+  # scenario above, despite the similar name. This scenario tests
+  # cloud-pro machines: aws.pro, azure.pro, and gcp.pro. It uses a
+  # different setup and different checks. Before this fix, it shared
+  # the exact same name as the other scenario by accident.
+  Scenario Outline: daemon does not start when not on gcppro, azurepro, or awspro
     Given a `<release>` `<machine_type>` machine with ubuntu-advantage-tools installed
     When I create the file `/etc/ubuntu-advantage/uaclient.conf` with the following:
       """
@@ -362,6 +389,11 @@ Feature: Pro Upgrade Daemon only runs in environments where necessary
       daemon starting
       """
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @machine_types:aws.pro
+    @machine_types:azure.pro
+    @machine_types:gcp.pro
     Examples: version
       | release | machine_type |
       | xenial  | aws.pro      |
@@ -405,6 +437,9 @@ Feature: Pro Upgrade Daemon only runs in environments where necessary
       daemon ending
       """
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @machine_types:gcp.generic
     Examples: version
       | release | machine_type |
       | bionic  | gcp.generic  |

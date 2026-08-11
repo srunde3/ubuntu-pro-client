@@ -39,6 +39,9 @@ Feature: One time pro subscription related tests
       """
     And the machine is unattached
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release  | machine_type  | onlyseries | onlyrelease | onlyseries_codename |
       | xenial   | lxd-container | trusty     | 14.04 LTS   | Trusty Tahr         |
@@ -112,6 +115,9 @@ Feature: One time pro subscription related tests
       Limited to Ubuntu <onlyrelease> (<onlyseries_codename>) and previous releases
       """
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release  | machine_type  | onlyseries | onlyrelease | onlyseries_codename |
       | xenial   | lxd-container | xenial     | 16.04 LTS   | Xenial Xerus        |
@@ -186,6 +192,9 @@ Feature: One time pro subscription related tests
     When I attach `contract_token` with sudo
     Then the machine is attached
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release  | machine_type  |
       | xenial   | lxd-container |

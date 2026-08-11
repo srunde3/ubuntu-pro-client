@@ -29,6 +29,15 @@ Feature: Pro supports multiple languages
       This machine is NOT attached to an Ubuntu Pro subscription.
       """
 
+    # This scenario shares its name with the questing-only node below.
+    # That node tests the non-LTS translation string. Both nodes must
+    # carry the same tags. This test excludes xenial on purpose. The
+    # scenario "Translation doesn't error when python thinks it's ascii
+    # only" below covers xenial separately.
+    @releases:lts_supported
+    @releases:lts_esm
+    @releases:interim
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release  | machine_type  |
       | bionic   | lxd-container |
@@ -62,6 +71,10 @@ Feature: Pro supports multiple languages
       Ubuntu Pro is not available for non-LTS releases.
       """
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @releases:interim
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release  | machine_type  |
       | questing | lxd-container |
@@ -81,6 +94,10 @@ Feature: Pro supports multiple languages
       This machine is NOT attached to an Ubuntu Pro subscription.
       """
 
+    # This test uses release xenial only. See the comment above.
+    # Xenial is the only release where the test environment triggers
+    # this bug. It does not need to run on every release.
+    @releases:fixed
     Examples: ubuntu release
       | release | machine_type  |
       | xenial  | lxd-container |
@@ -100,6 +117,9 @@ Feature: Pro supports multiple languages
       1 atualização de segurança do esm-apps
       """
 
+    # This is a canary test for the apt-hook i18n mechanism. The test
+    # does not need to run on every release.
+    @releases:fixed
     Examples: ubuntu release
       | release | machine_type  |
       | focal   | lxd-container |
@@ -221,6 +241,10 @@ Feature: Pro supports multiple languages
     When I run `pro --version` with sudo
     Then I will see the uaclient version on stdout
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @releases:interim
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release  | machine_type  |
       | bionic   | lxd-container |
@@ -280,6 +304,10 @@ Feature: Pro supports multiple languages
       Valid until: Unknown/Expired
       """
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @releases:interim
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release  | machine_type  |
       | bionic   | lxd-container |

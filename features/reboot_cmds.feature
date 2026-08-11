@@ -39,6 +39,10 @@ Feature: Reboot Commands
       *** <new_version> 1001
       """
 
+    # This is a regression test. It uses hardcoded strongswan and FIPS
+    # package versions for focal. The test uses release focal only. It
+    # does not need to run on every release.
+    @releases:fixed
     Examples: ubuntu release
       | release | machine_type  | old_version    | new_version               |
       | focal   | lxd-container | 5.8.2-1ubuntu3 | 5.8.2-1ubuntu3.fips.3.1.2 |

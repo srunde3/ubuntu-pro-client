@@ -26,6 +26,9 @@ Feature: ESM cache behavior
       _usr_lib_ubuntu-advantage_esm_cache
       """
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release  | machine_type  |
       | bionic   | lxd-container |
@@ -63,6 +66,10 @@ Feature: ESM cache behavior
       _usr_lib_ubuntu-advantage_esm_cache
       """
 
+    # This test uses release xenial only. It exists to cover xenial by
+    # itself. The scenario must run with the tag @no_gh. The test does
+    # not need to run on every release.
+    @releases:fixed
     Examples: ubuntu release
       | release | machine_type  |
       | xenial  | lxd-container |

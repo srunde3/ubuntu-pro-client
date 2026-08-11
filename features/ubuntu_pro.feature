@@ -45,6 +45,10 @@ Feature: Command behaviour when auto-attached in an ubuntu PRO image
       .*CONNECT metadata.*
       """
 
+    # This test uses release xenial, release bionic, and release focal
+    # only. These releases predate the cis to usg entitlement rename in
+    # jammy. The test does not need to run on every release.
+    @releases:fixed
     Examples: ubuntu release
       | release | machine_type | fips-s   | cc-eal-s | cis-s    | livepatch-s | lp-desc                                    | cis_or_usg |
       | xenial  | aws.pro      | disabled | disabled | disabled | enabled     | Canonical Livepatch service                | cis        |

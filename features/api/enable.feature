@@ -145,6 +145,10 @@ Feature: u.pro.services.enable
       ]
       """
 
+    # This is a canary test for the enable API. It checks the error,
+    # access-only, and required-services mechanisms. The test does not
+    # need to run on every release.
+    @releases:fixed
     Examples:
       | release | machine_type  |
       | xenial  | lxd-container |
@@ -166,6 +170,10 @@ Feature: u.pro.services.enable
       ]
       """
 
+    @releases:lts_supported
+    @releases:interim
+    @releases:since:lts:noble
+    @machine_types:lxd-container
     Examples:
       | release  | machine_type  |
       | noble    | lxd-container |
@@ -226,6 +234,10 @@ Feature: u.pro.services.enable
       \s*}
       """
 
+    # This is a canary test for the livepatch and realtime-kernel
+    # variant-switching mechanism. The test does not need to run on
+    # every release.
+    @releases:fixed
     Examples:
       | release | machine_type |
       | jammy   | lxd-vm       |
@@ -257,6 +269,9 @@ Feature: u.pro.services.enable
       {"_schema_version": "v1", "data": {"attributes": {"disabled": [], "enabled": ["esm-apps", "ros", "ros-updates"], "messages": [], "reboot_required": false}, "meta": {"environment_vars": []}, "type": "EnableService"}, "errors": [], "result": "success"
       """
 
+    # This is a canary test for the --show-progress step-reporting
+    # mechanism. The test does not need to run on every release.
+    @releases:fixed
     Examples:
       | release | machine_type  |
       | xenial  | lxd-container |
@@ -295,6 +310,9 @@ Feature: u.pro.services.enable
       \s*}
       """
 
+    # This is a canary test for the --show-progress mechanism on vm
+    # services. The test does not need to run on every release.
+    @releases:fixed
     Examples:
       | release | machine_type |
       | jammy   | lxd-vm       |

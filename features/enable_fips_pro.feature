@@ -45,6 +45,14 @@ Feature: FIPS enablement in PRO cloud based machines
       1
       """
 
+    # FIPS cloud images are offered from xenial through focal. They are
+    # not offered from jammy onward. See the header comment for
+    # aws.pro-fips and gcp.pro-fips in features/machine_types.yaml.
+    @releases:lts_esm
+    @releases:until:lts:focal
+    @machine_types:aws.pro
+    @machine_types:azure.pro
+    @machine_types:gcp.pro
     Examples: ubuntu release
       | release | machine_type | fips-name    | fips-service | package-name      | kernel-name | fips-apt-source                                |
       | bionic  | aws.pro      | FIPS         | fips         | ubuntu-aws-fips   | aws-fips    | https://esm.ubuntu.com/fips/ubuntu bionic/main |

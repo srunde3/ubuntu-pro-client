@@ -93,9 +93,20 @@ Feature: LXD Pro features
       Successfully processed your pro configuration.
       """
 
-    Examples:
+    # This scenario uses release xenial by design. It exercises this
+    # config flag on a legacy release too. The node below covers the
+    # newest LTS release. It does not need to run on every release.
+    @releases:fixed
+    Examples: xenial
+      | release | machine_type  |
+      | xenial  | lxd-container |
+
+    # Keep this row up to date with the newest LTS release. When a new
+    # LTS release ships, update the row in place. Do not add another
+    # row.
+    @releases:latest_lts
+    Examples: latest lts
       | release  | machine_type  |
-      | xenial   | lxd-container |
       | resolute | lxd-container |
 
   Scenario Outline: LXD guest auto-attach behaves reasonably when lxd doesn't support it
@@ -145,13 +156,17 @@ Feature: LXD Pro features
       The running version of LXD does not support guest auto attach
       """
 
+    @releases:lts_supported
+    @machine_types:lxd-vm
+    # This skips resolute. The AppArmor profile
+    # ubuntu_pro_esm_cache_systemd_detect_virt needs the perfmon
+    # capability on resolute. systemd-detect-virt needs perfmon at boot.
+    # Add resolute back once the profile has this fix.
+    @releases:skip:resolute
     Examples:
       | release | machine_type | guest_release |
       | jammy   | lxd-vm       | jammy         |
 
-  # TODO: re-enable once AppArmor profile ubuntu_pro_esm_cache_systemd_detect_virt
-  # gains capability perfmon on resolute (needed by systemd-detect-virt at boot)
-  # | resolute | lxd-vm | resolute |
   Scenario Outline: LXD guest auto-attach
     Given a `<release>` `<machine_type>` machine with ubuntu-advantage-tools installed
     # Ensure default is "off" and setup lxd
@@ -232,10 +247,13 @@ Feature: LXD Pro features
       The LXD host does not allow guest auto attach
       """
 
+    @releases:lts_supported
+    @machine_types:lxd-vm
+    # This skips resolute. The AppArmor profile
+    # ubuntu_pro_esm_cache_systemd_detect_virt needs the perfmon
+    # capability on resolute. systemd-detect-virt needs perfmon at boot.
+    # Add resolute back once the profile has this fix.
+    @releases:skip:resolute
     Examples:
       | release | machine_type | guest_release |
       | jammy   | lxd-vm       | jammy         |
-
-# TODO: re-enable once AppArmor profile ubuntu_pro_esm_cache_systemd_detect_virt
-# gains capability perfmon on resolute (needed by systemd-detect-virt at boot)
-# | resolute | lxd-vm | resolute |

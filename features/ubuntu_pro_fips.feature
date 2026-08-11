@@ -140,6 +140,11 @@ Feature: Command behaviour when auto-attached in an ubuntu PRO fips image
       FIPS support requires system reboot to complete configuration.
       """
 
+    # This test uses release xenial, release bionic, and release focal
+    # only. Each release has its own FIPS module certification, kernel
+    # flavor, and package set. The test does not need to run on every
+    # release.
+    @releases:fixed
     Examples: ubuntu release
       | release | machine_type   | infra-pkg | apps-pkg | fips-kernel-version | fips-meta         | fips-packages                                                                                    |
       | xenial  | azure.pro-fips | libkrad0  | jq       | fips                | ubuntu-fips       | openssh-server openssh-client strongswan openssh-server-hmac openssh-client-hmac strongswan-hmac |

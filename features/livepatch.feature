@@ -35,15 +35,20 @@ Feature: Livepatch
       Could not enable Livepatch.
       """
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @machine_types:lxd-vm
+    # This skips resolute. The AppArmor profile
+    # ubuntu_pro_esm_cache_systemd_detect_virt needs the perfmon capability
+    # on resolute. systemd-detect-virt needs perfmon at boot. Add resolute
+    # back once the profile has this fix.
+    @releases:skip:resolute
     Examples: ubuntu release
       | release | machine_type | livepatch_status |
       | xenial  | lxd-vm       | warning          |
       | bionic  | lxd-vm       | enabled          |
       | noble   | lxd-vm       | enabled          |
 
-  # TODO: re-enable once AppArmor profile ubuntu_pro_esm_cache_systemd_detect_virt
-  # gains capability perfmon on resolute (needed by systemd-detect-virt at boot)
-  # | resolute | lxd-vm       | enabled          |
   Scenario Outline: Unattached livepatch status shows warning when on unsupported kernel
     Given a `<release>` `<machine_type>` machine with ubuntu-advantage-tools installed
     When I change config key `livepatch_url` to use value `<livepatch_url>`
@@ -77,6 +82,10 @@ Feature: Livepatch
       Kernels covered by livepatch are listed here: https://ubuntu.com/security/livepatch/docs/kernels
       """
 
+    # This test is a canary for the kernel-support cache mechanism. It
+    # checks the prod URL and the staging URL. One release is enough. It
+    # does not need to run on every release.
+    @releases:fixed
     Examples: ubuntu release
       | release | machine_type | livepatch_url                           |
       | focal   | lxd-vm       | https://livepatch.canonical.com         |
@@ -126,6 +135,9 @@ Feature: Livepatch
       livepatch +yes +enabled +Canonical Livepatch service
       """
 
+    # This test is a canary for the unsupported-kernel warning mechanism.
+    # One release is enough. It does not need to run on every release.
+    @releases:fixed
     Examples: ubuntu release
       | release | machine_type |
       | focal   | lxd-vm       |
@@ -165,6 +177,10 @@ Feature: Livepatch
       Please upgrade the kernel with apt and reboot for continued livepatch coverage.
       """
 
+    # This test is a canary for the end-of-livepatch-window and
+    # kernel-upgrade mechanism. One release is enough. It does not need to
+    # run on every release.
+    @releases:fixed
     Examples: ubuntu release
       | release | machine_type | old_kernel_version |
       | focal   | gcp.generic  | 5.4.0-28-generic   |
@@ -193,6 +209,8 @@ Feature: Livepatch
       livepatch +yes +n/a +Canonical Livepatch service
       """
 
+    @releases:interim
+    @machine_types:lxd-vm
     Examples: ubuntu release
       | release  | machine_type | pretty_name             |
       | questing | lxd-vm       | 25.10 (Questing Quokka) |
@@ -210,6 +228,7 @@ Feature: Livepatch
     When I run `pro status` with sudo
     Then I verify that `livepatch` is enabled
 
+    @releases:latest_lts
     Examples: ubuntu release
       | release | machine_type | release_num |
       | jammy   | lxd-vm       | 22.04       |
@@ -247,6 +266,9 @@ Feature: Livepatch
       core22
       """
 
+    # This test is a canary for the snapd-as-a-snap install mechanism. One
+    # release is enough. It does not need to run on every release.
+    @releases:fixed
     Examples: ubuntu release
       | release | machine_type |
       | xenial  | lxd-vm       |
@@ -310,6 +332,10 @@ Feature: Livepatch
       }
       """
 
+    # This test is a canary for the livepatch and fips mutual-exclusion
+    # mechanism. One release is enough. It does not need to run on every
+    # release.
+    @releases:fixed
     Examples:
       | release | machine_type |
       | bionic  | lxd-vm       |
@@ -341,6 +367,9 @@ Feature: Livepatch
       Could not enable Livepatch.
       """
 
+    # This test is a canary for the snapd-install-failure mechanism. It
+    # does not need to run on every release.
+    @releases:fixed
     Examples: ubuntu release
       | release | machine_type |
       | xenial  | lxd-vm       |
@@ -366,6 +395,10 @@ Feature: Livepatch
       sudo: canonical-livepatch: command not found
       """
 
+    # This test is a canary for the wsl and systemd-service auto-attach
+    # interaction. One release is enough. It does not need to run on every
+    # release.
+    @releases:fixed
     Examples: ubuntu release
       | release | machine_type |
       | jammy   | wsl          |

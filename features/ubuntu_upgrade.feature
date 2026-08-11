@@ -46,6 +46,16 @@ Feature: Upgrade between releases when uaclient is attached
       This machine is now detached.
       """
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @releases:interim
+    @machine_types:lxd-container
+    # This skips questing. The AppArmor profile
+    # ubuntu_pro_esm_cache_systemd_detect_virt needs the perfmon
+    # capability in the resolute archive. The test installs this archive
+    # package after the upgrade. Add questing back once the profile has
+    # this fix.
+    @releases:skip:questing
     Examples: ubuntu release
       | release | machine_type  | next_release | prompt | devel_release   | service1  | service1_status | service2 | service2_status | before_cmd     |
       | xenial  | lxd-container | bionic       | lts    |                 | esm-infra | enabled         | esm-apps | enabled         | true           |
@@ -55,9 +65,6 @@ Feature: Upgrade between releases when uaclient is attached
       | jammy   | lxd-container | noble        | lts    |                 | esm-infra | enabled         | esm-apps | enabled         | true           |
       | noble   | lxd-container | resolute     | normal | --devel-release | esm-infra | n/a             | esm-apps | n/a             | true           |
 
-  # TODO: re-enable once AppArmor profile ubuntu_pro_esm_cache_systemd_detect_virt
-  # gains capability perfmon in the resolute archive (archive package installed post-upgrade)
-  # | questing | lxd-container | resolute     | normal |               | esm-infra | n/a             | esm-apps | n/a             | true           |
   @slow
   @upgrade
   Scenario Outline: Attached FIPS upgrade across LTS releases
@@ -123,6 +130,10 @@ Feature: Upgrade between releases when uaclient is attached
       1
       """
 
+    # This scenario uses release xenial by design. FIPS module
+    # certification and kernel flavor are specific to each release. It
+    # does not need to run on every release.
+    @releases:fixed
     Examples: ubuntu release
       | release | machine_type | next_release | fips-service | fips-name    | source-file         |
       | xenial  | lxd-vm       | bionic       | fips         | FIPS         | ubuntu-fips         |
@@ -206,6 +217,9 @@ Feature: Upgrade between releases when uaclient is attached
       """
     And the machine is unattached
 
+    # This scenario uses the xenial, bionic, and focal upgrade chain by
+    # design. It does not need to run on every release.
+    @releases:fixed
     Examples: ubuntu release
       | release | machine_type  | next_release | onlyseries |
       | xenial  | lxd-container | bionic       | xenial     |
@@ -262,6 +276,10 @@ Feature: Upgrade between releases when uaclient is attached
       xenial-infra-legacy
       """
 
+    # The contract_token_legacy test fixture is defined against xenial.
+    # This scenario uses release xenial by design. It does not need to
+    # run on every release.
+    @releases:fixed
     Examples: ubuntu release
       | release | machine_type  | next_release | prompt |
       | xenial  | lxd-container | bionic       | lts    |

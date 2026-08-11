@@ -541,6 +541,10 @@ Feature: Pro Client help text
         -h, --help  show this help message and exit
       """
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @releases:interim
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release  | machine_type  | options_string     |
       | xenial   | lxd-container | optional arguments |
@@ -590,6 +594,10 @@ Feature: Pro Client help text
       No help available for 'invalid-service'
       """
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @releases:interim
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release  | machine_type  | infra-status |
       | bionic   | lxd-container | enabled      |
@@ -637,6 +645,11 @@ Feature: Pro Client help text
       pro: error: the following arguments are required: <command>
       """
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @releases:interim
+    @machine_types:lxd-container
+    @machine_types:wsl
     Examples: ubuntu release
       | release  | machine_type  | infra-available |
       | xenial   | lxd-container | yes             |

@@ -47,6 +47,9 @@ Feature: CLI magic attach flow
       """
     And the machine is attached
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release  | machine_type  |
       | xenial   | lxd-container |

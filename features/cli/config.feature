@@ -65,6 +65,9 @@ Feature: CLI config command
       pro config: error: argument command: invalid choice: 'invalid' (choose from show, set, unset)
       """
 
+    @releases:lts_supported
+    @releases:interim
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release  | machine_type  |
       | xenial   | lxd-container |

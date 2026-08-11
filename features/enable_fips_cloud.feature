@@ -10,6 +10,9 @@ Feature: FIPS enablement in cloud based machines
       Ubuntu <release_title> does not provide a GCP optimized FIPS kernel
       """
 
+    # This test uses release xenial only. Xenial has no GCP-optimized
+    # FIPS kernel. The test does not need to run on every release.
+    @releases:fixed
     Examples: fips
       | release | machine_type | release_title | fips_service |
       | xenial  | gcp.generic  | Xenial        | fips         |
@@ -33,6 +36,14 @@ Feature: FIPS enablement in cloud based machines
     When I reboot the machine
     Then I verify that packages `<fips-packages>` installed versions match regexp `fips`
 
+    # FIPS crypto module certification stops at focal. See
+    # enable_fips_vm.feature for the same limit.
+    @releases:lts_supported
+    @releases:lts_esm
+    @releases:until:lts:focal
+    @machine_types:aws.generic
+    @machine_types:azure.generic
+    @machine_types:gcp.generic
     Examples: ubuntu release
       | release | machine_type  | fips-packages                                                                                    |
       | xenial  | aws.generic   | openssh-server openssh-client strongswan openssh-server-hmac openssh-client-hmac strongswan-hmac |
@@ -82,6 +93,14 @@ Feature: FIPS enablement in cloud based machines
     When I reboot the machine
     Then I verify that `<fips-service>` is disabled
 
+    # FIPS-updates certification extends one release further than plain
+    # FIPS. It goes through jammy, as fips-preview.
+    @releases:lts_supported
+    @releases:lts_esm
+    @releases:until:lts:jammy
+    @machine_types:aws.generic
+    @machine_types:azure.generic
+    @machine_types:gcp.generic
     Examples: ubuntu release
       | release | machine_type  | fips-name    | fips-service | fips-package      | fips-kernel | fips-apt-source                                                |
       | xenial  | azure.generic | FIPS         | fips         | ubuntu-fips       | fips        | https://esm.ubuntu.com/fips/ubuntu xenial/main                 |
@@ -154,6 +173,10 @@ Feature: FIPS enablement in cloud based machines
       1
       """
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @releases:until:lts:focal
+    @machine_types:aws.generic
     Examples: ubuntu release
       | release | machine_type | cloud-id-exit | cloud-id-msg                                        |
       | xenial  | aws.generic  | 1             | File not found '/run/cloud-init/instance-data.json' |
@@ -174,6 +197,10 @@ Feature: FIPS enablement in cloud based machines
       fips +yes +n/a
       """
 
+    # This test uses release jammy only. It checks the exact message
+    # text "FIPS is not available for Ubuntu 22.04 LTS." The test does
+    # not need to run on every release.
+    @releases:fixed
     Examples: ubuntu release
       | release | machine_type  |
       | jammy   | aws.generic   |

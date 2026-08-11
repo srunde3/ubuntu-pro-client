@@ -76,6 +76,12 @@ Feature: FIPS enablement in lxd containers
     And I verify that `<libssl>-hmac` installed version matches regexp `fips`
     And I verify that packages `<additional-fips-packages>` installed versions match regexp `fips`
 
+    # FIPS is offered from xenial through focal. It is not offered from
+    # jammy onward. See the header comment for aws.pro-fips and
+    # gcp.pro-fips in features/machine_types.yaml.
+    @releases:lts_esm
+    @releases:until:lts:focal
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release | machine_type  | fips-name    | updates  | libssl      | additional-fips-packages                                             |
       | xenial  | lxd-container | FIPS         |          | libssl1.0.0 | openssh-server-hmac openssh-client-hmac                              |
@@ -109,6 +115,9 @@ Feature: FIPS enablement in lxd containers
       """
     And I verify that `fips-updates` is enabled
 
+    @releases:lts_esm
+    @releases:until:lts:focal
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release | machine_type  |
       | xenial  | lxd-container |

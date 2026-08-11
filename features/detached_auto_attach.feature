@@ -19,6 +19,11 @@ Feature: Attached cloud does not detach when auto-attaching after manually attac
       """
     And I verify that `esm-infra` is enabled
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @machine_types:aws.generic
+    @machine_types:azure.generic
+    @machine_types:gcp.generic
     Examples: ubuntu release
       | release | machine_type  |
       | xenial  | aws.generic   |

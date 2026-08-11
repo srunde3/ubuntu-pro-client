@@ -17,6 +17,11 @@ Feature: Enable command behaviour when attached to an Ubuntu Pro subscription
       Could not enable Real-time kernel.
       """
 
+    # This test uses release jammy only, by design. Realtime-kernel is a
+    # Pro-managed entitlement only on jammy. From release noble onward,
+    # realtime-kernel moved to the archives. Pro no longer manages it
+    # there. This test does not need to run on every release.
+    @releases:fixed
     Examples: ubuntu release
       | release | machine_type  |
       | jammy   | lxd-container |
@@ -37,6 +42,10 @@ Feature: Enable command behaviour when attached to an Ubuntu Pro subscription
       Could not enable Real-time kernel.
       """
 
+    # This is a regression test. It uses releases from before
+    # realtime-kernel existed. The test checks hardcoded version and
+    # full_name strings. This test does not need to run on every release.
+    @releases:fixed
     Examples: ubuntu release
       | release | machine_type | version   | full_name     |
       | xenial  | lxd-vm       | 16.04 LTS | Xenial Xerus  |
@@ -364,6 +373,11 @@ Feature: Enable command behaviour when attached to an Ubuntu Pro subscription
       intel-iotg
       """
 
+    # This test uses release jammy only, by design. Realtime-kernel is a
+    # Pro-managed entitlement only on jammy. From release noble onward,
+    # realtime-kernel moved to the archives. Pro no longer manages it
+    # there. This test does not need to run on every release.
+    @releases:fixed
     Examples: ubuntu release
       | release | machine_type |
       | jammy   | lxd-vm       |
@@ -401,6 +415,11 @@ Feature: Enable command behaviour when attached to an Ubuntu Pro subscription
       realtime
       """
 
+    # This test uses release jammy only, by design. Realtime-kernel is a
+    # Pro-managed entitlement only on jammy. From release noble onward,
+    # realtime-kernel moved to the archives. Pro no longer manages it
+    # there. This test does not need to run on every release.
+    @releases:fixed
     Examples: ubuntu release
       | release | machine_type |
       | jammy   | lxd-vm       |
@@ -433,6 +452,11 @@ Feature: Enable command behaviour when attached to an Ubuntu Pro subscription
       A reboot is required to complete install\.
       """
 
+    # This test uses release jammy only, by design. Realtime-kernel is a
+    # Pro-managed entitlement only on jammy. From release noble onward,
+    # realtime-kernel moved to the archives. Pro no longer manages it
+    # there. This test does not need to run on every release.
+    @releases:fixed
     Examples: ubuntu release
       | release | machine_type |
       | jammy   | aws.generic  |

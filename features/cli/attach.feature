@@ -33,6 +33,8 @@ Feature: CLI attach command
       For a list of all Ubuntu Pro services, run 'pro status --all'
       """
 
+    @releases:interim
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release  | machine_type  | landscape | status_string                                                           |
       | questing | lxd-container | disabled  | landscape +yes +disabled +Management and administration tool for Ubuntu |
@@ -117,6 +119,9 @@ Feature: CLI attach command
     And I verify that `esm-apps` is enabled
     And I verify that `esm-infra` is disabled
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @machine_types:lxd-container
     Examples: ubuntu
       | release | machine_type  | cis_or_usg |
       | xenial  | lxd-container | cis        |
@@ -136,6 +141,11 @@ Feature: CLI attach command
       """
     And I verify that `esm-infra` is enabled
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @machine_types:aws.generic
+    @machine_types:azure.generic
+    @machine_types:gcp.generic
     Examples: ubuntu release livepatch status
       | release | machine_type  |
       | xenial  | aws.generic   |
@@ -195,6 +205,9 @@ Feature: CLI attach command
     And I verify that `esm-infra` is enabled
     And I verify that `esm-apps` is enabled
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release  | machine_type  |
       | xenial   | lxd-container |
@@ -244,6 +257,13 @@ Feature: CLI attach command
       Please run `sudo pro refresh`.
       """
 
+    # This scenario shares its name with the node below. Both nodes
+    # must carry the same tags. This node has no rows for now. The team
+    # removed the rows until the polling behavior stops overloading the
+    # server.
+    @releases:lts_supported
+    @releases:lts_esm
+    @machine_types:lxd-container
     Examples: ubuntu release livepatch status
       | release | machine_type |
 
@@ -300,6 +320,9 @@ Feature: CLI attach command
       """
     And the machine is unattached
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @machine_types:lxd-container
     Examples: ubuntu release livepatch status
       | release  | machine_type  |
       | xenial   | lxd-container |
@@ -343,6 +366,10 @@ Feature: CLI attach command
       }
       """
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @releases:interim
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release  | machine_type  |
       | xenial   | lxd-container |
@@ -390,6 +417,10 @@ Feature: CLI attach command
       }
       """
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @releases:interim
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release  | machine_type  |
       | xenial   | lxd-container |
@@ -407,6 +438,9 @@ Feature: CLI attach command
     And I verify that `esm-infra` is enabled
     And I verify that `livepatch` status is `<livepatch_status>`
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @machine_types:lxd-vm
     Examples: ubuntu release
       | release  | machine_type | livepatch_status |
       | xenial   | lxd-vm       | warning          |

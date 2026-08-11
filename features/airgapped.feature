@@ -44,6 +44,9 @@ Feature: Performing attach using pro-airgapped
       """
     Then I verify that running `pro refresh` `with sudo` exits `0`
 
+    @releases:lts_supported
+    @releases:interim
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release  | machine_type  |
       | jammy    | lxd-container |
@@ -95,6 +98,9 @@ Feature: Performing attach using pro-airgapped
       """
     Then I verify that running `pro refresh` `with sudo` exits `0`
 
+    @releases:lts_supported
+    @releases:interim
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release  | machine_type  |
       | jammy    | lxd-container |

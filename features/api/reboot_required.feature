@@ -128,6 +128,7 @@ Feature: Reboot required API endpoint
       yes
       """
 
+    @releases:fixed
     Examples: ubuntu release
       | release | machine_type |
       | xenial  | lxd-vm       |

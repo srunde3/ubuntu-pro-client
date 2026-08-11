@@ -87,6 +87,11 @@ Feature: Enable landscape on Ubuntu
       {"_schema_version": "0.1", "errors": \[{"additional_info": {"stderr": .*, "stdout": .*}, "message": "landscape-config command failed", "message_code": "landscape-config-failed", "service": "landscape", "type": "service"}], "failed_services": \["landscape"], "needs_reboot": false, "processed_services": \[], "result": "failure", "warnings": \[]}
       """
 
+    # Pro Client cannot enable Landscape before noble. See the scenario
+    # "Landscape inapplicable on unsupported release" below.
+    @releases:lts_supported
+    @releases:since:lts:noble
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release  | machine_type  |
       | noble    | lxd-container |
@@ -163,6 +168,9 @@ Feature: Enable landscape on Ubuntu
     # Landscape is installed and configured but not registered.
     # Run `sudo landscape-config` to register, or run `sudo pro disable landscape`
     # """
+    @releases:lts_supported
+    @releases:since:lts:noble
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release  | machine_type  |
       | noble    | lxd-container |
@@ -250,6 +258,9 @@ Feature: Enable landscape on Ubuntu
       account_name = ubuntu-pro-devel
       """
 
+    @releases:lts_supported
+    @releases:since:lts:noble
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release  | machine_type  |
       | noble    | lxd-container |
@@ -316,6 +327,9 @@ Feature: Enable landscape on Ubuntu
       active
       """
 
+    # This test uses release jammy only. Jammy is the last release
+    # before noble. It does not need to run on every release.
+    @releases:fixed
     Examples: ubuntu release
       | release | machine_type  |
       | jammy   | lxd-container |
@@ -332,6 +346,11 @@ Feature: Enable landscape on Ubuntu
       Could not enable Landscape.
       """
 
+    # Pro Client cannot enable Landscape before noble.
+    @releases:lts_supported
+    @releases:lts_esm
+    @releases:until:lts:jammy
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release | machine_type  |
       | xenial  | lxd-container |

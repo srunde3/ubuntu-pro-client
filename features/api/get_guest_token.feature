@@ -42,6 +42,9 @@ Feature: u.pro.attach.guest.get_guest_token.v1
       }
       """
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @machine_types:lxd-container
     Examples:
       | release  | machine_type  |
       | xenial   | lxd-container |

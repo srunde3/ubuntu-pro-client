@@ -18,6 +18,9 @@ Feature: CLI enable command
       A reboot is required to complete install.
       """
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release  | machine_type  |
       | xenial   | lxd-container |
@@ -72,6 +75,9 @@ Feature: CLI enable command
       Ubuntu Pro: ESM Infra enabled
       """
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release  | machine_type  |
       | xenial   | lxd-container |
@@ -294,6 +300,14 @@ Feature: CLI enable command
       }
       """
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @machine_types:lxd-container
+    # This skips resolute. Not all services are available yet in the
+    # backend for this release. The scenario "Attached enable using json
+    # format - day 0 services" below covers resolute instead. Remove
+    # this skip once resolute has all services.
+    @releases:skip:resolute
     Examples: ubuntu release
       | release | machine_type  | valid_services                                                                                                                                                                 |
       | xenial  | lxd-container | anbox-cloud, cc-eal, cis, esm-apps, esm-apps-legacy, esm-infra,\nesm-infra-legacy, fips, fips-preview, fips-updates, landscape, livepatch,\nrealtime-kernel, ros, ros-updates. |
@@ -458,6 +472,11 @@ Feature: CLI enable command
       """
     And I verify that `landscape` is disabled
 
+    # This is a temporary stand-in for resolute. See the comment above
+    # the scenario title for details. The test uses release resolute
+    # only. It does not need to run on every release. Remove this table
+    # once resolute rejoins the full scenario above.
+    @releases:fixed
     Examples: ubuntu release
       | release  | machine_type  |
       | resolute | lxd-container |
@@ -538,6 +557,9 @@ Feature: CLI enable command
       \s*510 https://esm.ubuntu.com/apps/ubuntu <release>-apps-security/main amd64 Packages
       """
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release | machine_type  | infra-pkg | apps-pkg | msg                                                                                                                                                                                |
       | xenial  | lxd-container | libkrad0  | jq       | Try anbox-cloud, cc-eal, cis, esm-apps, esm-apps-legacy, esm-infra,\nesm-infra-legacy, fips, fips-preview, fips-updates, landscape, livepatch,\nrealtime-kernel, ros, ros-updates. |
@@ -569,6 +591,9 @@ Feature: CLI enable command
       Could not enable Ubuntu Pro: ESM Apps.
       """
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @machine_types:lxd-container
     Examples: not entitled services
       | release  | machine_type  |
       | xenial   | lxd-container |
@@ -609,6 +634,10 @@ Feature: CLI enable command
       E: Unable to locate package some-package-aws
       """
 
+    # This is a sanity check for the override-selector logic. Both
+    # series-scoped and cloud-scoped selectors apply. The test uses
+    # release focal only. It does not need to run on every release.
+    @releases:fixed
     Examples:
       | release | machine_type |
       | focal   | aws.generic  |
@@ -638,6 +667,10 @@ Feature: CLI enable command
       7 /etc/apt/auth.conf.d/90ubuntu-advantage
       """
 
+    # This is a canary test for the apt-auth-file line-editing mechanism.
+    # The test uses release xenial only. It does not need to run on
+    # every release.
+    @releases:fixed
     Examples: ubuntu release
       | release | machine_type  |
       | xenial  | lxd-container |
@@ -659,6 +692,9 @@ Feature: CLI enable command
       \$ sudo rm /var/lib/ubuntu-advantage/lock
       """
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release  | machine_type  |
       | xenial   | lxd-container |
@@ -787,6 +823,11 @@ Feature: CLI enable command
       }
       """
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @releases:interim
+    @machine_types:lxd-container
+    @machine_types:wsl
     Examples: ubuntu release
       | release  | machine_type  |
       | xenial   | lxd-container |
@@ -819,6 +860,9 @@ Feature: CLI enable command
     Then I verify that `esm-infra` is enabled
     Then I verify that `esm-apps` is enabled
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release  | machine_type  |
       | xenial   | lxd-container |
@@ -840,6 +884,9 @@ Feature: CLI enable command
       All default services are already enabled
       """
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release  | machine_type  |
       | xenial   | lxd-container |

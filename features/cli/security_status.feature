@@ -86,6 +86,10 @@ Feature: CLI security-status command
       pro security-status: error: argument --format: invalid choice: 'unsupported' (choose from 'json', 'yaml', 'text')
       """
 
+    # This is a canary test for the --format json and yaml mechanism.
+    # The test uses releases xenial and bionic only. It does not need to
+    # run on every release.
+    @releases:fixed
     Examples: ubuntu release
       | release | machine_type  | package | service   |
       | xenial  | lxd-container | apport  | esm-infra |
@@ -109,6 +113,9 @@ Feature: CLI security-status command
       \s*  patched: true
       """
 
+    # This is a canary test for the livepatch CVE section. The test uses
+    # release xenial only. It does not need to run on every release.
+    @releases:fixed
     Examples:
       | release | machine_type |
       | xenial  | lxd-vm       |
@@ -457,6 +464,16 @@ Feature: CLI security-status command
       Enable esm-apps with: pro enable esm-apps
       """
 
+    # This scenario shares its name with two other nodes below, for
+    # focal and questing. All three nodes must carry the same tags.
+    # Together they cover xenial as legacy, focal as esm, and questing
+    # as interim. Questing has already reached its end of life, so it is
+    # not required. Bionic is also esm but has no node here yet. This is
+    # a real, unfixed gap.
+    @releases:lts_esm
+    @releases:lts_legacy
+    @releases:interim
+    @machine_types:lxd-container
     Examples:
       | release | machine_type  |
       | xenial  | lxd-container |
@@ -802,6 +819,10 @@ Feature: CLI security-status command
       Enable esm-apps with: pro enable esm-apps
       """
 
+    @releases:lts_esm
+    @releases:lts_legacy
+    @releases:interim
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release | machine_type  |
       | focal   | lxd-container |
@@ -1126,6 +1147,8 @@ Feature: CLI security-status command
       Enable esm-apps with: pro enable esm-apps
       """
 
+    @releases:lts_supported
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release  | machine_type  | esm_year |
       | resolute | lxd-container | 2036     |
@@ -1219,6 +1242,10 @@ Feature: CLI security-status command
       Ubuntu Pro is not available for non-LTS releases\.
       """
 
+    @releases:lts_esm
+    @releases:lts_legacy
+    @releases:interim
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release  | machine_type  |
       | questing | lxd-container |
@@ -1322,6 +1349,10 @@ Feature: CLI security-status command
       1 package can be upgraded
       """
 
+    # This is a canary test for the APT_CONFIG custom-source mechanism.
+    # The test uses releases xenial and noble only. It does not need to
+    # run on every release.
+    @releases:fixed
     Examples: ubuntu release
       | release | machine_type  | pkg_in_updates        | pkg_in_security      |
       | xenial  | lxd-container | base-files=9.4ubuntu4 | wget=1.17.1-1ubuntu1 |

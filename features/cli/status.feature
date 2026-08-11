@@ -669,12 +669,7 @@ Feature: CLI status command
       Enable services with: pro enable <service>
       """
 
-    # "Latest LTS" in the name, but lts_supported currently matches jammy,
-    # noble, *and* resolute at once (overlapping support windows) -- there's
-    # no tag for "just the newest one." Same named-release fork pattern as
-    # its siblings; update the row in place when a new LTS needs its own
-    # fork of this scenario's assertions.
-    @releases:fixed
+    @releases:latest_lts
     Examples: ubuntu release
       | release  | machine_type  |
       | resolute | lxd-container |

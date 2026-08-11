@@ -35,6 +35,11 @@ Feature: CLI refresh command
       Successfully updated Ubuntu Pro related APT and MOTD messages.
       """
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @releases:interim
+    @machine_types:lxd-container
+    @machine_types:wsl
     Examples: ubuntu release
       | release  | machine_type  |
       | bionic   | lxd-container |
@@ -62,6 +67,11 @@ Feature: CLI refresh command
       See https://ubuntu.com/pro
       """
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @releases:interim
+    @machine_types:lxd-container
+    @machine_types:wsl
     Examples: pro commands
       | release  | machine_type  |
       | bionic   | lxd-container |

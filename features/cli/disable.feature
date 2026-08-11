@@ -186,6 +186,14 @@ Feature: CLI disable command
       }
       """
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @machine_types:lxd-container
+    # This skips resolute. The ua-contracts resource definitions do not
+    # yet present CIS as usg on resolute. They already do this on noble.
+    # Enable resolute again once the definitions update. This note was
+    # below the Examples table before. It is now above the table.
+    @releases:skip:resolute
     Examples: ubuntu release
       | release | machine_type  | msg                                                                                                                                                                                |
       | xenial  | lxd-container | Try anbox-cloud, cc-eal, cis, esm-apps, esm-apps-legacy, esm-infra,\nesm-infra-legacy, fips, fips-preview, fips-updates, landscape, livepatch,\nrealtime-kernel, ros, ros-updates. |
@@ -194,9 +202,6 @@ Feature: CLI disable command
       | jammy   | lxd-container | Try anbox-cloud, cc-eal, esm-apps, esm-apps-legacy, esm-infra, esm-infra-legacy,\nfips, fips-preview, fips-updates, landscape, livepatch, realtime-kernel, ros,\nros-updates, usg. |
       | noble   | lxd-container | Try anbox-cloud, cc-eal, esm-apps, esm-apps-legacy, esm-infra, esm-infra-legacy,\nfips, fips-preview, fips-updates, landscape, livepatch, realtime-kernel, ros,\nros-updates, usg. |
 
-  # TODO: Re-enable resolute once ua-contracts resource definitions are
-  # updated to present CIS as usg like noble.
-  # | resolute| lxd-container | Try anbox-cloud, cc-eal, esm-apps, esm-apps-legacy, esm-infra, esm-infra-legacy,\nfips, fips-preview, fips-updates, landscape, livepatch, realtime-kernel, ros,\nros-updates, usg. |
   Scenario Outline: Disable with purge does not work with assume-yes
     Given a `<release>` `<machine_type>` machine with ubuntu-advantage-tools installed
     When I attach `contract_token` with sudo
@@ -206,6 +211,9 @@ Feature: CLI disable command
       Error: Cannot use --purge together with --assume-yes.
       """
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release  | machine_type  |
       | xenial   | lxd-container |
@@ -233,6 +241,16 @@ Feature: CLI disable command
     And I verify that `esm-apps` is disabled
     And I verify that `ansible` is installed from apt source `http://archive.ubuntu.com/ubuntu <pocket>/universe`
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @machine_types:lxd-container
+    @machine_types:wsl
+    # This skips resolute. Ansible does not seem to come from esm-apps on
+    # resolute. This scenario may need a refactor. It should assert a
+    # package that is actually reinstalled from the archive on resolute.
+    # This note was below the Examples table before. It is now above the
+    # table.
+    @releases:skip:resolute
     Examples: ubuntu release
       | release | machine_type  | pocket           |
       # This ends up in GH #943 but maybe can be improved?
@@ -242,10 +260,6 @@ Feature: CLI disable command
       | focal   | lxd-container | focal            |
       | jammy   | lxd-container | jammy            |
 
-  # TODO: Ansible does not appear to come from esm-apps on resolute.
-  # This scenario likely needs refactor to assert a package that is
-  # actually reinstalled from archive on resolute.
-  # | resolute| lxd-container | resolute         |
   Scenario Outline: Disable with purge unsupported services
     Given a `<release>` `<machine_type>` machine with ubuntu-advantage-tools installed
     When I attach `contract_token` with sudo
@@ -255,6 +269,9 @@ Feature: CLI disable command
       Livepatch does not support being disabled with --purge
       """
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @machine_types:lxd-vm
     Examples: ubuntu release
       | release  | machine_type |
       | xenial   | lxd-vm       |
@@ -311,6 +328,15 @@ Feature: CLI disable command
     And I verify that `openssh-server` is installed from apt source `<archive-source>`
     And I verify that `<kernel-package>` is not installed
 
+    # FIPS crypto module certification stops at focal. See
+    # enable_fips_vm.feature for the same limit.
+    @releases:lts_supported
+    @releases:lts_esm
+    @releases:until:lts:focal
+    @machine_types:lxd-vm
+    @machine_types:aws.generic
+    @machine_types:azure.generic
+    @machine_types:gcp.generic
     Examples: ubuntu release
       | release | machine_type  | fips-service | fips-name    | kernel-package   | fips-source                                                    | archive-source                                                    |
       | xenial  | lxd-vm        | fips         | FIPS         | linux-fips       | https://esm.ubuntu.com/fips/ubuntu xenial/main                 | https://esm.ubuntu.com/infra/ubuntu xenial-infra-security/main    |
@@ -353,6 +379,12 @@ Feature: CLI disable command
       Aborting\.
       """
 
+    # FIPS crypto module certification stops at focal. See
+    # enable_fips_vm.feature for the same limit.
+    @releases:lts_supported
+    @releases:lts_esm
+    @releases:until:lts:focal
+    @machine_types:lxd-vm
     Examples: ubuntu release
       | release | machine_type |
       | xenial  | lxd-vm       |
@@ -478,6 +510,11 @@ Feature: CLI disable command
       }
       """
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @releases:interim
+    @machine_types:lxd-container
+    @machine_types:wsl
     Examples: ubuntu release
       | release  | machine_type  |
       | xenial   | lxd-container |

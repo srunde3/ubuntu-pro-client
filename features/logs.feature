@@ -19,6 +19,10 @@ Feature: Logs in Json Array Formatter
       """
       """
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @releases:interim
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release  | machine_type  | user_spec   |
       | xenial   | lxd-container | as non-root |
@@ -53,6 +57,10 @@ Feature: Logs in Json Array Formatter
       Executed with sys.argv: ['/usr/bin/pro', 'attach'
       """
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @releases:interim
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release  | machine_type  |
       | xenial   | lxd-container |
@@ -81,6 +89,10 @@ Feature: Logs in Json Array Formatter
       user0.log
       """
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @releases:interim
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release  | machine_type  |
       | xenial   | lxd-container |
@@ -131,6 +143,10 @@ Feature: Logs in Json Array Formatter
       /var/log/ubuntu-advantage.log.1
       """
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @releases:interim
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release  | machine_type  |
       | xenial   | lxd-container |

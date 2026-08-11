@@ -59,6 +59,7 @@ Feature: End of contract messages
       Renew your subscription at https://ubuntu.com/pro/dashboard
       """
 
+    @releases:fixed
     Examples: ubuntu release
       | release | machine_type  |
       | jammy   | lxd-container |

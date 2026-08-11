@@ -21,6 +21,10 @@ Feature: Ua fix command behaviour
       Please check your openssl configuration.
       """
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @releases:interim
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release  | machine_type  |
       | xenial   | lxd-container |
@@ -221,6 +225,10 @@ Feature: Ua fix command behaviour
       .*✔.* USN-5573-1 is resolved.
       """
 
+    # This is a regression test for USN-4539-1 and USN-5573-1. The bugs
+    # showed up on focal. The test uses release focal only. It does not
+    # need to run on every release.
+    @releases:fixed
     Examples: ubuntu release details
       | release | machine_type  |
       | focal   | lxd-container |
@@ -610,6 +618,10 @@ Feature: Ua fix command behaviour
       .*✘.* CVE-2020-25097 is not resolved
       """
 
+    # This is a regression test for USN-5079-2 and USN-5378-4. The bugs
+    # showed up on xenial. The test uses release xenial only. It does not
+    # need to run on every release.
+    @releases:fixed
     Examples: ubuntu release details
       | release | machine_type  |
       | xenial  | lxd-container |
@@ -917,6 +929,10 @@ Feature: Ua fix command behaviour
       .*✔.* CVE-2023-42752 does not affect your system.
       """
 
+    # This is a regression test for USN-6130-1 and CVE-2023-42752. The bugs
+    # showed up on bionic. The test uses release bionic only. It does not
+    # need to run on every release.
+    @releases:fixed
     Examples: ubuntu release details
       | release | machine_type  |
       | bionic  | lxd-container |
@@ -944,6 +960,10 @@ Feature: Ua fix command behaviour
       .*✘.* CVE-2023-0286 is not resolved.
       """
 
+    # This is a regression test for CVE-2023-0286. The bug showed up on
+    # bionic. The test uses release bionic only. It does not need to run on
+    # every release.
+    @releases:fixed
     Examples: ubuntu release details
       | release | machine_type  |
       | bionic  | lxd-container |
@@ -973,6 +993,10 @@ Feature: Ua fix command behaviour
       .*✘.* CVE-2023-0286 is not resolved.
       """
 
+    # This is a regression test for CVE-2023-0286. The bug showed up on
+    # bionic. The test uses release bionic only. It does not need to run on
+    # every release.
+    @releases:fixed
     Examples: ubuntu release details
       | release | machine_type |
       | bionic  | wsl          |

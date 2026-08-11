@@ -134,6 +134,11 @@ Feature: CLI detach command
       """
     And the machine is unattached
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @releases:interim
+    @machine_types:lxd-container
+    @machine_types:wsl
     Examples: ubuntu release
       | release  | machine_type  |
       | xenial   | lxd-container |
@@ -160,6 +165,11 @@ Feature: CLI detach command
       See https://ubuntu.com/pro
       """
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @releases:interim
+    @machine_types:lxd-container
+    @machine_types:wsl
     Examples: pro commands
       | release  | machine_type  |
       | bionic   | lxd-container |

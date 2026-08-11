@@ -19,6 +19,11 @@ Feature: Full Auto-Attach Endpoint
     Then I verify that `esm-infra` is enabled
     And I verify that `livepatch` is disabled
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @machine_types:aws.pro
+    @machine_types:azure.pro
+    @machine_types:gcp.pro
     Examples:
       | release | machine_type |
       | xenial  | aws.pro      |

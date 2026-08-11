@@ -47,6 +47,10 @@ Feature: CLI collect-logs command
     And I run `pro collect-logs` <user_spec>
     Then I verify that files exist matching `pro_logs.tar.gz`
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @releases:interim
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release  | machine_type  | user_spec   |
       | xenial   | lxd-container | as non-root |
@@ -113,6 +117,10 @@ Feature: CLI collect-logs command
     And I run `pro collect-logs` <user_spec>
     Then I verify that files exist matching `pro_logs.tar.gz`
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @releases:interim
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release  | machine_type  | user_spec   |
       | xenial   | lxd-container | as non-root |

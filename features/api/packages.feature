@@ -45,6 +45,10 @@ Feature: Package related API endpoints
       {"download_size": \d+, "origin": ".+", "package": "<package>", "provided_by": "<provided_by>", "status": "upgrade_available", "version": "$behave_var{stored_var candidate}"}
       """
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @machine_types:lxd-container
+    @machine_types:wsl
     Examples: ubuntu release
       | release  | machine_type  | package         | outdated_version | provided_by       |
       | xenial   | lxd-container | libcurl3-gnutls | 7.47.0-1ubuntu2  | esm-infra         |

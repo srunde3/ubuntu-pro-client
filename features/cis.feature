@@ -81,6 +81,7 @@ Feature: Enable cis on Ubuntu
       CIS audit scan completed
       """
 
+    @releases:fixed
     Examples: cis script
       | release | machine_type  | cis_script                                  |
       | bionic  | lxd-container | Canonical_Ubuntu_18.04_CIS-harden.sh        |
@@ -161,6 +162,7 @@ Feature: Enable cis on Ubuntu
       CIS audit scan completed
       """
 
+    @releases:fixed
     Examples: cis service
       | release | machine_type  | cis_script                           |
       | focal   | lxd-container | Canonical_Ubuntu_20.04_CIS-harden.sh |

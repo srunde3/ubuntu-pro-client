@@ -65,6 +65,7 @@ Feature: Build docker images with pro services
     When I replace `<contract_token>` in `/home/ubuntu/ua-attach-config.yaml` with token `contract_token`
     Then I verify that running `DOCKER_BUILDKIT=1 docker build . --no-cache --secret id=ua-attach-config,src=ua-attach-config.yaml -t ua-test` `with sudo` exits `1`
 
+    @releases:fixed
     Examples: ubuntu release
       | release | machine_type | container_release | enable_services | test_package_name | test_package_version |
       | noble   | lxd-vm       | xenial            | [ esm-infra ]   | curl              | esm                  |
@@ -111,6 +112,7 @@ Feature: Build docker images with pro services
       <test_package_version>
       """
 
+    @releases:fixed
     Examples: ubuntu release
       | release | machine_type | cloud_override | container_release | enable_services | test_package_name | test_package_version | extra_build_args |
       | jammy   | aws.pro      | aws            | xenial            | [ "esm-infra" ] | curl              | esm                  | --network=host   |
@@ -156,6 +158,7 @@ Feature: Build docker images with pro services
       <test_package_version>
       """
 
+    @releases:fixed
     Examples: ubuntu release
       | release | machine_type | cloud_override | container_release | enable_service | test_package_name | test_package_version | extra_build_args |
       | jammy   | aws.pro      | aws            | xenial            | esm-infra      | curl              | esm                  | --network=host   |

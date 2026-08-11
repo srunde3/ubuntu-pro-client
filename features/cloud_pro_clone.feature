@@ -48,6 +48,14 @@ Feature: Creating golden images based on Cloud Ubuntu Pro instances
       \s*status: enabled
       """
 
+    # FIPS-updates cloud golden images are offered from bionic through
+    # focal. They are not offered from jammy onward. See the header
+    # comment for aws.pro-fips and gcp.pro-fips in
+    # features/machine_types.yaml.
+    @releases:lts_esm
+    @releases:until:lts:focal
+    @machine_types:aws.pro
+    @machine_types:gcp.pro
     Examples: ubuntu release
       | release | machine_type |
       | bionic  | aws.pro      |

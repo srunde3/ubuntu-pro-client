@@ -97,6 +97,7 @@ Feature: CLI cve command
       For more information, visit: https://ubuntu.com/security/CVE-2025-26520
       """
 
+    @releases:fixed
     Examples: ubuntu release
       | release | machine_type  |
       | xenial  | lxd-container |
@@ -155,6 +156,7 @@ Feature: CLI cve command
         linux-modules-5.4.0-1131-kvm:  vulnerable
       """
 
+    @releases:fixed
     Examples: ubuntu release
       | release | machine_type |
       | focal   | lxd-vm       |
@@ -169,6 +171,7 @@ Feature: CLI cve command
       Vulnerability data not found for the current Ubuntu release
       """
 
+    @releases:fixed
     Examples: ubuntu release
       | release | machine_type  |
       | xenial  | lxd-container |

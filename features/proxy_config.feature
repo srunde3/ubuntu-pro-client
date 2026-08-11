@@ -173,6 +173,9 @@ Feature: Proxy configuration
       """
     And the machine is attached
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release  | machine_type  |
       | xenial   | lxd-container |
@@ -248,6 +251,10 @@ Feature: Proxy configuration
       Successfully processed your pro configuration.
       """
 
+    # This is a canary test for the snap and livepatch proxy propagation
+    # mechanism. The test uses releases xenial and bionic only. It does
+    # not need to run on every release.
+    @releases:fixed
     Examples: ubuntu release
       | release | machine_type |
       | xenial  | lxd-vm       |
@@ -377,6 +384,16 @@ Feature: Proxy configuration
       .*CONNECT contracts.canonical.com.*
       """
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @machine_types:lxd-container
+    # This skips resolute. The AppArmor profile
+    # ubuntu_pro_esm_cache_systemd_detect_virt needs the perfmon
+    # capability on resolute. systemd-detect-virt needs perfmon at boot.
+    # Add resolute back once the profile has this fix. This note was
+    # below the next scenario's title before. It is now above this
+    # Examples table.
+    @releases:skip:resolute
     Examples: ubuntu release
       | release | machine_type  |
       | xenial  | lxd-container |
@@ -385,9 +402,6 @@ Feature: Proxy configuration
       | jammy   | lxd-container |
       | noble   | lxd-container |
 
-  # TODO: re-enable once AppArmor profile ubuntu_pro_esm_cache_systemd_detect_virt
-  # gains capability perfmon on resolute (needed by systemd-detect-virt at boot)
-  # | resolute | lxd-container |
   @slow
   Scenario Outline: Attach command when authenticated proxy is configured
     Given a `<release>` `<machine_type>` machine with ubuntu-advantage-tools installed
@@ -431,6 +445,11 @@ Feature: Proxy configuration
       .*CONNECT livepatch.canonical.com:443.*
       """
 
+    # This is a canary test for the snap and livepatch proxy propagation
+    # mechanism. This is the authenticated-proxy variant. The test uses
+    # releases xenial and bionic only. It does not need to run on every
+    # release.
+    @releases:fixed
     Examples: ubuntu release
       | release | machine_type |
       | xenial  | lxd-vm       |
@@ -564,6 +583,9 @@ Feature: Proxy configuration
       Acquire::https::Proxy \".*\";
       """
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release  | machine_type  |
       | xenial   | lxd-container |
@@ -641,6 +663,9 @@ Feature: Proxy configuration
       \"http://wronguser:wrongpassword@.*:3128\" is not working. Not setting as proxy.
       """
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release  | machine_type  |
       | xenial   | lxd-container |
@@ -794,6 +819,9 @@ Feature: Proxy configuration
       Acquire::https::Proxy \".*\";
       """
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release  | machine_type  |
       | xenial   | lxd-container |
@@ -932,6 +960,9 @@ Feature: Proxy configuration
       \"https://localhost:12345\" is not working. Not setting as proxy.
       """
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release  | machine_type  |
       | xenial   | lxd-container |
@@ -968,6 +999,10 @@ Feature: Proxy configuration
       A reboot is required to complete install.
       """
 
+    # This is a canary test for enabling realtime-kernel through a proxy
+    # with no internet access. The test uses release jammy only. It does
+    # not need to run on every release.
+    @releases:fixed
     Examples:
       | release | machine_type |
       | jammy   | lxd-vm       |
@@ -1078,13 +1113,18 @@ Feature: Proxy configuration
       CONNECT esm.ubuntu.com:443 someuser
       """
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @machine_types:lxd-vm
+    # This skips resolute. The AppArmor profile
+    # ubuntu_pro_esm_cache_systemd_detect_virt needs the perfmon
+    # capability on resolute. systemd-detect-virt needs perfmon at boot.
+    # Add resolute back once the profile has this fix. This note was
+    # below the Examples table before. It is now above the table.
+    @releases:skip:resolute
     Examples: ubuntu release
       | release | machine_type |
       | bionic  | lxd-vm       |
       | focal   | lxd-vm       |
       | jammy   | lxd-vm       |
       | noble   | lxd-vm       |
-
-# TODO: re-enable once AppArmor profile ubuntu_pro_esm_cache_systemd_detect_virt
-# gains capability perfmon on resolute (needed by systemd-detect-virt at boot)
-# | resolute | lxd-vm       |

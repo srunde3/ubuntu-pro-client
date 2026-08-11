@@ -28,6 +28,10 @@ Feature: Client behaviour for the API endpoints
     When I run `python3 -c "from uaclient.api.u.pro.detach.v1 import detach"` as non-root
     When I run `python3 -c "from uaclient.api.u.pro.security.cves.v1 import cves"` as non-root
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @releases:interim
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release  | machine_type  |
       | xenial   | lxd-container |
@@ -79,6 +83,10 @@ Feature: Client behaviour for the API endpoints
       ]
       """
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @releases:interim
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release  | machine_type  |
       | xenial   | lxd-container |
@@ -173,6 +181,10 @@ Feature: Client behaviour for the API endpoints
       }
       """
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @releases:interim
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release  | machine_type  |
       | xenial   | lxd-container |
@@ -287,6 +299,10 @@ Feature: Client behaviour for the API endpoints
       }
       """
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @releases:interim
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release  | machine_type  |
       | xenial   | lxd-container |

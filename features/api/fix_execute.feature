@@ -180,6 +180,9 @@ Feature: Fix execute API endpoints
       }
       """
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @machine_types:lxd-container
     Examples: ubuntu release details
       | release  | machine_type  |
       | xenial   | lxd-container |
@@ -515,6 +518,7 @@ Feature: Fix execute API endpoints
       }
       """
 
+    @releases:fixed
     Examples: ubuntu release details
       | release | machine_type  |
       | focal   | lxd-container |
@@ -1129,6 +1133,7 @@ Feature: Fix execute API endpoints
       }
       """
 
+    @releases:fixed
     Examples: ubuntu release details
       | release | machine_type  |
       | xenial  | lxd-container |
@@ -1562,6 +1567,7 @@ Feature: Fix execute API endpoints
       }
       """
 
+    @releases:fixed
     Examples: ubuntu release details
       | release | machine_type  |
       | bionic  | lxd-container |

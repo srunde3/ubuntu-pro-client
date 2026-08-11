@@ -55,9 +55,16 @@ Feature: Pro autocomplete commands
       esm-apps    +fips             +realtime-kernel\s*
       """
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @releases:interim
+    @machine_types:lxd-container
+    # This skips xenial. On xenial, bash sorts the autocomplete output
+    # in a different order. The stdout regexp checks cannot rely on a
+    # fixed order there.
+    @releases:skip:xenial
     Examples: ubuntu release
       | release  | machine_type  |
-      # | xenial  | lxd-container | Can't rely on Xenial because of bash sorting things weirdly
       | bionic   | lxd-container |
       | focal    | lxd-container |
       | jammy    | lxd-container |

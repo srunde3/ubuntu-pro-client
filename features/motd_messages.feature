@@ -45,6 +45,9 @@ Feature: MOTD Messages
       [\w\d.]+
       """
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release  | machine_type  | service   |
       | xenial   | lxd-container | esm-infra |
@@ -137,6 +140,10 @@ Feature: MOTD Messages
       Renew your subscription at https:\/\/ubuntu.com\/pro\/dashboard
       """
 
+    # This test uses release xenial and release bionic only. It checks
+    # the grammar of the legacy-format expiration message. The test
+    # does not need to run on every release.
+    @releases:fixed
     Examples: ubuntu release
       | release | machine_type  | service   |
       | xenial  | lxd-container | esm-infra |

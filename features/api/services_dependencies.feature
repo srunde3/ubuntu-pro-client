@@ -380,6 +380,10 @@ Feature: u.pro.services.dependencies
         name: ros-updates
       """
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @releases:interim
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release  | machine_type  |
       | xenial   | lxd-container |

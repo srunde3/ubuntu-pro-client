@@ -35,6 +35,9 @@ Feature: Enable anbox on Ubuntu
     When I run `pro disable anbox-cloud` with sudo
     Then I verify that `anbox-cloud` is disabled
 
+    @releases:lts_supported
+    @releases:interim
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release  | machine_type  |
       | jammy    | lxd-container |
@@ -52,6 +55,7 @@ Feature: Enable anbox on Ubuntu
       Could not enable Anbox Cloud.
       """
 
+    @releases:fixed
     Examples: ubuntu release
       | release | machine_type |
       | xenial  | lxd-vm       |
@@ -127,11 +131,15 @@ Feature: Enable anbox on Ubuntu
     Then I verify that `anbox-cloud` is disabled
     And I verify that no files exist matching `/var/lib/ubuntu-advantage/private/anbox-cloud-credentials`
 
+    @releases:lts_supported
+    @releases:interim
+    @machine_types:lxd-vm
+    # This skips resolute. The AppArmor profile
+    # ubuntu_pro_esm_cache_systemd_detect_virt needs the perfmon
+    # capability on resolute. systemd-detect-virt needs perfmon at boot.
+    # Add resolute back once the profile has this fix.
+    @releases:skip:resolute
     Examples: ubuntu release
       | release | machine_type |
       | jammy   | lxd-vm       |
       | noble   | lxd-vm       |
-
-# TODO: re-enable once AppArmor profile ubuntu_pro_esm_cache_systemd_detect_virt
-# gains capability perfmon on resolute (needed by systemd-detect-virt at boot)
-# | resolute | lxd-vm       |

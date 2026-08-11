@@ -299,6 +299,7 @@ Feature: Client behaviour for CVE vulnerabilities API
       }
       """
 
+    @releases:fixed
     Examples: ubuntu release
       | release | machine_type  |
       | xenial  | lxd-container |

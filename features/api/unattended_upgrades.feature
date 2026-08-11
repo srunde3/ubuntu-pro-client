@@ -246,6 +246,10 @@ Feature: api.u.unattended_upgrades.status.v1
       }
       """
 
+    @releases:lts_supported
+    @releases:lts_esm
+    @releases:interim
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release  | machine_type  | extra_field                                  |
       | xenial   | lxd-container |                                              |

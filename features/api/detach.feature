@@ -105,7 +105,12 @@ Feature: Detach API endpoint
       }
       """
 
-    # TODO: Add resolute once AppArmor ubuntu_pro_esm_cache//ps profile is fixed
+    # This skips resolute. The AppArmor profile ubuntu_pro_esm_cache//ps
+    # is broken on resolute.
+    @releases:lts_supported
+    @releases:lts_esm
+    @releases:skip:resolute
+    @machine_types:lxd-container
     Examples: ubuntu release
       | release | machine_type  |
       | xenial  | lxd-container |

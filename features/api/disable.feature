@@ -121,6 +121,10 @@ Feature: u.pro.services.disable
       *** <curl_version> 500
       """
 
+    # This is a canary test for the disable API. It checks the error,
+    # dependent-service, and purge mechanisms. The test does not need to
+    # run on every release.
+    @releases:fixed
     Examples:
       | release | machine_type  | curl_version       |
       | xenial  | lxd-container | 7.47.0-1ubuntu2.19 |
@@ -166,6 +170,9 @@ Feature: u.pro.services.disable
       ]
       """
 
+    # This is a canary test for the purge-not-supported mechanism on vm
+    # services. The test does not need to run on every release.
+    @releases:fixed
     Examples:
       | release | machine_type |
       | jammy   | lxd-vm       |
@@ -198,6 +205,9 @@ Feature: u.pro.services.disable
       {"_schema_version": "v1", "data": {"attributes": {"disabled": ["esm-apps", "ros", "ros-updates"]}, "meta": {"environment_vars": []}, "type": "DisableService"}, "errors": [], "result": "success"
       """
 
+    # This is a canary test for the --show-progress step-reporting
+    # mechanism. The test does not need to run on every release.
+    @releases:fixed
     Examples:
       | release | machine_type  |
       | xenial  | lxd-container |
