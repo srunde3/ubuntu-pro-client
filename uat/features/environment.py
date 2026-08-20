@@ -16,6 +16,18 @@ def before_all(context):
     context.machines = {}
 
 
+def _destroy_machines(context):
+    for machine in context.machines.values():
+        machine.destroy()
+    context.machines.clear()
+
+
+def before_feature(context, feature):
+    context.machine = None
+    _destroy_machines(context)
+    VagrantMachine(context.uat_config.vagrant_dir).destroy()
+
+
 def before_scenario(context, scenario):
     context.machine = None
 
@@ -24,11 +36,16 @@ def after_scenario(context, scenario):
     pass
 
 
+def after_feature(context, feature):
+    if not context.uat_config.keep_vm:
+        _destroy_machines(context)
+    context.machine = None
+
+
 def after_all(context):
     if not context.machines or context.uat_config.keep_vm:
         return
-    for machine in context.machines.values():
-        machine.destroy()
+    _destroy_machines(context)
 
 
 def get_machine(context):
