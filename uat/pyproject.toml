@@ -1,0 +1,8 @@
+[project]
+name = "trusty-vbox-uat"
+version = "0.1.0"
+description = "Development-only Trusty VirtualBox UAT harness"
+requires-python = ">=3.10"
+dependencies = [
+    "behave>=1.2.6,<2",
+]
