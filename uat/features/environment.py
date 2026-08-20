@@ -32,9 +32,14 @@ def after_all(context):
 
 def get_machine(context):
     if getattr(context, "machine", None) is None:
+        if not context.uat_config.deb_path:
+            raise RuntimeError(
+                "Set UACLIENT_UAT_DEB_PATH before running the smoke suite"
+            )
         context.machine = VagrantMachine(context.uat_config.vagrant_dir)
         context.machine.up()
         context.machines["SUT"] = context.machine
+        install_deb(context)
     return context.machine
 
 

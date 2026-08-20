@@ -63,9 +63,11 @@ class VagrantMachine:
         remote_path = "/tmp/ubuntu-pro-uat.deb"
         self.push_file(deb_path, remote_path)
         result = self.execute(
-            "dpkg -i {} || true; apt-get -f install --yes --no-install-recommends".format(
-                shlex.quote(remote_path)
-            ),
+            "dpkg -i {path}; dpkg_status=$?; "
+            "if [ $dpkg_status -ne 0 ]; then "
+            "apt-get -f install --yes --no-install-recommends && "
+            "dpkg -i {path}; "
+            "else exit 0; fi".format(path=shlex.quote(remote_path)),
             use_sudo=True,
         )
         self.execute(["rm", "-f", remote_path], use_sudo=True)
