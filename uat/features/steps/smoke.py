@@ -1,4 +1,5 @@
 import os
+import shlex
 import tempfile
 import uuid
 
@@ -22,6 +23,24 @@ def given_machine_with_deb(context, release, machine_type):
 @when("I run `{command}`")
 def when_run_command(context, command):
     context.process = context.machine.execute(command)
+
+
+@when("I run `{command}` as sudo")
+def when_run_command_as_sudo(context, command):
+    context.process = context.machine.execute(command, use_sudo=True)
+
+
+@when("I attach using the configured contract token")
+def when_attach_using_configured_token(context):
+    token = context.uat_config.contract_token
+    if not token:
+        raise RuntimeError(
+            "Set UACLIENT_UAT_CONTRACT_TOKEN before running the attach smoke"
+        )
+    context.process = context.machine.execute(
+        "ua attach {} --no-auto-enable".format(shlex.quote(token)),
+        use_sudo=True,
+    )
 
 
 @then("the command succeeds")

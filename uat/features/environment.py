@@ -8,6 +8,7 @@ class Config:
         self.keep_vm = os.getenv("UACLIENT_UAT_KEEP_VM", "0") == "1"
         self.vagrant_dir = os.path.dirname(os.path.dirname(__file__))
         self.deb_path = os.getenv("UACLIENT_UAT_DEB_PATH")
+        self.contract_token = os.getenv("UACLIENT_UAT_CONTRACT_TOKEN")
 
 
 def before_all(context):

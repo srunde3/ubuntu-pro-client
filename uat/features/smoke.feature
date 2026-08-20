@@ -15,3 +15,17 @@ Feature: Trusty VirtualBox UAT harness
     Given a `trusty` `vagrant` machine with ubuntu-pro-client installed
     When I run `ua version`
     Then the command succeeds
+
+  Scenario: Execute a privileged command on the Trusty SUT
+    Given a `trusty` `vagrant` machine with ubuntu-pro-client installed
+    When I run `id -u` as sudo
+    Then the command succeeds
+    And stdout contains `0`
+
+  Scenario: Attach the Trusty SUT without enabling services
+    Given a `trusty` `vagrant` machine with ubuntu-pro-client installed
+    When I attach using the configured contract token
+    Then the command succeeds
+    When I run `ua status`
+    Then the command succeeds
+    And stdout contains `esm-infra`
