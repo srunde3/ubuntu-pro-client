@@ -70,6 +70,11 @@ def then_file_exists(context, path):
     _run_as_root(context, ["test", "-f", path])
 
 
+@then("the file `{path}` does not exist")
+def then_file_does_not_exist(context, path):
+    _run_as_root(context, ["test", "!", "-e", path])
+
+
 @then("the file `{path}` contains `{expected}`")
 def then_file_contains(context, path, expected):
     contents = _run_as_root(context, ["cat", path])

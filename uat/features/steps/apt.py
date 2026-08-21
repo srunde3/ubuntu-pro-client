@@ -51,10 +51,10 @@ def then_apt_auth_file_does_not_exist(context):
 @then("the apt auth file contains `{expected}`")
 def then_apt_auth_file_contains(context, expected):
     contents = _read_apt_auth_file(context)
-    assert contents is not None, "{} does not exist".format(apt_auth_file(context))
-    assert expected in contents, "Expected {!r} in {}\ncontents:\n{}".format(
-        expected, apt_auth_file(context), contents
-    )
+    path = apt_auth_file(context)
+    assert contents is not None, "{} does not exist".format(path)
+    # The file holds live credentials, so never echo it into the test log.
+    assert expected in contents, "Expected {!r} in {}".format(expected, path)
 
 
 @then("the apt auth file does not contain `{expected}`")
@@ -62,6 +62,6 @@ def then_apt_auth_file_does_not_contain(context, expected):
     contents = _read_apt_auth_file(context)
     if contents is None:
         return
-    assert expected not in contents, "Did not expect {!r} in {}\ncontents:\n{}".format(
-        expected, apt_auth_file(context), contents
+    assert expected not in contents, "Did not expect {!r} in {}".format(
+        expected, apt_auth_file(context)
     )
