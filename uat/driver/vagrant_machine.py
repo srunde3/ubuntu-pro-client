@@ -123,6 +123,15 @@ class VagrantMachine:
         self.execute(["rm", "-f", remote_path], use_sudo=True)
         return result
 
+    def install_package(self, package: str) -> CommandResult:
+        return self.execute(
+            "apt-get update && "
+            "apt-get install --assume-yes --no-install-recommends {}".format(
+                shlex.quote(package)
+            ),
+            use_sudo=True,
+        )
+
     def pull_file(self, remote_path: str, local_path: str) -> None:
         temp_path = "/tmp/vagrant-pull-{}".format(os.getpid())
         result = self.execute(
