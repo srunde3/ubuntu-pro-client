@@ -29,6 +29,15 @@ def then_file_contains(context, path, expected):
 
 @then("service `{service}` is enabled")
 def then_service_is_enabled(context, service):
+    _assert_service_status(context, service, "enabled")
+
+
+@then("service `{service}` is disabled")
+def then_service_is_disabled(context, service):
+    _assert_service_status(context, service, "disabled")
+
+
+def _assert_service_status(context, service, expected):
     raw_status = _run_as_root(context, ["ua", "status", "--format", "json"])
     status = json.loads(raw_status)
     service_status = next(
@@ -36,5 +45,13 @@ def then_service_is_enabled(context, service):
         None,
     )
     assert (
-        service_status and service_status["status"] == "enabled"
-    ), "Expected {} to be enabled\nstatus:\n{}".format(service, raw_status)
+        service_status and service_status["status"] == expected
+    ), "Expected {} to be {}\nstatus:\n{}".format(service, expected, raw_status)
+
+
+@then("apt policy contains origin `{origin}`")
+def then_apt_policy_contains_origin(context, origin):
+    policy = _run_as_root(context, ["apt-cache", "policy"])
+    assert (
+        "o={}".format(origin) in policy
+    ), "Expected origin {!r} in apt-cache policy\n{}".format(origin, policy)

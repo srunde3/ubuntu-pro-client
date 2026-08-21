@@ -9,7 +9,7 @@ Feature: Trusty ESM attachment
     When I run `ua enable esm-infra` as sudo
     Then the command succeeds
     And service `esm-infra` is enabled
-    Then the file `/etc/apt/auth.conf.d/90ubuntu-advantage` exists
-    And the file `/etc/apt/auth.conf.d/90ubuntu-advantage` contains `machine esm.ubuntu.com/`
+    Then the apt auth file exists
+    And the apt auth file contains `machine esm.ubuntu.com/`
     Then the file `/etc/apt/sources.list.d/ubuntu-esm-infra-trusty.list` exists
     Then the file `/etc/apt/trusted.gpg.d/ubuntu-advantage-esm-infra-trusty.gpg` exists
