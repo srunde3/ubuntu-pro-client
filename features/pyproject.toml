@@ -1,5 +1,5 @@
 [project]
-name = "trusty-vbox-uat"
+name = "ubuntu-advantage-tools-uat"
 version = "0.1.0"
 description = "Development-only Trusty VirtualBox UAT harness"
 requires-python = ">=3.10"

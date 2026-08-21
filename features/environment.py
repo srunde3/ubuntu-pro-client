@@ -1,6 +1,6 @@
 import os
 
-from driver.vagrant_machine import VagrantMachine
+from features.driver.vagrant_machine import VagrantMachine
 
 PREBUILT = "prebuilt"
 ARCHIVE = "archive"
@@ -11,7 +11,7 @@ CLIENT_PACKAGE = "ubuntu-advantage-tools"
 class Config:
     def __init__(self):
         self.keep_vm = os.getenv("UACLIENT_UAT_KEEP_VM", "0") == "1"
-        self.vagrant_dir = os.path.dirname(os.path.dirname(__file__))
+        self.vagrant_dir = os.path.dirname(__file__)
         self.deb_path = os.getenv("UACLIENT_UAT_DEB_PATH")
         self.contract_token = os.getenv("UACLIENT_UAT_CONTRACT_TOKEN")
         self.install_from = os.getenv(

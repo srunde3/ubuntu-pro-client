@@ -8,7 +8,9 @@ legacy support. They are conceptually similar to what is in `main` but run
 a smaller set of features and have more limited options.
 
 These run using modern Python (`uv`) because they do not ship with the Trusty
-package, which must run on Python 3.4.
+package, which must run on Python 3.4. This directory is a self-contained `uv`
+subproject: its dependencies live in `features/pyproject.toml` and nothing at
+the top level of the repository refers to it.
 
 ## Setup
 
@@ -33,11 +35,16 @@ export UACLIENT_UAT_INSTALL_FROM=archive   # installs ubuntu-advantage-tools wit
 
 ## Running
 
+Run from the repository root, pointing uv at this subproject:
+
 ```sh
-uv run behave                            # whole suite
-uv run behave features/attach.feature    # one feature
-uv run behave --dry-run --no-summary     # step wiring check, no VM
+uv run --project features behave                          # whole suite
+uv run --project features behave features/attach.feature  # one feature
+uv run --project features behave --dry-run --no-summary   # step wiring, no VM
 ```
+
+Add `--no-capture --no-capture-stderr --no-logcapture` to see command output as
+it happens rather than only on failure.
 
 Only one behave process may drive the Vagrantfile at a time.
 
@@ -47,8 +54,8 @@ Only one behave process may drive the Vagrantfile at a time.
 inspect it once the run finishes:
 
 ```sh
-UACLIENT_UAT_KEEP_VM=1 uv run behave features/attach.feature
-vagrant ssh
+UACLIENT_UAT_KEEP_VM=1 uv run --project features behave features/attach.feature
+cd features && vagrant ssh
 ```
 
 This only suppresses teardown *after* a run. The next behave run destroys the
