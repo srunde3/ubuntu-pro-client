@@ -16,14 +16,14 @@ Feature: Command behaviour when unattached
       esm-infra-legacy  yes        Expanded Security Maintenance for Infrastructure on Legacy Instances
       fips              no         NIST-certified FIPS modules
       fips-updates      no         Uncertified security updates to FIPS modules
-      livepatch         yes        Canonical Livepatch service
+      livepatch         no         Canonical Livepatch service
 
       This machine is not attached to a UA subscription.
       See https://ubuntu.com/advantage
       """
 
   Scenario: Unattached detach
-    When I run `ua detach` as non-root
+    When I run `ua detach` as sudo
     Then I will see the following on stderr:
       """
       This machine is not attached to a UA subscription.
@@ -31,7 +31,7 @@ Feature: Command behaviour when unattached
       """
 
   Scenario: Unattached refresh
-    When I run `ua refresh` as non-root
+    When I run `ua refresh` as sudo
     Then I will see the following on stderr:
       """
       This machine is not attached to a UA subscription.
@@ -39,16 +39,16 @@ Feature: Command behaviour when unattached
       """
 
   Scenario: Unattached enable of a known service
-    When I run `ua enable livepatch` as non-root
+    When I run `ua enable livepatch` as sudo
     Then I will see the following on stderr:
       """
-      To use 'livepatch' you need an Ubuntu Advantage subscription.
+      To use 'livepatch' you need an Ubuntu Advantage subscription
       Personal and community subscriptions are available at no charge
       See https://ubuntu.com/advantage
       """
 
   Scenario: Unattached enable of an unknown service
-    When I run `ua enable foobar` as non-root
+    When I run `ua enable foobar` as sudo
     Then I will see the following on stderr:
       """
       Cannot enable 'foobar'
@@ -56,16 +56,16 @@ Feature: Command behaviour when unattached
       """
 
   Scenario: Unattached disable of a known service
-    When I run `ua disable livepatch` as non-root
+    When I run `ua disable livepatch` as sudo
     Then I will see the following on stderr:
       """
-      To use 'livepatch' you need an Ubuntu Advantage subscription.
+      To use 'livepatch' you need an Ubuntu Advantage subscription
       Personal and community subscriptions are available at no charge
       See https://ubuntu.com/advantage
       """
 
   Scenario: Unattached disable of an unknown service
-    When I run `ua disable foobar` as non-root
+    When I run `ua disable foobar` as sudo
     Then I will see the following on stderr:
       """
       Cannot disable 'foobar'

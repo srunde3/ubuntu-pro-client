@@ -13,10 +13,10 @@ package, which must run on Python 3.4.
 ## Setup
 
 Requires `vagrant`, `VBoxManage`, and `uv` on the host, plus a locally built
-Trusty `.deb` and a contract token that entitles ESM on Trusty.
+Trusty `.deb` and a contract token that entitles ESM Legacy on Trusty.
 
 ```sh
-export UACLIENT_UAT_DEB_PATH=/path/to/ubuntu-advantage-tools_19.7_amd64.deb
+export UACLIENT_UAT_DEB_PATH=/path/to/ubuntu-advantage-tools_<version>_amd64.deb
 export UACLIENT_UAT_CONTRACT_TOKEN='...'
 ```
 

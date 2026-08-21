@@ -1,3 +1,4 @@
+import difflib
 import os
 import tempfile
 import uuid
@@ -36,16 +37,26 @@ def when_run_command_as_non_root(context, command):
 
 @then("I will see the following on stdout:")
 def then_i_will_see_on_stdout(context):
-    assert (
-        context.process.stdout.strip() == context.text
-    ), "stdout:\n{}\nexpected:\n{}".format(context.process.stdout.strip(), context.text)
+    _assert_output_matches(context.process.stdout, context.text, "stdout")
 
 
 @then("I will see the following on stderr:")
 def then_i_will_see_on_stderr(context):
-    assert (
-        context.process.stderr.strip() == context.text
-    ), "stderr:\n{}\nexpected:\n{}".format(context.process.stderr.strip(), context.text)
+    _assert_output_matches(context.process.stderr, context.text, "stderr")
+
+
+def _assert_output_matches(actual, expected, stream):
+    actual = actual.strip()
+    if actual == expected:
+        return
+    diff = difflib.unified_diff(
+        expected.splitlines(),
+        actual.splitlines(),
+        fromfile="expected",
+        tofile=stream,
+        lineterm="",
+    )
+    raise AssertionError("\n".join(diff))
 
 
 @then("the command succeeds")
