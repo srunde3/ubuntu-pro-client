@@ -27,3 +27,8 @@ Feature: Trusty ESM Infra Legacy
     When I run `apt-get update -o Dir::Etc::sourcelist=/etc/apt/sources.list.d/ubuntu-esm-infra-legacy-trusty.list -o Dir::Etc::sourceparts=/dev/null -o APT::Get::List-Cleanup=0` as sudo
     Then the command succeeds
     And apt policy contains origin `UbuntuESM`
+
+  Scenario: A package can be upgraded from esm-infra-legacy
+    When I run `apt-get install --only-upgrade --assume-yes curl -o Dir::Etc::sourcelist=/etc/apt/sources.list.d/ubuntu-esm-infra-legacy-trusty.list -o Dir::Etc::sourceparts=/dev/null` as sudo
+    Then the command succeeds
+    And the installed version of `curl` comes from `esm.ubuntu.com/infra-legacy`

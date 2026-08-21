@@ -1,4 +1,6 @@
 import json
+from dataclasses import dataclass
+from typing import List, Optional
 
 from behave import then
 
@@ -12,6 +14,55 @@ def _run_as_root(context, command):
             )
         )
     return result.stdout
+
+
+# Queried through python-apt on the SUT
+APT_QUERY = """
+import json
+import sys
+
+import apt
+
+version = apt.Cache()[sys.argv[1]].installed
+print(json.dumps({
+    "installed": version.version if version else None,
+    "uris": list(version.uris) if version else [],
+    "origins": [
+        {"site": o.site, "archive": o.archive, "origin": o.origin}
+        for o in (version.origins if version else [])
+    ],
+}))
+"""
+
+
+@dataclass
+class Origin:
+    site: str
+    archive: str
+    origin: str
+
+
+@dataclass
+class PackageQuery:
+    """Installed state of one package, as reported by python-apt on the SUT."""
+
+    installed: Optional[str]
+    uris: List[str]
+    origins: List[Origin]
+
+    @classmethod
+    def from_json(cls, raw: str) -> "PackageQuery":
+        data = json.loads(raw)
+        return cls(
+            installed=data["installed"],
+            uris=data["uris"],
+            origins=[Origin(**origin) for origin in data["origins"]],
+        )
+
+
+def _query_package(context, package):
+    raw = _run_as_root(context, ["python3", "-c", APT_QUERY, package])
+    return PackageQuery.from_json(raw)
 
 
 @then("the file `{path}` exists")
@@ -55,3 +106,14 @@ def then_apt_policy_contains_origin(context, origin):
     assert (
         "o={}".format(origin) in policy
     ), "Expected origin {!r} in apt-cache policy\n{}".format(origin, policy)
+
+
+@then("the installed version of `{package}` comes from `{source}`")
+def then_installed_version_comes_from(context, package, source):
+    pkg = _query_package(context, package)
+    assert pkg.installed, "{} is not installed".format(package)
+    assert any(
+        source in uri for uri in pkg.uris
+    ), "Installed {} {} does not come from {!r}\n{}".format(
+        package, pkg.installed, source, pkg
+    )
