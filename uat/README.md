@@ -1,11 +1,14 @@
-# Trusty VirtualBox UAT
+# Features
 
-End-to-end behave tests for `ubuntu-advantage-tools` on a real Ubuntu 14.04
-(Trusty) VM, provisioned with Vagrant + VirtualBox. Dev-only; not packaged.
+End-to-end `behave` tests for `ubuntu-advantage-tools` on Trusty.
 
-The VM is destroyed and recreated between feature files, not between scenarios.
-Scenarios in one file share a machine and run top to bottom, so anything that
-needs a pristine machine belongs in its own `.feature`.
+These e2e tests were created well after the last release of Ubuntu 14.04 Trusty
+in order to support security patches until Trusty reaches the end of
+legacy support. They are conceptually similar to what is in `main` but run
+a smaller set of features.
+
+These run using modern Python (`uv`) because they do not ship with the Trusty
+package, which must run on Python 3.4.
 
 ## Setup
 

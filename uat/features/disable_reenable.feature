@@ -3,7 +3,8 @@ Feature: Trusty ESM disable and re-enable
   Background:
     Given a `trusty` `vagrant` machine with ubuntu-pro-client installed
 
-  Scenario: Disabling esm-infra removes only the apt credentials
+  # This was shown to be the case in 19.7
+  Scenario: Disabling esm-infra keeps the lists and credentials
     When I attach using the configured contract token
     Then the command succeeds
     When I run `ua enable esm-infra` as sudo
@@ -12,7 +13,7 @@ Feature: Trusty ESM disable and re-enable
     When I run `ua disable esm-infra` as sudo
     Then the command succeeds
     And service `esm-infra` is disabled
-    And the apt auth file does not contain `machine esm.ubuntu.com/ login bearer`
+    And the apt auth file contains `machine esm.ubuntu.com/ login bearer`
     Then the file `/etc/apt/sources.list.d/ubuntu-esm-infra-trusty.list` exists
     And the file `/etc/apt/trusted.gpg.d/ubuntu-advantage-esm-infra-trusty.gpg` exists
 

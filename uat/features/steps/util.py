@@ -29,6 +29,25 @@ def when_run_command_as_sudo(context, command):
     context.process = context.machine.execute(command, use_sudo=True)
 
 
+@when("I run `{command}` as non-root")
+def when_run_command_as_non_root(context, command):
+    context.process = context.machine.execute(command)
+
+
+@then("I will see the following on stdout:")
+def then_i_will_see_on_stdout(context):
+    assert (
+        context.process.stdout.strip() == context.text
+    ), "stdout:\n{}\nexpected:\n{}".format(context.process.stdout.strip(), context.text)
+
+
+@then("I will see the following on stderr:")
+def then_i_will_see_on_stderr(context):
+    assert (
+        context.process.stderr.strip() == context.text
+    ), "stderr:\n{}\nexpected:\n{}".format(context.process.stderr.strip(), context.text)
+
+
 @then("the command succeeds")
 def then_command_succeeds(context):
     assert (

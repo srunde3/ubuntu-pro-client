@@ -29,7 +29,7 @@ def before_feature(context, feature):
 
 
 def before_scenario(context, scenario):
-    context.machine = None
+    context.machine = context.machines.get("SUT")
 
 
 def after_scenario(context, scenario):
