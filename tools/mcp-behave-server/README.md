@@ -103,3 +103,9 @@ The server also supports one MCP-only safety toggle:
 - `machine_types` is required.
 - Cloud machine types are blocked by default and require setting `MCP_ALLOW_CLOUD_MACHINE_TYPES=1`.
 - Parallel behave starts are capped at `1` by default, and can be adjusted with `MCP_MAX_PARALLEL_JOBS`.
+
+## TODOs
+
+- Add "browse running jobs" if not already implemented
+- Add way to kill jobs if they are known to be hanging
+- Integrate with experiments from scenario tagging -- may have at least the same parser.
