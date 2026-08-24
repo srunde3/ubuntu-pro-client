@@ -536,7 +536,7 @@ class Azure(Cloud):
         )
         inst = self.api.launch(
             image_id=image_name,
-            instance_type="Standard_B2s",
+            instance_type="Standard_B2s_v2",
             user_data=user_data,
             inbound_ports=inbound_ports,
         )
@@ -704,8 +704,7 @@ class _LXD(Cloud):
         )
 
         if self.name == "lxd-virtual-machine" and series == "xenial":
-            # Livepatch won't apply patches on Xenial with secure boot enabled
-            config_dict = {"security.secureboot": False}
+            config_dict = {"boot.mode": "uefi-nosecureboot"}
         else:
             config_dict = {}
 

@@ -28,6 +28,7 @@ Feature: Logs in Json Array Formatter
       | noble    | lxd-container | with sudo   |
       | questing | lxd-container | with sudo   |
       | resolute | lxd-container | with sudo   |
+      | stonking | lxd-container | with sudo   |
 
   Scenario Outline: Non-root user and root user log files are different
     Given a `<release>` `<machine_type>` machine with ubuntu-advantage-tools installed
@@ -62,12 +63,13 @@ Feature: Logs in Json Array Formatter
       | noble    | lxd-container |
       | questing | lxd-container |
       | resolute | lxd-container |
+      | stonking | lxd-container |
 
   Scenario Outline: Non-root user log files included in collect logs
     Given a `<release>` `<machine_type>` machine with ubuntu-advantage-tools installed
     When I verify that running `pro status` `with sudo` exits `0`
     And I verify that running `pro collect-logs` `with sudo` exits `0`
-    And I run `tar -tf pro_logs.tar.gz` as non-root
+    And I run `tar -tf pro_logs.tar.gz` with sudo
     Then stdout does not contain substring:
       """
       user0.log
@@ -75,7 +77,7 @@ Feature: Logs in Json Array Formatter
     When I delete the file `pro_logs.tar.gz`
     And I verify that running `pro status` `as non-root` exits `0`
     And I verify that running `pro collect-logs` `with sudo` exits `0`
-    And I run `tar -tf pro_logs.tar.gz` as non-root
+    And I run `tar -tf pro_logs.tar.gz` with sudo
     Then stdout contains substring:
       """
       user0.log
@@ -90,6 +92,7 @@ Feature: Logs in Json Array Formatter
       | noble    | lxd-container |
       | questing | lxd-container |
       | resolute | lxd-container |
+      | stonking | lxd-container |
 
   Scenario Outline: logrotate configuration works
     Given a `<release>` `<machine_type>` machine with ubuntu-advantage-tools installed
@@ -140,3 +143,4 @@ Feature: Logs in Json Array Formatter
       | noble    | lxd-container |
       | questing | lxd-container |
       | resolute | lxd-container |
+      | stonking | lxd-container |

@@ -59,3 +59,6 @@ tools/mcp-behave-server/.pytest_cache/
 
 # compiled translations
 debian/po/usr
+
+# git worktrees
+.worktrees/
