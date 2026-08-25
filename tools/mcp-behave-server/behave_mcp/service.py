@@ -510,11 +510,20 @@ class BehaveService:
         summaries: list[JobSummary] = []
         for job_id in sorted(set(in_memory_jobs) | disk_job_ids):
             job = in_memory_jobs.get(job_id)
+            recovered = job is None
             if job is None:
                 job = self._recover_job(job_id, repo_root or None)
                 if job is None:
                     continue
-            summaries.append(self._job_summary(job_id, job))
+            summary = self._job_summary(job_id, job)
+            if recovered:
+                logger.info(
+                    "recovered job %s -> status=%s ok=%s",
+                    job_id,
+                    summary.status,
+                    summary.ok,
+                )
+            summaries.append(summary)
 
         summaries.sort(key=lambda summary: summary.started_at or "")
         running = [s for s in summaries if s.status == "running"]
@@ -769,7 +778,7 @@ class BehaveService:
             )
             metadata = Path(metadata_artifacts.get("metadata", str(metadata)))
 
-        return Job(
+        job = Job(
             job_id=job_id,
             process_handle=None,
             stdout_log=stdout_log,
@@ -778,3 +787,7 @@ class BehaveService:
             reserved=False,
             pid=metadata_payload.get("pid"),
         )
+        # Cache the recovery so later calls in this process hit the
+        # registry instead of re-reading disk and re-logging every poll.
+        self._registry.register(job_id, job)
+        return job

@@ -129,6 +129,8 @@ The server also supports one MCP-only safety toggle:
 - Add way to kill jobs if they are known to be hanging
 - Add different "install from" options. Continue defaulting to 'local'. Include git commit or other unique identifier for build for each option
 - Include ability to get coverage summary based on results. Should be grouped by the version-under-test, so we won't try to aggregate results for archive vs. local.
+- Improve the job recovery mechanism; it's a little verbose on logs.
+- Consider some sort of report export/aggregation - can more easily show the results for the SRU, possibily with improved formatting.
 
 Known limitation: job liveness after a server restart is determined by checking whether the recorded PID is still alive (`os.kill(pid, 0)`). If that PID has since been reused by an unrelated process, a dead job can be misreported as still running. This is considered an acceptable tradeoff for a local dev tool.
 

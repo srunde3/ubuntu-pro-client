@@ -776,6 +776,32 @@ def test_wait_for_completion_recovers_running_job_via_pid_liveness(tmp_path):
     assert timeout["last_status"] == "running"
 
 
+def test_recovered_job_is_cached_in_registry(tmp_path):
+    """A recovered job is registered so polls don't re-recover/re-log."""
+    job_id = "jobrecoveredonce"
+    stdout_log = tmp_path / f"{job_id}_stdout.log"
+    stdout_log.write_text("still going\n", encoding="utf-8")
+    metadata = tmp_path / f"{job_id}_meta.json"
+    metadata.write_text(json.dumps({"pid": 999}), encoding="utf-8")
+
+    registry = InMemoryJobRegistry()
+    launcher = FakeLauncher(alive_pids={999})
+    service = _make_service(
+        FakeWorkspace(repo_root=tmp_path, log_dir=tmp_path),
+        launcher=launcher,
+        registry=registry,
+    )
+
+    assert registry.get(job_id) is None
+
+    service.get_logs(job_id)
+
+    cached = registry.get(job_id)
+    assert cached is not None
+    assert cached.process_handle is None
+    assert cached.pid == 999
+
+
 def test_wait_for_completion_recovers_dead_job_without_report_as_not_ok(
     tmp_path,
 ):
