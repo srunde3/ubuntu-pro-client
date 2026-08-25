@@ -86,6 +86,24 @@ Run only the long-running end-to-end MCP test:
 uv run pytest -q -m "e2e and long_running"
 ```
 
+## Linting and type checking
+
+This package is not covered by the repo-root `tox.ini` lint/type envs
+(those only check `uaclient/ features/ lib/`), so it keeps its own
+`lint` dependency group and runs these tools directly via `uv`:
+
+```bash
+uv sync --extra lint
+uv run black --check behave_mcp tests
+uv run isort --check-only behave_mcp tests
+uv run flake8 behave_mcp tests
+uv run mypy behave_mcp
+```
+
+`pro-client-features` is installed editable via a setuptools finder that
+mypy's import resolution can't see on its own; `[tool.mypy] mypy_path`
+in `pyproject.toml` points mypy at the source tree instead.
+
 ## Environment variables
 
 The server will forward a small allowlist of environment variables to the behave subprocess when present:
@@ -107,6 +125,7 @@ The server also supports one MCP-only safety toggle:
 
 ## TODOs
 
+- Better incorporate the shared file parsing library. Treated as a totally external dep right now, which introduces unnecessary code duplication. I don't quite yet know how I want to architect this.
 - Add way to kill jobs if they are known to be hanging
 - Add different "install from" options. Continue defaulting to 'local'. Include git commit or other unique identifier for build for each option
 - Include ability to get coverage summary based on results. Should be grouped by the version-under-test, so we won't try to aggregate results for archive vs. local.
