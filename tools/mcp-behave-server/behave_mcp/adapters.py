@@ -8,15 +8,15 @@ from collections import deque
 from pathlib import Path
 from typing import Any
 
-from behave.parser import parse_file
 from behave_mcp import domain
-from behave_mcp.messages import FeatureDetail
 from behave_mcp.ports import (
     Job,
     LogFileOpenError,
     ProcessStartError,
     ReservationResult,
 )
+
+from features import behave_features
 
 
 class SubprocessHandle:
@@ -125,59 +125,21 @@ class InMemoryJobRegistry:
 
 
 class LocalFeatureFileReader:
-    """Filesystem-backed reader for the repository's feature file catalog."""
+    """Filesystem-backed reader for the repository's feature file catalog.
 
-    def __init__(self) -> None:
-        # Cache parsed feature summaries keyed by absolute path, invalidated by
-        # file mtime so all browse tools share a single parse pass.
-        self._detail_cache: dict[str, tuple[float, FeatureDetail]] = {}
+    Delegates entirely to ``behave_features`` (the ``pro-client-features``
+    dependency -- see ``features/pyproject.toml``) -- parsing and caching
+    ``.feature`` files is a repo-level concern, shared with
+    ``tools/coverage_gaps.py``, not reimplemented per consumer. This class
+    exists only to satisfy the ``FeatureFileReader`` port so
+    ``BehaveService`` stays injectable/fakeable in tests.
+    """
 
     def discover_feature_files(self, repo_root: Path) -> list[str]:
-        features_dir = repo_root / "features"
-        if not features_dir.exists():
-            return []
+        return behave_features.discover_feature_files(repo_root)
 
-        return sorted(
-            str(path.relative_to(repo_root)).replace("\\", "/")
-            for path in features_dir.rglob("*.feature")
-        )
-
-    def discover_feature_details(self, repo_root: Path) -> list[FeatureDetail]:
-        features_dir = repo_root / "features"
-        if not features_dir.exists():
-            return []
-
-        details: list[FeatureDetail] = []
-        for path in sorted(features_dir.rglob("*.feature")):
-            summary = self._read_feature_detail(path)
-            if summary is None:
-                continue
-            rel_path = str(path.relative_to(repo_root)).replace("\\", "/")
-            details.append(summary.model_copy(update={"path": rel_path}))
-        return sorted(details, key=lambda detail: detail.path)
-
-    def _read_feature_detail(self, path: Path) -> FeatureDetail | None:
-        try:
-            mtime = path.stat().st_mtime
-        except OSError:
-            return None
-
-        cache_key = str(path)
-        cached = self._detail_cache.get(cache_key)
-        if cached is not None and cached[0] == mtime:
-            return cached[1]
-
-        try:
-            feature = parse_file(str(path))
-        except Exception:
-            # A single unparseable feature must not break the whole catalog.
-            return None
-        if feature is None:
-            return None
-
-        summary = domain.summarize_feature(feature)
-        self._detail_cache[cache_key] = (mtime, summary)
-        return summary
+    def discover_feature_details(self, repo_root: Path):
+        return behave_features.discover_feature_details(repo_root)
 
 
 class LocalArtifactStore:

@@ -108,4 +108,9 @@ The server also supports one MCP-only safety toggle:
 
 - Add "browse running jobs" if not already implemented
 - Add way to kill jobs if they are known to be hanging
-- Integrate with experiments from scenario tagging -- may have at least the same parser.
+- Add different "install from" options. Continue defaulting to 'local'. Include git commit or other unique identifier for build for each option
+- Include ability to get coverage summary based on results. Should be grouped by the version-under-test, so we won't try to aggregate results for archive vs. local.
+
+Investigate possible parallel execution issue:
+
+> Stalled again on tox provisioning. The tox lock issue still exists when jobs run concurrently (even with different machine types / releases). Let me kill that job and check on the other one.

@@ -1,4 +1,3 @@
-import os
 import subprocess
 from pathlib import Path
 
@@ -15,26 +14,22 @@ from behave_mcp.ports import Job, LogFileOpenError, ProcessStartError
 
 # ---- LocalFeatureFileReader ----
 
+# Parsing/caching behavior (sorting, skipping unparseable files, the mtime
+# cache, ...) is owned by features/behave_features.py and tested in
+# features/tests/test_behave_features.py. LocalFeatureFileReader is now a
+# thin Protocol-conforming delegate, so these tests only need to confirm
+# the delegation itself works end to end.
 
-def test_discover_feature_files_sorted(tmp_path):
-    (tmp_path / "features" / "cli").mkdir(parents=True)
-    (tmp_path / "features" / "b.feature").write_text("", encoding="utf-8")
-    (tmp_path / "features" / "cli" / "a.feature").write_text(
-        "", encoding="utf-8"
-    )
-    (tmp_path / "features" / "notes.txt").write_text("", encoding="utf-8")
+
+def test_discover_feature_files_delegates(tmp_path):
+    (tmp_path / "features").mkdir(parents=True)
+    (tmp_path / "features" / "sample.feature").write_text("", encoding="utf-8")
 
     reader = LocalFeatureFileReader()
 
     assert reader.discover_feature_files(tmp_path) == [
-        "features/b.feature",
-        "features/cli/a.feature",
+        "features/sample.feature"
     ]
-
-
-def test_discover_feature_files_missing_dir(tmp_path):
-    reader = LocalFeatureFileReader()
-    assert reader.discover_feature_files(tmp_path) == []
 
 
 _SAMPLE_FEATURE = """\
@@ -52,9 +47,9 @@ Feature: Sample feature
 """
 
 
-def test_discover_feature_details_parses_scenarios(tmp_path):
-    (tmp_path / "features" / "cli").mkdir(parents=True)
-    (tmp_path / "features" / "cli" / "sample.feature").write_text(
+def test_discover_feature_details_delegates(tmp_path):
+    (tmp_path / "features").mkdir(parents=True)
+    (tmp_path / "features" / "sample.feature").write_text(
         _SAMPLE_FEATURE, encoding="utf-8"
     )
 
@@ -62,52 +57,8 @@ def test_discover_feature_details_parses_scenarios(tmp_path):
     details = reader.discover_feature_details(tmp_path)
 
     assert len(details) == 1
-    detail = details[0]
-    assert detail.path == "features/cli/sample.feature"
-    assert detail.title == "Sample feature"
-    assert detail.requires_config == ["contract_token"]
-    scenario = detail.scenarios[0]
-    assert [c.model_dump() for c in scenario.combos] == [
-        {"release": "jammy", "machine_type": "lxd-container"},
-        {"release": "resolute", "machine_type": "lxd-vm"},
-    ]
-
-
-def test_discover_feature_details_skips_unparseable(tmp_path):
-    (tmp_path / "features").mkdir(parents=True)
-    (tmp_path / "features" / "broken.feature").write_text(
-        "This is not gherkin: {[}\nScenario without feature\n",
-        encoding="utf-8",
-    )
-
-    reader = LocalFeatureFileReader()
-
-    # Must not raise; the broken file is simply omitted.
-    assert reader.discover_feature_details(tmp_path) == []
-
-
-def test_discover_feature_details_missing_dir(tmp_path):
-    reader = LocalFeatureFileReader()
-    assert reader.discover_feature_details(tmp_path) == []
-
-
-def test_discover_feature_details_uses_mtime_cache(tmp_path):
-    features_dir = tmp_path / "features"
-    features_dir.mkdir(parents=True)
-    feature_path = features_dir / "sample.feature"
-    feature_path.write_text(_SAMPLE_FEATURE, encoding="utf-8")
-
-    reader = LocalFeatureFileReader()
-
-    first = reader.discover_feature_details(tmp_path)
-    assert first[0].title == "Sample feature"
-
-    # Same mtime -> cached result returned even if content changes underneath.
-    stat = feature_path.stat()
-    feature_path.write_text("Feature: Changed\n", encoding="utf-8")
-    os.utime(feature_path, (stat.st_atime, stat.st_mtime))
-    cached = reader.discover_feature_details(tmp_path)
-    assert cached[0].title == "Sample feature"
+    assert details[0].path == "features/sample.feature"
+    assert details[0].title == "Sample feature"
 
 
 # ---- LocalArtifactStore ----

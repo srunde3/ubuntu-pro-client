@@ -5,72 +5,15 @@ from typing import Annotated, Any, Literal, Union
 
 from pydantic import BaseModel, Field
 
-# ---------------------------------------------------------------------------
-# Shared data DTOs
-# ---------------------------------------------------------------------------
-
-
-class Combo(BaseModel):
-    """A single valid ``(release, machine_type)`` pair for a scenario."""
-
-    release: str
-    machine_type: str
-
-
-class ScenarioSummary(BaseModel):
-    """A scenario's browse/select metadata (no step text)."""
-
-    name: str
-    type: str
-    tags: list[str]
-    requires_config: list[str]
-    example_columns: list[str]
-    combos: list[Combo]
-
-
-class FeatureDetail(BaseModel):
-    """Full parsed metadata for one feature file."""
-
-    path: str
-    title: str
-    tags: list[str]
-    requires_config: list[str]
-    scenarios: list[ScenarioSummary]
-
-
-class FeatureCatalogEntry(BaseModel):
-    """Lightweight catalog projection of a feature for ``list_features``."""
-
-    path: str
-    title: str
-    scenario_count: int
-    requires_config: list[str]
-    releases: list[str]
-    machine_types: list[str]
-
-
-class DimensionValue(BaseModel):
-    """A distinct release or machine_type with its scenario count."""
-
-    name: str
-    scenario_count: int
-
-
-class Dimensions(BaseModel):
-    """Distinct releases and machine_types across the suite."""
-
-    releases: list[DimensionValue]
-    machine_types: list[DimensionValue]
-
-
-class ScenarioMatch(BaseModel):
-    """A ``find_scenarios`` hit with the combos satisfying the filters."""
-
-    feature_file: str
-    scenario_name: str
-    type: str
-    requires_config: list[str]
-    combos: list[Combo]
+from features.behave_features import (  # noqa: F401
+    Combo,
+    Dimensions,
+    DimensionValue,
+    FeatureCatalogEntry,
+    FeatureDetail,
+    ScenarioMatch,
+    ScenarioSummary,
+)
 
 
 class Artifacts(BaseModel):
