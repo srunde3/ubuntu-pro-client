@@ -11,6 +11,7 @@ The server exposes these MCP tools:
 - `list_dimensions`: returns every distinct `release` and `machine_type` (substrate) used across the whole suite, each with a count of scenarios that reference it. Use it to discover valid filter values.
 - `find_scenarios`: reverse lookup across all features by optional `release`, `machine_type`, `tag`, and `text` (scenario-name substring) filters. Returns matching `feature_file`, `scenario_name`, `type`, required config, and the combos satisfying the filters.
 - `start_behave_scenario`: starts a behave scenario in the background and returns a `job_id`
+- `list_scenario_jobs`: lists active jobs plus a bounded window of recently completed ones, without needing a known `job_id` or access to system processes. Merges in-memory state with jobs recovered from disk, including jobs still running after a server restart.
 - `wait_for_scenario_completion`: waits for completion and returns a compact completion summary or timeout payload
 - `get_scenario_logs`: returns a bounded tail of captured stdout logs for a job
 - `get_scenario_artifacts`: returns disk artifact paths and metadata for a job
@@ -106,10 +107,11 @@ The server also supports one MCP-only safety toggle:
 
 ## TODOs
 
-- Add "browse running jobs" if not already implemented
 - Add way to kill jobs if they are known to be hanging
 - Add different "install from" options. Continue defaulting to 'local'. Include git commit or other unique identifier for build for each option
 - Include ability to get coverage summary based on results. Should be grouped by the version-under-test, so we won't try to aggregate results for archive vs. local.
+
+Known limitation: job liveness after a server restart is determined by checking whether the recorded PID is still alive (`os.kill(pid, 0)`). If that PID has since been reused by an unrelated process, a dead job can be misreported as still running. This is considered an acceptable tradeoff for a local dev tool.
 
 Investigate possible parallel execution issue:
 

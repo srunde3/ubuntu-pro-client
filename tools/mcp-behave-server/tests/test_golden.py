@@ -10,6 +10,7 @@ from pathlib import Path
 from behave_mcp.adapters import (
     InMemoryJobRegistry,
     LocalArtifactStore,
+    LocalFeatureCatalog,
     LocalFeatureFileReader,
 )
 from behave_mcp.config import Settings
@@ -60,6 +61,7 @@ def _service(tmp_path, registry) -> BehaveService:
         workspace=_StubWorkspace(tmp_path),
         settings=_SETTINGS,
         feature_reader=LocalFeatureFileReader(),
+        feature_catalog=LocalFeatureCatalog(),
         artifact_store=LocalArtifactStore(),
         registry=registry,
         launcher=None,
@@ -189,6 +191,7 @@ def test_timeout_key_order(tmp_path):
         workspace=_StubWorkspace(tmp_path),
         settings=_SETTINGS,
         feature_reader=LocalFeatureFileReader(),
+        feature_catalog=LocalFeatureCatalog(),
         artifact_store=LocalArtifactStore(),
         registry=registry,
         launcher=None,

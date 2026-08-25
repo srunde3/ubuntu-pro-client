@@ -2,9 +2,12 @@ import json
 from pathlib import Path
 
 import pytest
+
+from behave_mcp import domain
 from behave_mcp.adapters import (
     InMemoryJobRegistry,
     LocalArtifactStore,
+    LocalFeatureCatalog,
     LocalFeatureFileReader,
 )
 from behave_mcp.config import Settings
@@ -13,8 +16,9 @@ from behave_mcp.service import BehaveService, BehaveServiceError
 
 
 class FakeHandle:
-    def __init__(self, returncode=None):
+    def __init__(self, returncode=None, pid=4242):
         self.returncode = returncode
+        self.pid = pid
         self.closed = False
         self.terminated = False
 
@@ -29,10 +33,11 @@ class FakeHandle:
 
 
 class FakeLauncher:
-    def __init__(self, handle=None, error=None):
+    def __init__(self, handle=None, error=None, alive_pids=None):
         self.calls = []
         self._handle = handle if handle is not None else FakeHandle()
         self._error = error
+        self._alive_pids = set(alive_pids) if alive_pids else set()
 
     def launch(self, command, cwd, env, stdout_log_path):
         self.calls.append(
@@ -46,6 +51,9 @@ class FakeLauncher:
         if self._error is not None:
             raise self._error
         return self._handle
+
+    def is_pid_alive(self, pid):
+        return pid in self._alive_pids
 
 
 class FakeWorkspace:
@@ -110,6 +118,7 @@ def _make_service(
         workspace=workspace,
         settings=settings if settings is not None else _settings(),
         feature_reader=LocalFeatureFileReader(),
+        feature_catalog=LocalFeatureCatalog(),
         artifact_store=LocalArtifactStore(),
         registry=registry if registry is not None else InMemoryJobRegistry(),
         launcher=launcher if launcher is not None else FakeLauncher(),
@@ -738,3 +747,182 @@ def test_get_artifacts_rejects_invalid_repo_root():
 
     with pytest.raises(BehaveServiceError, match="Invalid repo_root"):
         service.get_artifacts("missing-job", repo_root="/bad")
+
+
+# ---- Reattach after restart (recovered jobs, no live handle) ----
+
+
+def test_wait_for_completion_recovers_running_job_via_pid_liveness(tmp_path):
+    job_id = "jobrecoveredalive"
+    stdout_log = tmp_path / f"{job_id}_stdout.log"
+    stdout_log.write_text("still going\n", encoding="utf-8")
+    metadata = tmp_path / f"{job_id}_meta.json"
+    metadata.write_text(json.dumps({"pid": 999}), encoding="utf-8")
+
+    launcher = FakeLauncher(alive_pids={999})
+    monotonic_values = iter([0.0, 0.1, 1.1])
+    service = _make_service(
+        FakeWorkspace(repo_root=tmp_path, log_dir=tmp_path),
+        launcher=launcher,
+        monotonic=lambda: next(monotonic_values),
+        sleep=lambda seconds: None,
+    )
+
+    timeout = service.wait_for_completion(
+        job_id, max_wait_seconds=1, poll_interval_seconds=0.01
+    ).model_dump(mode="json")
+
+    assert timeout["status"] == "timeout"
+    assert timeout["last_status"] == "running"
+
+
+def test_wait_for_completion_recovers_dead_job_without_report_as_not_ok(
+    tmp_path,
+):
+    job_id = "jobrecovereddead"
+    stdout_log = tmp_path / f"{job_id}_stdout.log"
+    stdout_log.write_text("crashed before report\n", encoding="utf-8")
+    metadata = tmp_path / f"{job_id}_meta.json"
+    metadata.write_text(json.dumps({"pid": 999}), encoding="utf-8")
+
+    launcher = FakeLauncher(alive_pids=set())
+    service = _make_service(
+        FakeWorkspace(repo_root=tmp_path, log_dir=tmp_path),
+        launcher=launcher,
+    )
+
+    completed = service.wait_for_completion(job_id).model_dump(mode="json")
+
+    assert completed["status"] == "completed"
+    assert completed["ok"] is False
+    assert completed["returncode"] is None
+
+
+def test_wait_for_completion_recovers_completed_job_ok_from_report(tmp_path):
+    job_id = "jobrecoveredreport"
+    stdout_log = tmp_path / f"{job_id}_stdout.log"
+    stdout_log.write_text("done\n", encoding="utf-8")
+    report = tmp_path / f"{job_id}_report.json"
+    report.write_text(
+        json.dumps(
+            [
+                {
+                    "name": "feature",
+                    "elements": [
+                        {
+                            "name": "scenario",
+                            "steps": [
+                                {
+                                    "name": "a step",
+                                    "result": {"status": "passed"},
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    metadata = tmp_path / f"{job_id}_meta.json"
+    metadata.write_text(json.dumps({"pid": 999}), encoding="utf-8")
+
+    # pid is dead and returncode is unknown, but the report proves success --
+    # ok must come from the report, not from a (missing) returncode.
+    launcher = FakeLauncher(alive_pids=set())
+    service = _make_service(
+        FakeWorkspace(repo_root=tmp_path, log_dir=tmp_path),
+        launcher=launcher,
+    )
+
+    completed = service.wait_for_completion(job_id).model_dump(mode="json")
+
+    assert completed["status"] == "completed"
+    assert completed["ok"] is True
+    assert completed["summary"]["steps"]["passed"] == 1
+
+
+# ---- list_jobs ----
+
+
+def test_list_jobs_merges_in_memory_and_disk_only(tmp_path):
+    registry = InMemoryJobRegistry()
+
+    running_job_id = "jobrunning"
+    stdout_running = tmp_path / f"{running_job_id}_stdout.log"
+    stdout_running.write_text("running\n", encoding="utf-8")
+    (tmp_path / f"{running_job_id}_meta.json").write_text(
+        json.dumps({"feature_file": "features/a.feature", "started_at": "T1"}),
+        encoding="utf-8",
+    )
+    registry.register(
+        running_job_id,
+        Job(
+            job_id=running_job_id,
+            process_handle=FakeHandle(returncode=None, pid=111),
+            stdout_log=stdout_running,
+            json_report=tmp_path / f"{running_job_id}_report.json",
+            metadata=tmp_path / f"{running_job_id}_meta.json",
+            pid=111,
+        ),
+    )
+
+    disk_alive_id = "jobdiskalive"
+    (tmp_path / f"{disk_alive_id}_stdout.log").write_text(
+        "x\n", encoding="utf-8"
+    )
+    (tmp_path / f"{disk_alive_id}_meta.json").write_text(
+        json.dumps({"pid": 222, "started_at": "T2"}), encoding="utf-8"
+    )
+
+    disk_dead_id = "jobdiskdead"
+    (tmp_path / f"{disk_dead_id}_stdout.log").write_text(
+        "y\n", encoding="utf-8"
+    )
+    (tmp_path / f"{disk_dead_id}_meta.json").write_text(
+        json.dumps({"pid": 333, "started_at": "T3"}), encoding="utf-8"
+    )
+
+    launcher = FakeLauncher(alive_pids={222})
+    service = _make_service(
+        FakeWorkspace(repo_root=tmp_path, log_dir=tmp_path),
+        registry=registry,
+        launcher=launcher,
+    )
+
+    result = service.list_jobs().model_dump(mode="json")
+    jobs_by_id = {job["job_id"]: job for job in result["jobs"]}
+
+    assert jobs_by_id[running_job_id]["status"] == "running"
+    assert jobs_by_id[disk_alive_id]["status"] == "running"
+    assert jobs_by_id[disk_dead_id]["status"] == "unknown"
+    assert jobs_by_id[disk_dead_id]["ok"] is False
+
+
+def test_list_jobs_caps_completed_history(tmp_path):
+    total = domain._DEFAULT_JOB_LIST_LIMIT + 5
+    for i in range(total):
+        job_id = f"jobold{i:03d}"
+        (tmp_path / f"{job_id}_meta.json").write_text(
+            json.dumps({"started_at": f"T{i:03d}"}), encoding="utf-8"
+        )
+
+    service = _make_service(
+        FakeWorkspace(repo_root=tmp_path, log_dir=tmp_path),
+    )
+
+    result = service.list_jobs().model_dump(mode="json")
+
+    assert len(result["jobs"]) == domain._DEFAULT_JOB_LIST_LIMIT
+    kept_ids = {job["job_id"] for job in result["jobs"]}
+    assert f"jobold{total - 1:03d}" in kept_ids
+    assert "jobold000" not in kept_ids
+
+
+def test_list_jobs_rejects_invalid_repo_root():
+    service = _make_service(
+        FakeWorkspace(repo_root_error="Invalid repo_root: bad")
+    )
+
+    with pytest.raises(BehaveServiceError, match="Invalid repo_root"):
+        service.list_jobs(repo_root="/bad")

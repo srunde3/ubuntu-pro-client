@@ -2,11 +2,12 @@ import json
 import os
 from pathlib import Path
 
+import pytest
+from mcp.shared.memory import create_connected_server_and_client_session
+
 import behave_mcp.adapters as adapters_module
 import behave_mcp.server as server_module
-import pytest
 from behave_mcp.server import mcp, registry
-from mcp.shared.memory import create_connected_server_and_client_session
 
 
 @pytest.fixture(autouse=True)
@@ -48,6 +49,7 @@ class _FakeProcess:
         self._report_path = report_path
         self._poll_count = 0
         self.returncode = None
+        self.pid = 5555
 
     def poll(self):
         self._poll_count += 1

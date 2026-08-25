@@ -1,5 +1,6 @@
 """Application service orchestrating behave jobs via injected ports."""
 
+import logging
 from pathlib import Path
 from typing import Callable
 
@@ -14,8 +15,10 @@ from behave_mcp.messages import (
     ExistsFlags,
     FeatureDetail,
     FindScenariosResponse,
+    JobSummary,
     ListDimensionsResponse,
     ListFeaturesResponse,
+    ListScenarioJobsResponse,
     LogsResponse,
     RunningResponse,
     ScenarioMatch,
@@ -26,6 +29,7 @@ from behave_mcp.messages import (
 )
 from behave_mcp.ports import (
     ArtifactStore,
+    FeatureCatalog,
     FeatureFileReader,
     Job,
     JobRegistry,
@@ -34,6 +38,8 @@ from behave_mcp.ports import (
     ProcessStartError,
     Workspace,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class BehaveServiceError(Exception):
@@ -58,6 +64,7 @@ class BehaveService:
         workspace: Workspace,
         settings: Settings,
         feature_reader: FeatureFileReader,
+        feature_catalog: FeatureCatalog,
         artifact_store: ArtifactStore,
         registry: JobRegistry,
         launcher: ProcessLauncher,
@@ -69,6 +76,7 @@ class BehaveService:
         self._workspace = workspace
         self._settings = settings
         self._feature_reader = feature_reader
+        self._feature_catalog = feature_catalog
         self._artifact_store = artifact_store
         self._registry = registry
         self._launcher = launcher
@@ -96,7 +104,7 @@ class BehaveService:
             resolved_repo_root
         )
         features = [
-            domain.catalog_entry(detail)
+            self._feature_catalog.catalog_entry(detail)
             for detail in details
             if self._feature_has_match(
                 detail,
@@ -122,7 +130,9 @@ class BehaveService:
         except ValueError as exc:
             raise BehaveServiceError(str(exc)) from exc
 
-        normalized = domain.normalize_feature_file_arg(feature_file)
+        normalized = self._feature_catalog.normalize_feature_file_arg(
+            feature_file
+        )
         details = self._feature_reader.discover_feature_details(
             resolved_repo_root
         )
@@ -151,7 +161,7 @@ class BehaveService:
         details = self._feature_reader.discover_feature_details(
             resolved_repo_root
         )
-        dimensions = domain.aggregate_dimensions(details)
+        dimensions = self._feature_catalog.aggregate_dimensions(details)
         return ListDimensionsResponse(
             repo_root=str(resolved_repo_root),
             releases=dimensions.releases,
@@ -179,7 +189,7 @@ class BehaveService:
         matches: list[ScenarioMatch] = []
         for detail in details:
             for scenario in detail.scenarios:
-                if not domain.scenario_matches(
+                if not self._feature_catalog.scenario_matches(
                     scenario,
                     detail.tags,
                     release=release,
@@ -194,7 +204,7 @@ class BehaveService:
                         scenario_name=scenario.name,
                         type=scenario.type,
                         requires_config=scenario.requires_config,
-                        combos=domain.filtered_combos(
+                        combos=self._feature_catalog.filtered_combos(
                             scenario, release, machine_type
                         ),
                     )
@@ -205,8 +215,8 @@ class BehaveService:
             matches=matches,
         )
 
-    @staticmethod
     def _feature_has_match(
+        self,
         feature_detail: FeatureDetail,
         *,
         release: str | None,
@@ -222,7 +232,7 @@ class BehaveService:
         ):
             return True
         return any(
-            domain.scenario_matches(
+            self._feature_catalog.scenario_matches(
                 scenario,
                 feature_detail.tags,
                 release=release,
@@ -248,7 +258,9 @@ class BehaveService:
         except ValueError as exc:
             raise BehaveServiceError(str(exc)) from exc
 
-        normalized = domain.normalize_feature_file_arg(feature_file)
+        normalized = self._feature_catalog.normalize_feature_file_arg(
+            feature_file
+        )
         allowed_features = set(
             self._feature_reader.discover_feature_files(resolved_repo_root)
         )
@@ -326,6 +338,7 @@ class BehaveService:
                 json_report=json_report_path,
                 metadata=metadata_path,
                 reserved=False,
+                pid=handle.pid,
             ),
         )
 
@@ -348,6 +361,7 @@ class BehaveService:
                 "releases": releases or [],
                 "command": command,
                 "repo_root": str(resolved_repo_root),
+                "pid": handle.pid,
                 "artifacts": artifacts_dict,
             },
         )
@@ -479,10 +493,110 @@ class BehaveService:
             ),
         )
 
+    def list_jobs(self, repo_root: str = "") -> ListScenarioJobsResponse:
+        try:
+            resolved_repo_root = self._workspace.resolve_repo_root(
+                repo_root or None
+            )
+        except ValueError as exc:
+            raise BehaveServiceError(str(exc)) from exc
+
+        log_dir = self._workspace.resolve_log_dir(resolved_repo_root)
+
+        in_memory_jobs = {job.job_id: job for job in self._registry.snapshot()}
+        disk_job_ids = set(self._artifact_store.list_job_ids(log_dir))
+        disk_only_ids = disk_job_ids - set(in_memory_jobs)
+
+        summaries: list[JobSummary] = []
+        for job_id in sorted(set(in_memory_jobs) | disk_job_ids):
+            job = in_memory_jobs.get(job_id)
+            if job is None:
+                job = self._recover_job(job_id, repo_root or None)
+                if job is None:
+                    continue
+            summaries.append(self._job_summary(job_id, job))
+
+        summaries.sort(key=lambda summary: summary.started_at or "")
+        running = [s for s in summaries if s.status == "running"]
+        others = [s for s in summaries if s.status != "running"]
+        trimmed = running + others[-domain._DEFAULT_JOB_LIST_LIMIT :]
+
+        logger.info(
+            "listing jobs: %d in-memory, %d disk-only, %d total returned",
+            len(in_memory_jobs),
+            len(disk_only_ids),
+            len(trimmed),
+        )
+
+        return ListScenarioJobsResponse(
+            repo_root=str(resolved_repo_root), jobs=trimmed
+        )
+
+    def _job_summary(self, job_id: str, job: Job) -> JobSummary:
+        stdout_log = job.stdout_log
+        json_report = job.json_report
+        metadata_path = job.metadata
+        log_dir = stdout_log.parent
+        metadata_payload = self._artifact_store.read_metadata(metadata_path)
+
+        if job.reserved:
+            status, ok, returncode = "running", None, None
+        else:
+            handle = job.process_handle
+            returncode = handle.poll() if handle is not None else None
+            report_data = None
+            if handle is None or returncode is not None:
+                report_data = self._artifact_store.read_report_json(
+                    json_report
+                )
+            report = (
+                domain.summarize_report(report_data)
+                if report_data is not None
+                else None
+            )
+            report_ok = None if report is None else not report.failures
+
+            pid = (
+                job.pid if job.pid is not None else metadata_payload.get("pid")
+            )
+            pid_alive = False
+            if handle is None and pid is not None:
+                pid_alive = self._launcher.is_pid_alive(pid)
+
+            classification = domain.classify_job_status(
+                has_live_handle=handle is not None,
+                returncode=returncode,
+                report_present=report is not None,
+                report_ok=report_ok,
+                pid=pid,
+                pid_alive=pid_alive,
+            )
+            status, ok = classification.status, classification.ok
+
+        return JobSummary(
+            job_id=job_id,
+            status=status,
+            ok=ok,
+            returncode=returncode,
+            feature_file=metadata_payload.get("feature_file", ""),
+            scenario_name=metadata_payload.get("scenario_name", ""),
+            machine_types=metadata_payload.get("machine_types", []),
+            releases=metadata_payload.get("releases", []),
+            started_at=metadata_payload.get("started_at"),
+            completed_at=metadata_payload.get("completed_at"),
+            artifacts=domain.artifacts_payload(
+                log_dir=log_dir,
+                stdout_log=stdout_log,
+                json_report=json_report,
+                metadata=metadata_path,
+            ),
+        )
+
     def _status_payload(
         self, job_id: str, repo_root_override: str | None
     ) -> RunningResponse | CompletedResponse:
         job = self._registry.get(job_id)
+        recovered = job is None
         if job is None:
             try:
                 job = self._recover_job(job_id, repo_root_override)
@@ -497,23 +611,20 @@ class BehaveService:
         metadata = job.metadata
         log_dir = stdout_log.parent
 
-        if handle is not None:
-            returncode = handle.poll()
-            if returncode is None:
-                return RunningResponse(
-                    job_id=job_id,
-                    recent_output=self._artifact_store.tail_file(
-                        stdout_log, domain._DEFAULT_RUNNING_TAIL_LINES
-                    ),
-                    artifacts=domain.artifacts_payload(
-                        log_dir=log_dir,
-                        stdout_log=stdout_log,
-                        json_report=json_report,
-                        metadata=metadata,
-                    ),
-                )
-        else:
-            returncode = None
+        returncode = handle.poll() if handle is not None else None
+        if handle is not None and returncode is None:
+            return RunningResponse(
+                job_id=job_id,
+                recent_output=self._artifact_store.tail_file(
+                    stdout_log, domain._DEFAULT_RUNNING_TAIL_LINES
+                ),
+                artifacts=domain.artifacts_payload(
+                    log_dir=log_dir,
+                    stdout_log=stdout_log,
+                    json_report=json_report,
+                    metadata=metadata,
+                ),
+            )
 
         if handle is not None:
             handle.close()
@@ -524,7 +635,45 @@ class BehaveService:
             if report_data is not None
             else None
         )
-        ok_value = returncode == 0 if returncode is not None else False
+        report_ok = None if report is None else not report.failures
+
+        pid_alive = False
+        if handle is None and job.pid is not None:
+            pid_alive = self._launcher.is_pid_alive(job.pid)
+
+        classification = domain.classify_job_status(
+            has_live_handle=handle is not None,
+            returncode=returncode,
+            report_present=report is not None,
+            report_ok=report_ok,
+            pid=job.pid,
+            pid_alive=pid_alive,
+        )
+
+        if recovered:
+            logger.info(
+                "reattached job %s -> status=%s reason=%s pid=%s",
+                job_id,
+                classification.status,
+                classification.reason,
+                job.pid,
+            )
+
+        if classification.status == "running":
+            return RunningResponse(
+                job_id=job_id,
+                recent_output=self._artifact_store.tail_file(
+                    stdout_log, domain._DEFAULT_RUNNING_TAIL_LINES
+                ),
+                artifacts=domain.artifacts_payload(
+                    log_dir=log_dir,
+                    stdout_log=stdout_log,
+                    json_report=json_report,
+                    metadata=metadata,
+                ),
+            )
+
+        ok_value = bool(classification.ok)
         artifacts = domain.artifacts_payload(
             log_dir=log_dir,
             stdout_log=stdout_log,
@@ -595,8 +744,20 @@ class BehaveService:
             and not self._artifact_store.exists(json_report)
             and not self._artifact_store.exists(metadata)
         ):
+            logger.warning(
+                "job %s not tracked in memory and no disk artifacts found "
+                "under %s",
+                job_id,
+                log_dir,
+            )
             return None
 
+        logger.info(
+            "job %s not tracked in memory; recovering from disk artifacts "
+            "under %s",
+            job_id,
+            log_dir,
+        )
         metadata_payload = self._artifact_store.read_metadata(metadata)
         if metadata_payload:
             metadata_artifacts = metadata_payload.get("artifacts", {})
@@ -615,4 +776,5 @@ class BehaveService:
             json_report=json_report,
             metadata=metadata,
             reserved=False,
+            pid=metadata_payload.get("pid"),
         )

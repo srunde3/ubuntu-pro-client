@@ -1,6 +1,7 @@
 """Concrete adapters implementing the ports in ``behave_mcp.ports``."""
 
 import json
+import logging
 import os
 import subprocess
 import threading
@@ -8,7 +9,18 @@ from collections import deque
 from pathlib import Path
 from typing import Any
 
+from features import behave_features
+
 from behave_mcp import domain
+from behave_mcp.messages import (
+    Combo,
+    Dimensions,
+    DimensionValue,
+    ExamplesBlock,
+    FeatureCatalogEntry,
+    FeatureDetail,
+    ScenarioSummary,
+)
 from behave_mcp.ports import (
     Job,
     LogFileOpenError,
@@ -16,7 +28,7 @@ from behave_mcp.ports import (
     ReservationResult,
 )
 
-from features import behave_features
+logger = logging.getLogger(__name__)
 
 
 class SubprocessHandle:
@@ -25,6 +37,10 @@ class SubprocessHandle:
     def __init__(self, process: Any, log_file: Any) -> None:
         self._process = process
         self._log_file = log_file
+
+    @property
+    def pid(self) -> int:
+        return self._process.pid
 
     def poll(self) -> int | None:
         return self._process.poll()
@@ -67,6 +83,21 @@ class PopenLauncher:
 
         return SubprocessHandle(process, log_file)
 
+    def is_pid_alive(self, pid: int) -> bool:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            # Process exists but is owned by another user/uid.
+            return True
+        except OSError as exc:
+            logger.debug(
+                "Unexpected OSError checking liveness of pid %s: %s", pid, exc
+            )
+            return False
+        return True
+
 
 class InMemoryJobRegistry:
     """Thread-safe in-memory registry of reserved and running behave jobs."""
@@ -103,6 +134,10 @@ class InMemoryJobRegistry:
         with self._lock:
             return self._jobs.get(job_id)
 
+    def snapshot(self) -> list[Job]:
+        with self._lock:
+            return list(self._jobs.values())
+
     def clear(self) -> None:
         with self._lock:
             self._jobs.clear()
@@ -127,19 +162,183 @@ class InMemoryJobRegistry:
 class LocalFeatureFileReader:
     """Filesystem-backed reader for the repository's feature file catalog.
 
-    Delegates entirely to ``behave_features`` (the ``pro-client-features``
-    dependency -- see ``features/pyproject.toml``) -- parsing and caching
-    ``.feature`` files is a repo-level concern, shared with
-    ``tools/coverage_gaps.py``, not reimplemented per consumer. This class
-    exists only to satisfy the ``FeatureFileReader`` port so
-    ``BehaveService`` stays injectable/fakeable in tests.
+    Delegates to ``behave_features``, translating its dataclasses into our
+    own message DTOs so callers never depend on that package's shapes.
     """
 
     def discover_feature_files(self, repo_root: Path) -> list[str]:
         return behave_features.discover_feature_files(repo_root)
 
-    def discover_feature_details(self, repo_root: Path):
-        return behave_features.discover_feature_details(repo_root)
+    def discover_feature_details(self, repo_root: Path) -> list[FeatureDetail]:
+        return [
+            _to_internal_feature_detail(detail)
+            for detail in behave_features.discover_feature_details(repo_root)
+        ]
+
+
+class LocalFeatureCatalog:
+    """Delegates pure catalog/filtering operations to ``behave_features``.
+
+    Split from ``LocalFeatureFileReader`` because these are transformations
+    over already-parsed data, not disk I/O -- same dependency, different
+    kind of boundary. Every call converts our message DTOs to that
+    package's dataclasses and back, so its shapes never leak past here.
+    """
+
+    def normalize_feature_file_arg(self, feature_file: str) -> str:
+        return behave_features.normalize_feature_file_arg(feature_file)
+
+    def catalog_entry(
+        self, feature_detail: FeatureDetail
+    ) -> FeatureCatalogEntry:
+        external = behave_features.catalog_entry(
+            _to_external_feature_detail(feature_detail)
+        )
+        return FeatureCatalogEntry(
+            path=external.path,
+            title=external.title,
+            scenario_count=external.scenario_count,
+            requires_config=list(external.requires_config),
+            releases=list(external.releases),
+            machine_types=list(external.machine_types),
+        )
+
+    def aggregate_dimensions(
+        self, feature_details: list[FeatureDetail]
+    ) -> Dimensions:
+        external = behave_features.aggregate_dimensions(
+            [_to_external_feature_detail(detail) for detail in feature_details]
+        )
+        return Dimensions(
+            releases=[
+                DimensionValue(
+                    name=value.name, scenario_count=value.scenario_count
+                )
+                for value in external.releases
+            ],
+            machine_types=[
+                DimensionValue(
+                    name=value.name, scenario_count=value.scenario_count
+                )
+                for value in external.machine_types
+            ],
+        )
+
+    def scenario_matches(
+        self,
+        scenario: ScenarioSummary,
+        feature_tags: list[str],
+        *,
+        release: str | None = None,
+        machine_type: str | None = None,
+        tag: str | None = None,
+        text: str | None = None,
+    ) -> bool:
+        return behave_features.scenario_matches(
+            _to_external_scenario_summary(scenario),
+            feature_tags,
+            release=release,
+            machine_type=machine_type,
+            tag=tag,
+            text=text,
+        )
+
+    def filtered_combos(
+        self,
+        scenario: ScenarioSummary,
+        release: str | None = None,
+        machine_type: str | None = None,
+    ) -> list[Combo]:
+        external_combos = behave_features.filtered_combos(
+            _to_external_scenario_summary(scenario), release, machine_type
+        )
+        return [_to_internal_combo(combo) for combo in external_combos]
+
+
+def _to_internal_combo(combo: Any) -> Combo:
+    return Combo(release=combo.release, machine_type=combo.machine_type)
+
+
+def _to_external_combo(combo: Combo) -> behave_features.Combo:
+    return behave_features.Combo(
+        release=combo.release, machine_type=combo.machine_type
+    )
+
+
+def _to_internal_examples_block(block: Any) -> ExamplesBlock:
+    return ExamplesBlock(
+        name=block.name,
+        tags=list(block.tags),
+        combos=[_to_internal_combo(combo) for combo in block.combos],
+    )
+
+
+def _to_external_examples_block(
+    block: ExamplesBlock,
+) -> behave_features.ExamplesBlock:
+    return behave_features.ExamplesBlock(
+        name=block.name,
+        tags=list(block.tags),
+        combos=[_to_external_combo(combo) for combo in block.combos],
+    )
+
+
+def _to_internal_scenario_summary(scenario: Any) -> ScenarioSummary:
+    return ScenarioSummary(
+        name=scenario.name,
+        type=scenario.type,
+        tags=list(scenario.tags),
+        requires_config=list(scenario.requires_config),
+        example_columns=list(scenario.example_columns),
+        combos=[_to_internal_combo(combo) for combo in scenario.combos],
+        examples=[
+            _to_internal_examples_block(block) for block in scenario.examples
+        ],
+    )
+
+
+def _to_external_scenario_summary(
+    scenario: ScenarioSummary,
+) -> behave_features.ScenarioSummary:
+    return behave_features.ScenarioSummary(
+        name=scenario.name,
+        type=scenario.type,
+        tags=list(scenario.tags),
+        requires_config=list(scenario.requires_config),
+        example_columns=list(scenario.example_columns),
+        combos=[_to_external_combo(combo) for combo in scenario.combos],
+        examples=[
+            _to_external_examples_block(block) for block in scenario.examples
+        ],
+    )
+
+
+def _to_internal_feature_detail(detail: Any) -> FeatureDetail:
+    return FeatureDetail(
+        path=detail.path,
+        title=detail.title,
+        tags=list(detail.tags),
+        requires_config=list(detail.requires_config),
+        scenarios=[
+            _to_internal_scenario_summary(scenario)
+            for scenario in detail.scenarios
+        ],
+    )
+
+
+def _to_external_feature_detail(
+    detail: FeatureDetail,
+) -> behave_features.FeatureDetail:
+    return behave_features.FeatureDetail(
+        path=detail.path,
+        title=detail.title,
+        tags=list(detail.tags),
+        requires_config=list(detail.requires_config),
+        scenarios=[
+            _to_external_scenario_summary(scenario)
+            for scenario in detail.scenarios
+        ],
+    )
 
 
 class LocalArtifactStore:
@@ -210,6 +409,14 @@ class LocalArtifactStore:
 
     def exists(self, path: Path) -> bool:
         return path.exists()
+
+    def list_job_ids(self, log_dir: Path) -> list[str]:
+        if not log_dir.exists():
+            return []
+        suffix = "_meta.json"
+        return sorted(
+            path.name[: -len(suffix)] for path in log_dir.glob(f"*{suffix}")
+        )
 
 
 class LocalWorkspace:

@@ -3,18 +3,20 @@ import time
 import uuid
 from datetime import datetime, timezone
 
+from mcp.server import FastMCP
+from starlette.responses import JSONResponse
+
 from behave_mcp import domain
 from behave_mcp.adapters import (
     InMemoryJobRegistry,
     LocalArtifactStore,
+    LocalFeatureCatalog,
     LocalFeatureFileReader,
     LocalWorkspace,
     PopenLauncher,
 )
 from behave_mcp.config import load_settings
 from behave_mcp.service import BehaveService
-from mcp.server import FastMCP
-from starlette.responses import JSONResponse
 
 host = os.environ.get("MCP_HOST", "127.0.0.1")
 port = int(os.environ.get("MCP_PORT", "8000"))
@@ -28,6 +30,7 @@ def _utc_timestamp() -> str:
 _settings = load_settings(os.environ)
 _workspace = LocalWorkspace()
 _feature_reader = LocalFeatureFileReader()
+_feature_catalog = LocalFeatureCatalog()
 _artifact_store = LocalArtifactStore()
 registry = InMemoryJobRegistry()
 _launcher = PopenLauncher()
@@ -35,6 +38,7 @@ _service = BehaveService(
     workspace=_workspace,
     settings=_settings,
     feature_reader=_feature_reader,
+    feature_catalog=_feature_catalog,
     artifact_store=_artifact_store,
     registry=registry,
     launcher=_launcher,
@@ -147,6 +151,17 @@ def start_behave_scenario(
         releases,
         repo_root,
     ).model_dump_json()
+
+
+@mcp.tool(
+    description=(
+        "List behave jobs. Returns every currently active job plus a "
+        "bounded window of recently completed ones, merging in-memory state "
+        "with jobs recovered from disk (e.g. after a server restart)."
+    )
+)
+def list_scenario_jobs(repo_root: str = "") -> str:
+    return _service.list_jobs(repo_root).model_dump_json()
 
 
 @mcp.tool(

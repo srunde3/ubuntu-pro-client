@@ -1,19 +1,80 @@
-"""Typed request/response DTOs for the behave MCP server.
-"""
+"""Typed request/response DTOs for the behave MCP server."""
 
 from typing import Annotated, Any, Literal, Union
 
 from pydantic import BaseModel, Field
 
-from features.behave_features import (  # noqa: F401
-    Combo,
-    Dimensions,
-    DimensionValue,
-    FeatureCatalogEntry,
-    FeatureDetail,
-    ScenarioMatch,
-    ScenarioSummary,
-)
+
+class Combo(BaseModel):
+    """A single valid ``(release, machine_type)`` pair for a scenario."""
+
+    release: str = ""
+    machine_type: str = ""
+
+
+class ExamplesBlock(BaseModel):
+    """One ``Examples:`` table within a Scenario Outline, with its own tags."""
+
+    name: str = ""
+    tags: list[str] = []
+    combos: list[Combo] = []
+
+
+class ScenarioSummary(BaseModel):
+    """A scenario's browse/select metadata (no step text)."""
+
+    name: str = ""
+    type: str = ""
+    tags: list[str] = []
+    requires_config: list[str] = []
+    example_columns: list[str] = []
+    combos: list[Combo] = []
+    examples: list[ExamplesBlock] = []
+
+
+class FeatureDetail(BaseModel):
+    """Full parsed metadata for one feature file."""
+
+    path: str = ""
+    title: str = ""
+    tags: list[str] = []
+    requires_config: list[str] = []
+    scenarios: list[ScenarioSummary] = []
+
+
+class FeatureCatalogEntry(BaseModel):
+    """Lightweight catalog projection of a feature."""
+
+    path: str = ""
+    title: str = ""
+    scenario_count: int = 0
+    requires_config: list[str] = []
+    releases: list[str] = []
+    machine_types: list[str] = []
+
+
+class DimensionValue(BaseModel):
+    """A distinct release or machine_type with its scenario count."""
+
+    name: str = ""
+    scenario_count: int = 0
+
+
+class Dimensions(BaseModel):
+    """Distinct releases and machine_types across the suite."""
+
+    releases: list[DimensionValue] = []
+    machine_types: list[DimensionValue] = []
+
+
+class ScenarioMatch(BaseModel):
+    """A scenario hit with the combos satisfying some filter."""
+
+    feature_file: str = ""
+    scenario_name: str = ""
+    type: str = ""
+    requires_config: list[str] = []
+    combos: list[Combo] = []
 
 
 class Artifacts(BaseModel):
@@ -164,3 +225,24 @@ class ArtifactsResponse(BaseModel):
     artifacts: Artifacts | None = None
     metadata: dict[str, Any] = {}
     exists: ExistsFlags | None = None
+
+
+class JobSummary(BaseModel):
+    """One row in a job listing (in-memory or disk-recovered jobs)."""
+
+    job_id: str = ""
+    status: str = "unknown"  # "running" | "completed" | "unknown"
+    ok: bool | None = None
+    returncode: int | None = None
+    feature_file: str = ""
+    scenario_name: str = ""
+    machine_types: list[str] = []
+    releases: list[str] = []
+    started_at: str | None = None
+    completed_at: str | None = None
+    artifacts: Artifacts | None = None
+
+
+class ListScenarioJobsResponse(BaseModel):
+    repo_root: str = ""
+    jobs: list[JobSummary] = []

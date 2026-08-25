@@ -8,7 +8,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
-from behave_mcp.messages import FeatureDetail
+from behave_mcp.messages import (
+    Combo,
+    Dimensions,
+    FeatureCatalogEntry,
+    FeatureDetail,
+    ScenarioSummary,
+)
 
 
 class LogFileOpenError(Exception):
@@ -21,6 +27,11 @@ class ProcessStartError(Exception):
 
 class ProcessHandle(Protocol):
     """Handle to a launched behave subprocess and its owned stdout log file."""
+
+    @property
+    def pid(self) -> int:
+        """Return the OS process id of the underlying process."""
+        ...
 
     def poll(self) -> int | None:
         """Return the exit code, or None while the process is still running."""
@@ -52,6 +63,14 @@ class ProcessLauncher(Protocol):
         """
         ...
 
+    def is_pid_alive(self, pid: int) -> bool:
+        """Return whether ``pid`` still refers to a live OS process.
+
+        Used to classify jobs recovered from disk after a server restart,
+        where no in-process ``ProcessHandle`` survives to ``poll()``.
+        """
+        ...
+
 
 @dataclass
 class Job:
@@ -63,6 +82,7 @@ class Job:
     json_report: Path
     metadata: Path
     reserved: bool = False
+    pid: int | None = None
 
 
 @dataclass
@@ -93,6 +113,10 @@ class JobRegistry(Protocol):
         """Return the stored job or None."""
         ...
 
+    def snapshot(self) -> list[Job]:
+        """Return a point-in-time copy of every tracked job."""
+        ...
+
     def clear(self) -> None:
         """Remove all entries (primarily for tests)."""
         ...
@@ -111,6 +135,54 @@ class FeatureFileReader(Protocol):
         Each entry is a ``FeatureDetail`` whose ``path`` is set to the
         repo-relative feature path. Files that fail to parse are skipped.
         """
+        ...
+
+
+class FeatureCatalog(Protocol):
+    """Pure catalog/filtering operations over parsed feature data.
+
+    These are owned by the ``pro-client-features`` dependency, same as
+    ``FeatureFileReader``, but are pure transformations rather than disk
+    I/O, so they get their own port/adapter instead of being imported
+    directly into ``domain.py``.
+    """
+
+    def normalize_feature_file_arg(self, feature_file: str) -> str:
+        """Normalize a ``feature_file`` argument to its canonical form."""
+        ...
+
+    def catalog_entry(
+        self, feature_detail: FeatureDetail
+    ) -> FeatureCatalogEntry:
+        """Project a full feature detail into a lightweight catalog entry."""
+        ...
+
+    def aggregate_dimensions(
+        self, feature_details: list[FeatureDetail]
+    ) -> Dimensions:
+        """Return distinct releases and machine_types with scenario counts."""
+        ...
+
+    def scenario_matches(
+        self,
+        scenario: ScenarioSummary,
+        feature_tags: list[str],
+        *,
+        release: str | None = None,
+        machine_type: str | None = None,
+        tag: str | None = None,
+        text: str | None = None,
+    ) -> bool:
+        """Return whether a scenario satisfies all provided filters."""
+        ...
+
+    def filtered_combos(
+        self,
+        scenario: ScenarioSummary,
+        release: str | None = None,
+        machine_type: str | None = None,
+    ) -> list[Combo]:
+        """Return the scenario combos matching release/machine_type."""
         ...
 
 
@@ -143,6 +215,10 @@ class ArtifactStore(Protocol):
 
     def exists(self, path: Path) -> bool:
         """Return whether ``path`` exists."""
+        ...
+
+    def list_job_ids(self, log_dir: Path) -> list[str]:
+        """Return job ids discovered from metadata files under ``log_dir``."""
         ...
 
 

@@ -3,29 +3,14 @@
 Functions here are free of I/O side effects: they build commands, validate
 inputs, and summarize behave JSON reports. Constants shared across modules
 also live here.
-
-Reading and structurally summarizing ``.feature`` files (``summarize_feature``,
-``combos_from_scenario``, ``catalog_entry``, etc.) is not MCP-specific --
-``features/`` owns those conventions, and this package is one of its
-consumers, via the ``pro-client-features`` dependency (see
-``features/behave_features.py`` and ``features/pyproject.toml``).
-Re-exported here for the existing ``domain.X`` call sites in this package.
 """
 
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
+
+from features.behave_features import ALLOWED_MACHINE_TYPES
 
 from behave_mcp.messages import Artifacts, Failure, ReportSummary
-
-from features.behave_features import (  # noqa: F401
-    ALLOWED_MACHINE_TYPES,
-    aggregate_dimensions,
-    catalog_entry,
-    filtered_combos,
-    normalize_feature_file_arg,
-    scenario_matches,
-    summarize_feature,
-)
 
 CLOUD_MACHINE_TYPES = {
     "aws.generic",
@@ -44,6 +29,7 @@ _DEFAULT_WAIT_TIMEOUT_SECONDS = 1800
 _DEFAULT_WAIT_POLL_INTERVAL_SECONDS = 5.0
 _JOB_INDEX_FILE_NAME = "index.jsonl"
 _DEFAULT_MAX_PARALLEL_JOBS = 1
+_DEFAULT_JOB_LIST_LIMIT = 20
 
 
 def validate_machine_types(
@@ -81,6 +67,50 @@ def validate_machine_types(
         )
 
     return None
+
+
+class JobStatus(NamedTuple):
+    """Pure classification of a job's status from observable signals.
+
+    ``reason`` is a machine-readable explanation the service layer logs but
+    never needs to unit test beyond this function's own assertions.
+    """
+
+    status: str  # "running" | "completed" | "unknown"
+    ok: bool | None
+    reason: str
+
+
+def classify_job_status(
+    *,
+    has_live_handle: bool,
+    returncode: int | None,
+    report_present: bool,
+    report_ok: bool | None,
+    pid: int | None,
+    pid_alive: bool,
+) -> JobStatus:
+    """Decide a job's status from process/report/pid signals.
+
+    No I/O happens here -- callers gather ``report_present``/``report_ok``
+    (from a parsed JSON report) and ``pid_alive`` (from a liveness probe)
+    beforehand, so this stays a plain, exhaustively unit-testable function.
+    """
+    if has_live_handle:
+        if returncode is None:
+            return JobStatus("running", None, "live_handle_running")
+        return JobStatus("completed", returncode == 0, "live_handle_exited")
+
+    if report_present:
+        return JobStatus("completed", bool(report_ok), "report_present")
+
+    if pid is None:
+        return JobStatus("unknown", False, "pid_unknown_no_report")
+
+    if pid_alive:
+        return JobStatus("running", None, "pid_alive_no_report")
+
+    return JobStatus("unknown", False, "pid_dead_no_report")
 
 
 def build_command(

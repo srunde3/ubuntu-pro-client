@@ -1,8 +1,9 @@
 import subprocess
 from pathlib import Path
 
-import behave_mcp.adapters as adapters_module
 import pytest
+
+import behave_mcp.adapters as adapters_module
 from behave_mcp.adapters import (
     InMemoryJobRegistry,
     LocalArtifactStore,
@@ -13,12 +14,6 @@ from behave_mcp.adapters import (
 from behave_mcp.ports import Job, LogFileOpenError, ProcessStartError
 
 # ---- LocalFeatureFileReader ----
-
-# Parsing/caching behavior (sorting, skipping unparseable files, the mtime
-# cache, ...) is owned by features/behave_features.py and tested in
-# features/tests/test_behave_features.py. LocalFeatureFileReader is now a
-# thin Protocol-conforming delegate, so these tests only need to confirm
-# the delegation itself works end to end.
 
 
 def test_discover_feature_files_delegates(tmp_path):
@@ -175,6 +170,7 @@ class _FakeProcess:
     def __init__(self):
         self.returncode = None
         self.terminated = False
+        self.pid = 4321
 
     def poll(self):
         return self.returncode
@@ -207,6 +203,7 @@ def test_launcher_success(tmp_path, monkeypatch):
     assert calls["stderr"] == subprocess.STDOUT
     assert calls["text"] is True
     assert handle.poll() is None
+    assert handle.pid == 4321
 
     handle.close()
     assert calls["stdout"].closed is True
@@ -232,6 +229,23 @@ def test_launcher_process_start_failure(tmp_path, monkeypatch):
         launcher.launch(["tox"], str(tmp_path), {}, log_path)
 
     assert log_path.exists()
+
+
+def test_is_pid_alive_true_then_false_after_exit():
+    launcher = PopenLauncher()
+    process = subprocess.Popen(["sleep", "5"])
+    try:
+        assert launcher.is_pid_alive(process.pid) is True
+    finally:
+        process.terminate()
+        process.wait(timeout=5)
+    assert launcher.is_pid_alive(process.pid) is False
+
+
+def test_is_pid_alive_false_for_nonexistent_pid():
+    launcher = PopenLauncher()
+    # A PID this large should never be in use on Linux.
+    assert launcher.is_pid_alive(2**30) is False
 
 
 # ---- InMemoryJobRegistry ----
@@ -304,3 +318,30 @@ def test_registry_release_and_clear(tmp_path):
     registry.register("b", _job("b", tmp_path))
     registry.clear()
     assert registry.get("b") is None
+
+
+def test_registry_snapshot_returns_all_tracked_jobs(tmp_path):
+    registry = InMemoryJobRegistry()
+    registry.register("a", _job("a", tmp_path))
+    registry.register("b", _job("b", tmp_path))
+
+    snapshot = registry.snapshot()
+
+    assert {job.job_id for job in snapshot} == {"a", "b"}
+
+
+# ---- LocalArtifactStore.list_job_ids ----
+
+
+def test_list_job_ids_globs_meta_files(tmp_path):
+    store = LocalArtifactStore()
+    (tmp_path / "job1_meta.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "job2_meta.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "job2_stdout.log").write_text("", encoding="utf-8")
+
+    assert store.list_job_ids(tmp_path) == ["job1", "job2"]
+
+
+def test_list_job_ids_missing_dir(tmp_path):
+    store = LocalArtifactStore()
+    assert store.list_job_ids(tmp_path / "missing") == []
