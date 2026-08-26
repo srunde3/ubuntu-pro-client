@@ -691,8 +691,45 @@ def test_get_logs_returns_tail(tmp_path):
 
     result = service.get_logs(job_id, lines=2).model_dump(mode="json")
     assert result["lines"] == 2
+    assert result["lines_clamped"] is False
     assert result["output"] == "l2\nl3"
     assert result["output_lines"] == ["l2", "l3"]
+
+
+def test_get_logs_clamps_lines_above_max(tmp_path):
+    registry = InMemoryJobRegistry()
+    job_id = "jobtail"
+    stdout_log = tmp_path / f"{job_id}_stdout.log"
+    stdout_log.write_text("l1\nl2\nl3\n", encoding="utf-8")
+    registry.register(
+        job_id,
+        Job(
+            job_id=job_id,
+            process_handle=None,
+            stdout_log=stdout_log,
+            json_report=tmp_path / "none.json",
+            metadata=tmp_path / f"{job_id}_meta.json",
+        ),
+    )
+    service = _make_service(
+        FakeWorkspace(repo_root=tmp_path, log_dir=tmp_path),
+        registry=registry,
+    )
+
+    result = service.get_logs(
+        job_id, lines=domain.MAX_LOG_TAIL_LINES + 1000
+    ).model_dump(mode="json")
+    assert result["lines"] == domain.MAX_LOG_TAIL_LINES
+    assert result["lines_clamped"] is True
+
+
+def test_get_logs_rejects_non_positive_lines(tmp_path):
+    service = _make_service(
+        FakeWorkspace(repo_root=tmp_path, log_dir=tmp_path)
+    )
+
+    with pytest.raises(BehaveServiceError, match="lines must be a positive"):
+        service.get_logs("whatever", lines=0)
 
 
 def test_get_logs_rejects_invalid_repo_root():
@@ -997,7 +1034,7 @@ def test_list_jobs_not_truncated_when_under_limit(tmp_path):
     assert result["truncated"] is False
 
 
-def test_list_jobs_limit_clamped_to_bounds(tmp_path):
+def test_list_jobs_limit_clamped_when_too_high(tmp_path):
     (tmp_path / "jobold000_meta.json").write_text(
         json.dumps({"started_at": "T000"}), encoding="utf-8"
     )
@@ -1005,13 +1042,20 @@ def test_list_jobs_limit_clamped_to_bounds(tmp_path):
         FakeWorkspace(repo_root=tmp_path, log_dir=tmp_path),
     )
 
-    too_high = service.list_jobs(
+    result = service.list_jobs(
         limit=domain.MAX_JOB_LIST_LIMIT + 1000
     ).model_dump(mode="json")
-    assert too_high["truncated"] is False
+    assert result["truncated"] is False
+    assert result["limit_clamped"] is True
 
-    too_low = service.list_jobs(limit=0).model_dump(mode="json")
-    assert len(too_low["jobs"]) == 1
+
+def test_list_jobs_rejects_non_positive_limit(tmp_path):
+    service = _make_service(
+        FakeWorkspace(repo_root=tmp_path, log_dir=tmp_path),
+    )
+
+    with pytest.raises(BehaveServiceError, match="limit must be a positive"):
+        service.list_jobs(limit=0)
 
 
 def test_list_jobs_rejects_invalid_repo_root():
@@ -1213,6 +1257,27 @@ def test_summarize_scenario_results_rejects_invalid_status(tmp_path):
 
     with pytest.raises(BehaveServiceError, match="Invalid status filter"):
         service.summarize_scenario_results(status="bogus")
+
+
+def test_summarize_scenario_results_rejects_non_positive_limit(tmp_path):
+    service = _make_service(
+        FakeWorkspace(repo_root=tmp_path, log_dir=tmp_path),
+    )
+
+    with pytest.raises(BehaveServiceError, match="limit must be a positive"):
+        service.summarize_scenario_results(limit=0)
+
+
+def test_summarize_scenario_results_clamps_limit_above_max(tmp_path):
+    service = _make_service(
+        FakeWorkspace(repo_root=tmp_path, log_dir=tmp_path),
+    )
+
+    result = service.summarize_scenario_results(
+        limit=domain.MAX_SUMMARIZE_FAILURES_LIMIT + 1000
+    ).model_dump(mode="json")
+
+    assert result["limit_clamped"] is True
 
 
 def test_summarize_scenario_results_truncates_failures(tmp_path):

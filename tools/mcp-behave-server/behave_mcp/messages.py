@@ -224,6 +224,7 @@ WaitForCompletionResult = Annotated[
 class LogsResponse(BaseModel):
     job_id: str = ""
     lines: int = 0
+    lines_clamped: bool = False
     output: str = ""
     output_lines: list[str] = []
     artifacts: Artifacts | None = None
@@ -257,6 +258,7 @@ class ListScenarioJobsResponse(BaseModel):
     jobs: list[JobSummary] = []
     total_completed: int = 0
     truncated: bool = False
+    limit_clamped: bool = False
 
 
 class GroupedCount(BaseModel):
@@ -292,4 +294,5 @@ class SummarizeScenarioResultsResponse(BaseModel):
     by_machine_type: list[GroupedCount] = []
     failures: list[Failure] = []
     truncated: bool = False
+    limit_clamped: bool = False
     matched_job_ids: list[str] = []

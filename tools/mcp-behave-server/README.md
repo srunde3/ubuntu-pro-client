@@ -21,10 +21,10 @@ The server exposes these MCP tools:
 - `list_scenario_jobs` -- lists active jobs plus a bounded window of recently completed ones.
   - No known `job_id` or access to system processes required.
   - Merges in-memory state with jobs recovered from disk, including jobs still running after a server restart.
-  - Optional `limit` caps how many completed jobs are returned (most recent first). `total_completed` and `truncated` in the response tell you if older jobs were dropped.
+  - Optional `limit` caps how many completed jobs are returned (most recent first). `total_completed` and `truncated` in the response tell you if older jobs were dropped. `limit` must be positive; values above the server max are silently capped, with `limit_clamped` set when that happens.
 - `summarize_scenario_results` -- aggregates results across jobs.
   - Optional `job_ids`, `feature_file`, `scenario_name` (substring), `release`, `machine_type`, and `status` filters.
-  - Returns `job_counts` (status totals), scenario-level pass/fail counts grouped `by_release` and `by_machine_type` (each job's scenarios are attributed to all of that job's declared releases/machine_types), and a flattened `failures` list tagged with `job_id` and release/machine_type context (capped at `limit`, with `truncated` set when more exist).
+  - Returns `job_counts` (status totals), scenario-level pass/fail counts grouped `by_release` and `by_machine_type` (each job's scenarios are attributed to all of that job's declared releases/machine_types), and a flattened `failures` list tagged with `job_id` and release/machine_type context (capped at `limit`, with `truncated` set when more exist). `limit` must be positive; values above the server max are silently capped, with `limit_clamped` set when that happens.
   - Provides raw status/data only -- rerunning failed scenarios and judging flaky-vs-real failures is left to the caller.
 - `wait_for_scenario_completion` -- waits for completion.
   - Returns a compact completion summary, or a timeout payload.

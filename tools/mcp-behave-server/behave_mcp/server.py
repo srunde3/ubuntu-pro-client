@@ -3,8 +3,10 @@ import sys
 import time
 import uuid
 from datetime import datetime, timezone
+from typing import Annotated
 
 from mcp.server import FastMCP
+from pydantic import Field
 from starlette.responses import JSONResponse
 
 from behave_mcp import domain
@@ -42,6 +44,49 @@ mcp = FastMCP(
     host=_settings.host,
     port=_settings.port,
 )
+
+RepoRoot = Annotated[
+    str,
+    Field(
+        default="",
+        description=(
+            "Repository to run behave against. Defaults to "
+            "UBUNTU_PRO_CLIENT_REPO, then auto-detection -- which only "
+            "works for editable/in-place installs (`uv run`), not `uvx`."
+        ),
+    ),
+]
+JobId = Annotated[
+    str,
+    Field(
+        description=(
+            "A job_id returned by start_scenario or list_scenario_jobs."
+        )
+    ),
+]
+ReleaseFilter = Annotated[
+    str,
+    Field(
+        default="", description="Only keep scenarios covering this release."
+    ),
+]
+MachineTypeFilter = Annotated[
+    str,
+    Field(
+        default="",
+        description="Only keep scenarios covering this machine_type.",
+    ),
+]
+TagFilter = Annotated[
+    str, Field(default="", description="Only keep scenarios with this tag.")
+]
+TextFilter = Annotated[
+    str,
+    Field(
+        default="",
+        description="Only keep scenarios whose name contains this substring.",
+    ),
+]
 
 
 def _utc_timestamp() -> str:
@@ -86,11 +131,11 @@ async def healthcheck(request):
     )
 )
 def list_features(
-    release: str = "",
-    machine_type: str = "",
-    tag: str = "",
-    text: str = "",
-    repo_root: str = "",
+    release: ReleaseFilter = "",
+    machine_type: MachineTypeFilter = "",
+    tag: TagFilter = "",
+    text: TextFilter = "",
+    repo_root: RepoRoot = "",
 ) -> ListFeaturesResponse:
     return _service.list_features(
         release=release or None,
@@ -111,7 +156,10 @@ def list_features(
     )
 )
 def describe_feature(
-    feature_file: str, repo_root: str = ""
+    feature_file: Annotated[
+        str, Field(description="A path returned by list_features.")
+    ],
+    repo_root: RepoRoot = "",
 ) -> DescribeFeatureResponse:
     return _service.describe_feature(feature_file, repo_root)
 
@@ -124,7 +172,7 @@ def describe_feature(
         "list_features or find_scenarios."
     )
 )
-def list_dimensions(repo_root: str = "") -> ListDimensionsResponse:
+def list_dimensions(repo_root: RepoRoot = "") -> ListDimensionsResponse:
     return _service.list_dimensions(repo_root)
 
 
@@ -137,11 +185,11 @@ def list_dimensions(repo_root: str = "") -> ListDimensionsResponse:
     )
 )
 def find_scenarios(
-    release: str = "",
-    machine_type: str = "",
-    tag: str = "",
-    text: str = "",
-    repo_root: str = "",
+    release: ReleaseFilter = "",
+    machine_type: MachineTypeFilter = "",
+    tag: TagFilter = "",
+    text: TextFilter = "",
+    repo_root: RepoRoot = "",
 ) -> FindScenariosResponse:
     return _service.find_scenarios(
         release=release or None,
@@ -164,11 +212,40 @@ def find_scenarios(
     )
 )
 def start_scenario(
-    feature_file: str,
-    machine_types: list[str],
-    scenario_name: str = "",
-    releases: list[str] | None = None,
-    repo_root: str = "",
+    feature_file: Annotated[
+        str, Field(description="A path returned by list_features.")
+    ],
+    machine_types: Annotated[
+        list[str],
+        Field(
+            description=(
+                "Required. Allowed values: lxd-container, lxd-vm. Cloud "
+                "types (e.g. aws.generic) are blocked unless "
+                "MCP_ALLOW_CLOUD_MACHINE_TYPES is set."
+            )
+        ),
+    ],
+    scenario_name: Annotated[
+        str,
+        Field(
+            default="",
+            description=(
+                "Optional substring filter on scenario name, to run only "
+                "matching Examples rows within feature_file."
+            ),
+        ),
+    ] = "",
+    releases: Annotated[
+        list[str] | None,
+        Field(
+            default=None,
+            description=(
+                "Optional filter to only run Examples rows for these "
+                "releases. Defaults to every release the scenario covers."
+            ),
+        ),
+    ] = None,
+    repo_root: RepoRoot = "",
 ) -> StartScenarioResult:
     return _service.start_scenario(
         feature_file,
@@ -186,12 +263,24 @@ def start_scenario(
         "capped at limit), merging in-memory state with jobs recovered "
         "from disk (e.g. after a server restart). total_completed is the "
         "full completed-job count regardless of limit, and truncated is "
-        "set when older completed jobs were dropped to fit."
+        "set when older completed jobs were dropped to fit. limit must be "
+        "positive (rejected otherwise); values above the server max are "
+        "silently capped, with limit_clamped set to true when that "
+        "happens."
     )
 )
 def list_scenario_jobs(
-    repo_root: str = "",
-    limit: int = domain.DEFAULT_JOB_LIST_LIMIT,
+    repo_root: RepoRoot = "",
+    limit: Annotated[
+        int,
+        Field(
+            description=(
+                "Max number of completed jobs to return (most recent "
+                "first). Must be positive; values above the server max "
+                "are silently capped."
+            )
+        ),
+    ] = domain.DEFAULT_JOB_LIST_LIMIT,
 ) -> ListScenarioJobsResponse:
     return _service.list_jobs(repo_root, limit)
 
@@ -207,20 +296,55 @@ def list_scenario_jobs(
         "not a specific Examples row), a flattened failures list tagged "
         "with job_id and release/machine_type context (capped at limit, "
         "with truncated set when more exist), and matched_job_ids for "
-        "pivoting to get_scenario_logs/get_scenario_artifacts. Provides "
-        "raw status/data only -- rerunning failed scenarios and judging "
-        "flaky-vs-real failures is left to the caller."
+        "pivoting to get_scenario_logs/get_scenario_artifacts. limit must "
+        "be positive (rejected otherwise); values above the server max "
+        "are silently capped, with limit_clamped set to true when that "
+        "happens. Provides raw status/data only -- rerunning failed "
+        "scenarios and judging flaky-vs-real failures is left to the "
+        "caller."
     )
 )
 def summarize_scenario_results(
-    job_ids: list[str] | None = None,
-    feature_file: str = "",
-    scenario_name: str = "",
-    release: str = "",
-    machine_type: str = "",
-    status: str = "",
-    limit: int = domain.DEFAULT_SUMMARIZE_FAILURES_LIMIT,
-    repo_root: str = "",
+    job_ids: Annotated[
+        list[str] | None,
+        Field(default=None, description="Only include these specific jobs."),
+    ] = None,
+    feature_file: Annotated[
+        str,
+        Field(default="", description="Only include jobs for this feature."),
+    ] = "",
+    scenario_name: Annotated[
+        str,
+        Field(
+            default="",
+            description=(
+                "Only include jobs whose scenario_name contains this "
+                "substring."
+            ),
+        ),
+    ] = "",
+    release: ReleaseFilter = "",
+    machine_type: MachineTypeFilter = "",
+    status: Annotated[
+        str,
+        Field(
+            default="",
+            description=(
+                "Only include jobs with this status: running, "
+                "completed, or unknown."
+            ),
+        ),
+    ] = "",
+    limit: Annotated[
+        int,
+        Field(
+            description=(
+                "Max number of failures to return. Must be positive; "
+                "values above the server max are silently capped."
+            )
+        ),
+    ] = domain.DEFAULT_SUMMARIZE_FAILURES_LIMIT,
+    repo_root: RepoRoot = "",
 ) -> SummarizeScenarioResultsResponse:
     return _service.summarize_scenario_results(
         job_ids=job_ids,
@@ -243,10 +367,17 @@ def summarize_scenario_results(
     )
 )
 def wait_for_scenario_completion(
-    job_id: str,
-    max_wait_seconds: int = domain.DEFAULT_WAIT_TIMEOUT_SECONDS,
-    poll_interval_seconds: float = domain.DEFAULT_WAIT_POLL_INTERVAL_SECONDS,
-    repo_root: str = "",
+    job_id: JobId,
+    max_wait_seconds: Annotated[
+        int,
+        Field(
+            description="How long to poll before returning a timeout payload."
+        ),
+    ] = domain.DEFAULT_WAIT_TIMEOUT_SECONDS,
+    poll_interval_seconds: Annotated[
+        float, Field(description="Delay between internal status checks.")
+    ] = domain.DEFAULT_WAIT_POLL_INTERVAL_SECONDS,
+    repo_root: RepoRoot = "",
 ) -> WaitForCompletionResult:
     return _service.wait_for_completion(
         job_id,
@@ -260,13 +391,25 @@ def wait_for_scenario_completion(
     description=(
         "Return a tail of the stdout log for a behave job. job_id must "
         "come from start_scenario or list_scenario_jobs. Use this for "
-        "human debugging without flooding agent context with full logs."
+        "human debugging without flooding agent context with full logs. "
+        "lines must be positive (rejected otherwise); values above the "
+        "server max are silently capped, with lines_clamped set to true "
+        "when that happens."
     )
 )
 def get_scenario_logs(
-    job_id: str,
-    lines: int = domain.DEFAULT_LOG_TAIL_LINES,
-    repo_root: str = "",
+    job_id: JobId,
+    lines: Annotated[
+        int,
+        Field(
+            description=(
+                "Number of trailing log lines to return. Must be "
+                "positive; values above the server max are silently "
+                "capped."
+            )
+        ),
+    ] = domain.DEFAULT_LOG_TAIL_LINES,
+    repo_root: RepoRoot = "",
 ) -> LogsResponse:
     return _service.get_logs(job_id, lines, repo_root)
 
@@ -279,7 +422,7 @@ def get_scenario_logs(
     )
 )
 def get_scenario_artifacts(
-    job_id: str, repo_root: str = ""
+    job_id: JobId, repo_root: RepoRoot = ""
 ) -> ArtifactsResponse:
     return _service.get_artifacts(job_id, repo_root)
 

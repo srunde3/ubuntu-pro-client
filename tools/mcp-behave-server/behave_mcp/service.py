@@ -443,7 +443,12 @@ class BehaveService:
         lines: int = domain.DEFAULT_LOG_TAIL_LINES,
         repo_root: str = "",
     ) -> LogsResponse:
-        lines = max(1, min(lines, domain.MAX_LOG_TAIL_LINES))
+        if lines <= 0:
+            raise BehaveServiceError(
+                f"lines must be a positive integer, got {lines}"
+            )
+        lines_clamped = lines > domain.MAX_LOG_TAIL_LINES
+        lines = min(lines, domain.MAX_LOG_TAIL_LINES)
 
         job = self._registry.get(job_id)
         if job is None:
@@ -466,6 +471,7 @@ class BehaveService:
         return LogsResponse(
             job_id=job_id,
             lines=lines,
+            lines_clamped=lines_clamped,
             output=self._artifact_store.tail_file(stdout_log, lines),
             output_lines=self._artifact_store.tail_lines(stdout_log, lines),
             artifacts=domain.artifacts_payload(
@@ -521,7 +527,12 @@ class BehaveService:
         except ValueError as exc:
             raise BehaveServiceError(str(exc)) from exc
 
-        limit = max(1, min(limit, domain.MAX_JOB_LIST_LIMIT))
+        if limit <= 0:
+            raise BehaveServiceError(
+                f"limit must be a positive integer, got {limit}"
+            )
+        limit_clamped = limit > domain.MAX_JOB_LIST_LIMIT
+        limit = min(limit, domain.MAX_JOB_LIST_LIMIT)
         log_dir = self._workspace.resolve_log_dir(resolved_repo_root)
 
         in_memory_jobs = {job.job_id: job for job in self._registry.snapshot()}
@@ -563,6 +574,7 @@ class BehaveService:
             jobs=trimmed,
             total_completed=len(others),
             truncated=len(others) > limit,
+            limit_clamped=limit_clamped,
         )
 
     def summarize_scenario_results(
@@ -595,7 +607,12 @@ class BehaveService:
             else None
         )
         job_ids_filter = set(job_ids) if job_ids else None
-        limit = max(1, min(limit, domain.MAX_SUMMARIZE_FAILURES_LIMIT))
+        if limit <= 0:
+            raise BehaveServiceError(
+                f"limit must be a positive integer, got {limit}"
+            )
+        limit_clamped = limit > domain.MAX_SUMMARIZE_FAILURES_LIMIT
+        limit = min(limit, domain.MAX_SUMMARIZE_FAILURES_LIMIT)
 
         log_dir = self._workspace.resolve_log_dir(resolved_repo_root)
         in_memory_jobs = {job.job_id: job for job in self._registry.snapshot()}
@@ -683,6 +700,7 @@ class BehaveService:
             by_machine_type=domain.grouped_counts_from_dict(by_machine_type),
             failures=failures[:limit],
             truncated=truncated,
+            limit_clamped=limit_clamped,
             matched_job_ids=matched_job_ids,
         )
 
