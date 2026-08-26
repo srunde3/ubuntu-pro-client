@@ -23,39 +23,23 @@ For each started job, the server writes artifacts under `.mcp_behave_logs`:
 
 - `<job_id>_stdout.log`: combined stdout/stderr stream
 - `<job_id>_report.json`: behave JSON formatter output
-- `<job_id>_combo.jsonl`: one JSON line per scenario with its resolved `(release, machine_type)` and status -- see below
 - `<job_id>_meta.json`: machine-readable metadata (command, params, status, timestamps, artifact paths)
 - `index.jsonl`: append-only per-job lifecycle events (`started`, `completed`)
 
 It also exposes a health endpoint at `/healthz` for basic checks.
 
-## Attributing results to a release/machine_type
-
-A single job's behave invocation can cover multiple `releases` x `machine_types` at once (each Examples row runs as its own scenario), but the JSON report's scenario name for an Outline row is just an index (e.g. `"Check pro version -- @1.1 version"`), not labeled with the actual release/machine_type values. Behave itself never serializes that mapping into any built-in formatter/reporter output (checked the full formatter/reporter list in behave's own docs -- `json`, `json.pretty`, `plain`, `pretty`, `progress*`, `rerun`, `sphinx.steps`, `steps.*`, `tags`, `tags.location`, `junit`, `summary`; none of them carry it), but it's still sitting on the live `Scenario` object as `scenario._row` throughout the run -- including for skipped scenarios.
-
-`start_behave_scenario` appends a small custom formatter, `features.behave_combo_formatter:ComboFormatter` (`features/behave_combo_formatter.py`, a `behave.formatter.base2.BaseFormatter2` subclass implementing `on_scenario_end`), to the behave command alongside the existing `-f json -o ... -f plain`. It writes one JSON line per scenario to `<job_id>_combo.jsonl`: `{"location": "path:line", "status": ..., "release": ..., "machine_type": ...}`, keyed by the same `location` the JSON report already uses. `summarize_scenario_results` joins the two by that key to attribute each scenario's result precisely (`precise: true` in `by_release`/`by_machine_type`/`failures`).
-
-This is generated fresh by the exact behave process that ran, so it can never drift the way a separately-maintained snapshot could. Jobs whose `<job_id>_combo.jsonl` is missing or empty (e.g. run against a `features/` that predates `behave_combo_formatter.py`) fall back to attributing their results across every one of the job's declared `releases`/`machine_types` instead (`precise: false`).
-
-**Note**: `features/behave_combo_formatter.py`, plus a `PYTHONPATH = {toxinidir}` `setenv` entry in `[testenv:behave]` in the repo-root `tox.ini`, must exist in whatever `repo_root` a job targets -- behave resolves `-f`/`-o` formatter arguments before it adds `features/` to `sys.path` itself, so the repo root needs to already be on `PYTHONPATH` for a dotted import like this to resolve at all. Both pieces are being contributed upstream as an independently useful change; until that lands (or until a target `repo_root` otherwise has them), `start_behave_scenario` will fail outright rather than degrade gracefully, since neither piece is checked for existence beforehand.
-
 ## Local usage
 
-From the repository root, the package can be run directly with uvx without needing to change into the package directory:
-
-```bash
-uvx --from $(pwd)/tools/mcp-behave-server mcp-behave-server
-```
-
-If you are already inside the package directory, this also works:
-
-```bash
-uv run mcp-behave-server
-```
+This server is run via `uvx` from an MCP client config -- see "Example MCP
+client configuration" below for the one supported setup.
 
 ## Example MCP client configuration
 
-A minimal config entry for an MCP client looks like this:
+The supported setup runs the server with `uvx`, pointed at your
+`ubuntu-pro-client` checkout (a worktree works fine). `uvx` builds a
+non-editable copy, so repo auto-detection doesn't work -- set
+`UBUNTU_PRO_CLIENT_REPO` to that checkout explicitly (see `repo_root` under
+[Environment variables](#environment-variables)):
 
 ```json
 {
@@ -66,11 +50,17 @@ A minimal config entry for an MCP client looks like this:
         "--from",
         "/path/to/repo/tools/mcp-behave-server",
         "mcp-behave-server"
-      ]
+      ],
+      "env": {
+        "UBUNTU_PRO_CLIENT_REPO": "/path/to/repo"
+      }
     }
   }
 }
 ```
+
+Other env vars (contract token, concurrency limits, etc.) go in the same
+`env` block -- see [Environment variables](#environment-variables).
 
 If you prefer keeping cache enabled, clear stale entries after package changes:
 
@@ -118,15 +108,28 @@ in `pyproject.toml` points mypy at the source tree instead.
 
 ## Environment variables
 
-The server will forward a small allowlist of environment variables to the behave subprocess when present:
+The server forwards its **entire** environment to the behave subprocess.
+Whatever env vars the MCP server itself is started with,
+including things like `UACLIENT_BEHAVE_CONTRACT_TOKEN` and
+`UACLIENT_BEHAVE_INSTALL_FROM`, are visible to the spawned `behave` process.
+Treat the MCP server's environment as the behave subprocess's environment
+when configuring an MCP client.
 
-- `UACLIENT_BEHAVE_CONTRACT_TOKEN`
-- `UACLIENT_BEHAVE_INSTALL_FROM`
+The server also reads these variables at startup:
 
-The server also supports one MCP-only safety toggle:
-
-- `MCP_ALLOW_CLOUD_MACHINE_TYPES`: defaults to disabled. Set to `1` (or `true`/`yes`/`on`) to allow cloud machine types (`aws.generic`, `gcp.generic`, `azure.generic`).
+- `MCP_ALLOW_CLOUD_MACHINE_TYPES`: defaults to disabled. Set to `1` (or `true`/`yes`/`on`) to allow cloud machine types (`aws.generic`, `gcp.generic`, `azure.generic`, `aws.pro`, `gcp.pro`, `azure.pro`).
 - `MCP_MAX_PARALLEL_JOBS`: positive integer limit for concurrently running behave jobs. Defaults to `1` when unset. When the limit is reached, `start_behave_scenario` fails fast with `status: capacity_exceeded`.
+- `MCP_TRANSPORT`: one of `stdio` (default), `sse`, or `streamable-http`.
+- `MCP_HOST`: host to bind when using the `sse`/`streamable-http` transports. Defaults to `127.0.0.1`. Ignored for `stdio`.
+- `MCP_PORT`: port to bind when using the `sse`/`streamable-http` transports. Defaults to `8000`. Ignored for `stdio`.
+
+Every tool also accepts a `repo_root` parameter:
+
+- `repo_root`: the repository to run behave against. If a call omits it, the server falls back to `UBUNTU_PRO_CLIENT_REPO`, then to auto-detection -- which only works when running from an editable/in-place install (`uv run` from inside the package directory), not via `uvx --from`. **When using `uvx --from` (the documented usage), set `UBUNTU_PRO_CLIENT_REPO` or always pass `repo_root` explicitly.**
+
+One more variable is read at the point a job starts, and can vary per-call:
+
+- `MCP_LOG_DIR`: overrides where job artifacts (`*_stdout.log`, `*_report.json`, etc.) are written. Defaults to `<repo_root>/.mcp_behave_logs`.
 
 ## Safety constraints
 

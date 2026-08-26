@@ -53,6 +53,8 @@ _SETTINGS = Settings(
     allow_cloud_machine_types=False,
     max_parallel_jobs=1,
     transport="stdio",
+    host="127.0.0.1",
+    port=8000,
 )
 
 

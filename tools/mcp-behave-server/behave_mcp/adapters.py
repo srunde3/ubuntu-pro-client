@@ -9,6 +9,8 @@ from collections import deque
 from pathlib import Path
 from typing import Any
 
+from features import behave_features
+
 from behave_mcp import domain
 from behave_mcp.messages import (
     Combo,
@@ -25,8 +27,6 @@ from behave_mcp.ports import (
     ProcessStartError,
     ReservationResult,
 )
-
-from features import behave_features
 
 logger = logging.getLogger(__name__)
 
@@ -438,14 +438,24 @@ class LocalWorkspace:
         if env_value:
             return self._validated_repo_root(Path(env_value).expanduser())
 
-        current = Path(__file__).resolve()
-        for candidate in [current, *current.parents]:
+        detected = self._detect_repo_root(Path(__file__).resolve())
+        if detected is not None:
+            return detected
+
+        raise ValueError(
+            "Could not determine repo_root: not running from within a "
+            "source checkout of ubuntu-pro-client (e.g. installed via "
+            "'uvx --from'). Pass repo_root explicitly or set "
+            "UBUNTU_PRO_CLIENT_REPO."
+        )
+
+    def _detect_repo_root(self, start: Path) -> Path | None:
+        for candidate in [start, *start.parents]:
             if (candidate / "features").exists() and (
                 candidate / "tox.ini"
             ).exists():
                 return candidate.resolve()
-
-        return self._validated_repo_root(current.parents[3])
+        return None
 
     def resolve_log_dir(self, repo_root: Path) -> Path:
         env_path = os.environ.get("MCP_LOG_DIR")

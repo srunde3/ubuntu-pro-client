@@ -1,8 +1,9 @@
 import subprocess
 from pathlib import Path
 
-import behave_mcp.adapters as adapters_module
 import pytest
+
+import behave_mcp.adapters as adapters_module
 from behave_mcp.adapters import (
     InMemoryJobRegistry,
     LocalArtifactStore,
@@ -137,6 +138,30 @@ def test_resolve_repo_root_invalid(tmp_path):
     workspace = LocalWorkspace()
     with pytest.raises(ValueError, match="Invalid repo_root"):
         workspace.resolve_repo_root(str(invalid))
+
+
+def test_detect_repo_root_walks_up_to_features_and_tox(tmp_path):
+    repo = _make_valid_repo(tmp_path / "repo")
+    nested = repo / "tools" / "mcp-behave-server" / "behave_mcp"
+    nested.mkdir(parents=True)
+    workspace = LocalWorkspace()
+    assert (
+        workspace._detect_repo_root(nested / "adapters.py") == repo.resolve()
+    )
+
+
+def test_detect_repo_root_returns_none_outside_a_checkout(tmp_path):
+    isolated = tmp_path / "isolated" / "site-packages" / "behave_mcp"
+    isolated.mkdir(parents=True)
+    workspace = LocalWorkspace()
+    assert workspace._detect_repo_root(isolated / "adapters.py") is None
+
+
+def test_resolve_repo_root_raises_clear_error_when_undetectable(monkeypatch):
+    workspace = LocalWorkspace()
+    monkeypatch.setattr(workspace, "_detect_repo_root", lambda start: None)
+    with pytest.raises(ValueError, match="UBUNTU_PRO_CLIENT_REPO"):
+        workspace.resolve_repo_root(None)
 
 
 def test_resolve_log_dir_env_and_default(tmp_path, monkeypatch):

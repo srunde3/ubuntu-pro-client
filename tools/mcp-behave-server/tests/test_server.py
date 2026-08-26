@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 import pytest
+
 from behave_mcp import domain
 from behave_mcp.adapters import (
     InMemoryJobRegistry,
@@ -88,6 +89,8 @@ def _settings(*, allow_cloud=False, max_parallel_jobs=1) -> Settings:
         allow_cloud_machine_types=allow_cloud,
         max_parallel_jobs=max_parallel_jobs,
         transport="stdio",
+        host="127.0.0.1",
+        port=8000,
     )
 
 

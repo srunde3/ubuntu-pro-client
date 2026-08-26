@@ -3,6 +3,9 @@ import time
 import uuid
 from datetime import datetime, timezone
 
+from mcp.server import FastMCP
+from starlette.responses import JSONResponse
+
 from behave_mcp import domain
 from behave_mcp.adapters import (
     InMemoryJobRegistry,
@@ -14,19 +17,19 @@ from behave_mcp.adapters import (
 )
 from behave_mcp.config import load_settings
 from behave_mcp.service import BehaveService
-from mcp.server import FastMCP
-from starlette.responses import JSONResponse
 
-host = os.environ.get("MCP_HOST", "127.0.0.1")
-port = int(os.environ.get("MCP_PORT", "8000"))
-mcp = FastMCP("Ubuntu Pro Client Behave MCP", host=host, port=port)
+_settings = load_settings(os.environ)
+mcp = FastMCP(
+    "Ubuntu Pro Client Behave MCP",
+    host=_settings.host,
+    port=_settings.port,
+)
 
 
 def _utc_timestamp() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-_settings = load_settings(os.environ)
 _workspace = LocalWorkspace()
 _feature_reader = LocalFeatureFileReader()
 _feature_catalog = LocalFeatureCatalog()
