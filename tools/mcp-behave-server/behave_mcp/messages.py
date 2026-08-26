@@ -96,8 +96,8 @@ class Capacity(BaseModel):
 class Failure(BaseModel):
     """A single failing step extracted from a behave report.
 
-    ``job_id``/``releases``/``machine_types``/``precise`` are only populated
-    by ``summarize_scenario_results``; ``wait_for_completion`` and
+    ``job_id``/``releases``/``machine_types`` are only populated by
+    ``summarize_scenario_results``; ``wait_for_completion`` and
     ``get_scenario_artifacts`` leave them at their defaults.
     """
 
@@ -109,7 +109,6 @@ class Failure(BaseModel):
     job_id: str | None = None
     releases: list[str] = []
     machine_types: list[str] = []
-    precise: bool = False
 
 
 class ReportSummary(BaseModel):
@@ -263,11 +262,9 @@ class ListScenarioJobsResponse(BaseModel):
 class GroupedCount(BaseModel):
     """Scenario-level status counts for one release or machine_type value.
 
-    ``precise`` is true only while every scenario counted here had a
-    resolvable Examples-row location (see ``combo_locations`` in job
-    metadata); it becomes false once any contributing scenario had to fall
-    back to its job's declared release/machine_type lists (e.g. a job
-    started before that snapshot existed).
+    Every scenario in a job's report is attributed to all of that job's
+    declared releases/machine_types -- a job isn't broken down per
+    Examples row.
     """
 
     name: str = ""
@@ -276,7 +273,6 @@ class GroupedCount(BaseModel):
     failed: int = 0
     skipped: int = 0
     unknown: int = 0
-    precise: bool = True
 
 
 class JobCounts(BaseModel):

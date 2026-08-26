@@ -1,7 +1,5 @@
 """Plain unit tests for pure domain logic."""
 
-import json
-
 from behave_mcp import domain
 
 
@@ -220,103 +218,6 @@ def test_job_matches_result_filters_by_release_and_machine_type():
     )
 
 
-# ---- resolve_scenario_combo ----
-
-
-def test_resolve_scenario_combo_matches_known_location():
-    combo_map = {
-        "features/_version.feature:27": {
-            "release": "xenial",
-            "machine_type": "lxd-container",
-        }
-    }
-    release, machine_type, precise = domain.resolve_scenario_combo(
-        "features/_version.feature:27", combo_map
-    )
-    assert (release, machine_type, precise) == (
-        "xenial",
-        "lxd-container",
-        True,
-    )
-
-
-def test_resolve_scenario_combo_unresolved_when_location_unknown():
-    combo_map = {
-        "features/_version.feature:27": {
-            "release": "xenial",
-            "machine_type": "lxd-container",
-        }
-    }
-    assert domain.resolve_scenario_combo(
-        "features/_version.feature:99", combo_map
-    ) == (None, None, False)
-
-
-def test_resolve_scenario_combo_unresolved_when_no_report():
-    assert domain.resolve_scenario_combo(
-        "features/_version.feature:27", {}
-    ) == (None, None, False)
-
-
-# ---- parse_combo_report ----
-
-
-def test_parse_combo_report_builds_location_map():
-    lines = [
-        json.dumps(
-            {
-                "location": "features/f.feature:10",
-                "status": "passed",
-                "release": "jammy",
-                "machine_type": "lxd-container",
-            }
-        ),
-        json.dumps(
-            {
-                "location": "features/f.feature:11",
-                "status": "skipped",
-                "release": "resolute",
-                "machine_type": "lxd-vm",
-            }
-        ),
-    ]
-
-    combo_map = domain.parse_combo_report(lines)
-
-    assert combo_map == {
-        "features/f.feature:10": {
-            "release": "jammy",
-            "machine_type": "lxd-container",
-        },
-        "features/f.feature:11": {
-            "release": "resolute",
-            "machine_type": "lxd-vm",
-        },
-    }
-
-
-def test_parse_combo_report_skips_malformed_and_incomplete_lines():
-    lines = [
-        "not json",
-        "",
-        json.dumps({"location": "features/f.feature:10"}),  # missing combo
-        json.dumps(
-            {
-                "location": "features/f.feature:11",
-                "release": "jammy",
-                "machine_type": "lxd-container",
-            }
-        ),
-    ]
-
-    assert domain.parse_combo_report(lines) == {
-        "features/f.feature:11": {
-            "release": "jammy",
-            "machine_type": "lxd-container",
-        }
-    }
-
-
 # ---- scenario_status_from_element ----
 
 
@@ -380,7 +281,7 @@ def test_summarize_report_classifies_skipped_scenarios_correctly():
     assert result.summary["scenarios"]["unknown"] == 0
 
 
-# ---- combo_group_counts / merge_combo_group_counts / grouped_counts ----
+# ---- grouped_counts_from_report / merge_grouped_counts / grouped_counts ----
 
 
 def _scenario_element(location, status, name="scenario"):
@@ -391,18 +292,12 @@ def _scenario_element(location, status, name="scenario"):
     }
 
 
-def test_combo_group_counts_classifies_skipped_scenarios_correctly():
+def test_grouped_counts_from_report_classifies_skipped_scenarios_correctly():
     """A skipped scenario has no executed steps, only a scenario-level
 
     ``status`` -- regression test for the bug where such scenarios were
     mis-bucketed as "unknown" instead of "skipped".
     """
-    combo_map = {
-        "features/f.feature:10": {
-            "release": "jammy",
-            "machine_type": "lxd-container",
-        },
-    }
     report_data = [
         {
             "name": "feature",
@@ -417,23 +312,15 @@ def test_combo_group_counts_classifies_skipped_scenarios_correctly():
         }
     ]
 
-    by_release, _ = domain.combo_group_counts(report_data, combo_map, [], [])
+    by_release, _ = domain.grouped_counts_from_report(
+        report_data, ["jammy"], []
+    )
 
     assert by_release["jammy"]["skipped"] == 1
     assert by_release["jammy"]["unknown"] == 0
 
 
-def test_combo_group_counts_precise_from_combo_map():
-    combo_map = {
-        "features/f.feature:10": {
-            "release": "jammy",
-            "machine_type": "lxd-container",
-        },
-        "features/f.feature:11": {
-            "release": "resolute",
-            "machine_type": "lxd-vm",
-        },
-    }
+def test_grouped_counts_from_report_attributes_to_all_declared_values():
     report_data = [
         {
             "name": "feature",
@@ -444,46 +331,25 @@ def test_combo_group_counts_precise_from_combo_map():
         }
     ]
 
-    by_release, by_machine_type = domain.combo_group_counts(
-        report_data, combo_map, [], []
+    by_release, by_machine_type = domain.grouped_counts_from_report(
+        report_data, ["jammy", "noble"], ["lxd-container"]
     )
 
     assert by_release["jammy"] == {
-        "total": 1,
+        "total": 2,
         "passed": 1,
-        "failed": 0,
+        "failed": 1,
         "skipped": 0,
         "unknown": 0,
-        "precise": True,
     }
-    assert by_release["resolute"]["failed"] == 1
+    assert by_release["noble"]["total"] == 2
     assert by_machine_type["lxd-container"]["passed"] == 1
-    assert by_machine_type["lxd-vm"]["failed"] == 1
+    assert by_machine_type["lxd-container"]["failed"] == 1
 
 
-def test_combo_group_counts_falls_back_to_declared_lists_when_unresolved():
-    report_data = [
-        {
-            "name": "feature",
-            "elements": [
-                _scenario_element("features/f.feature:10", "passed"),
-            ],
-        }
-    ]
-
-    by_release, by_machine_type = domain.combo_group_counts(
-        report_data, {}, ["jammy", "noble"], ["lxd-container"]
-    )
-
-    assert by_release["jammy"]["precise"] is False
-    assert by_release["noble"]["precise"] is False
-    assert by_release["jammy"]["passed"] == 1
-    assert by_machine_type["lxd-container"]["passed"] == 1
-
-
-def test_merge_combo_group_counts_sums_and_ands_precise():
+def test_merge_grouped_counts_sums_across_jobs():
     target: dict = {}
-    domain.merge_combo_group_counts(
+    domain.merge_grouped_counts(
         target,
         {
             "jammy": {
@@ -492,11 +358,10 @@ def test_merge_combo_group_counts_sums_and_ands_precise():
                 "failed": 0,
                 "skipped": 0,
                 "unknown": 0,
-                "precise": True,
             }
         },
     )
-    domain.merge_combo_group_counts(
+    domain.merge_grouped_counts(
         target,
         {
             "jammy": {
@@ -505,7 +370,6 @@ def test_merge_combo_group_counts_sums_and_ands_precise():
                 "failed": 1,
                 "skipped": 0,
                 "unknown": 0,
-                "precise": False,
             }
         },
     )
@@ -513,7 +377,6 @@ def test_merge_combo_group_counts_sums_and_ands_precise():
     assert target["jammy"]["total"] == 2
     assert target["jammy"]["passed"] == 1
     assert target["jammy"]["failed"] == 1
-    assert target["jammy"]["precise"] is False
 
 
 def test_grouped_counts_from_dict_sorted_by_name():
@@ -524,7 +387,6 @@ def test_grouped_counts_from_dict_sorted_by_name():
             "failed": 0,
             "skipped": 0,
             "unknown": 0,
-            "precise": True,
         },
         "jammy": {
             "total": 2,
@@ -532,27 +394,19 @@ def test_grouped_counts_from_dict_sorted_by_name():
             "failed": 1,
             "skipped": 0,
             "unknown": 0,
-            "precise": False,
         },
     }
 
     result = domain.grouped_counts_from_dict(counts)
 
     assert [g.name for g in result] == ["jammy", "resolute"]
-    assert result[0].precise is False
     assert result[1].total == 1
 
 
-# ---- combo_failures_from_report ----
+# ---- job_failures_from_report ----
 
 
-def test_combo_failures_from_report_precise_combo():
-    combo_map = {
-        "features/f.feature:10": {
-            "release": "jammy",
-            "machine_type": "lxd-container",
-        }
-    }
+def test_job_failures_from_report_tags_job_and_declared_context():
     report_data = [
         {
             "name": "my-feature",
@@ -574,8 +428,8 @@ def test_combo_failures_from_report_precise_combo():
         }
     ]
 
-    failures = domain.combo_failures_from_report(
-        report_data, "job1", combo_map, [], []
+    failures = domain.job_failures_from_report(
+        report_data, "job1", ["jammy"], ["lxd-container", "lxd-vm"]
     )
 
     assert len(failures) == 1
@@ -585,38 +439,4 @@ def test_combo_failures_from_report_precise_combo():
     assert failure.step == "a failing step"
     assert failure.job_id == "job1"
     assert failure.releases == ["jammy"]
-    assert failure.machine_types == ["lxd-container"]
-    assert failure.precise is True
-
-
-def test_combo_failures_from_report_falls_back_to_declared_lists():
-    report_data = [
-        {
-            "name": "my-feature",
-            "elements": [
-                {
-                    "name": "my-scenario",
-                    "location": "features/f.feature:10",
-                    "steps": [
-                        {
-                            "name": "a failing step",
-                            "result": {
-                                "status": "failed",
-                                "error_message": "boom",
-                            },
-                        }
-                    ],
-                }
-            ],
-        }
-    ]
-
-    failures = domain.combo_failures_from_report(
-        report_data, "job1", {}, ["jammy"], ["lxd-container", "lxd-vm"]
-    )
-
-    assert len(failures) == 1
-    failure = failures[0]
-    assert failure.releases == ["jammy"]
     assert failure.machine_types == ["lxd-container", "lxd-vm"]
-    assert failure.precise is False

@@ -1,4 +1,5 @@
 import os
+import sys
 import time
 import uuid
 from datetime import datetime, timezone
@@ -15,7 +16,7 @@ from behave_mcp.adapters import (
     LocalWorkspace,
     PopenLauncher,
 )
-from behave_mcp.config import load_settings
+from behave_mcp.config import ConfigError, load_settings
 from behave_mcp.messages import (
     ArtifactsResponse,
     DescribeFeatureResponse,
@@ -30,7 +31,12 @@ from behave_mcp.messages import (
 )
 from behave_mcp.service import BehaveService
 
-_settings = load_settings(os.environ)
+try:
+    _settings = load_settings(os.environ)
+except ConfigError as exc:
+    print(f"mcp-behave-server: invalid configuration: {exc}", file=sys.stderr)
+    raise SystemExit(1) from None
+
 mcp = FastMCP(
     "Ubuntu Pro Client Behave MCP",
     host=_settings.host,
@@ -196,15 +202,14 @@ def list_scenario_jobs(
         "filters (job_ids, feature_file, scenario_name substring, release, "
         "machine_type, status). Returns job_counts (status totals -- how "
         "far into a set of runs you are), scenario-level pass/fail counts "
-        "grouped by_release and by_machine_type (each group flagged "
-        "precise when every contributing scenario had a resolvable "
-        "Examples-row location, false for jobs started before that "
-        "tracking existed), a flattened failures list tagged with job_id "
-        "and combo context (capped at limit, with truncated set when more "
-        "exist), and matched_job_ids for pivoting to get_scenario_logs/"
-        "get_scenario_artifacts. Provides raw status/data only -- rerunning "
-        "failed scenarios and judging flaky-vs-real failures is left to "
-        "the caller."
+        "grouped by_release and by_machine_type (each job's scenarios are "
+        "attributed to all of that job's declared releases/machine_types, "
+        "not a specific Examples row), a flattened failures list tagged "
+        "with job_id and release/machine_type context (capped at limit, "
+        "with truncated set when more exist), and matched_job_ids for "
+        "pivoting to get_scenario_logs/get_scenario_artifacts. Provides "
+        "raw status/data only -- rerunning failed scenarios and judging "
+        "flaky-vs-real failures is left to the caller."
     )
 )
 def summarize_scenario_results(

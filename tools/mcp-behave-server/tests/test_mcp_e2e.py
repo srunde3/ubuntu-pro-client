@@ -112,15 +112,6 @@ async def test_mcp_e2e_long_running_attach_flow(monkeypatch):
         assert summary_by_job_id["job_counts"]["total"] == 1
         assert summary_by_job_id["by_release"]
         assert summary_by_job_id["by_machine_type"]
-        # A real behave run resolves combo_locations against its own
-        # report, so attribution should be precise, not the coarse
-        # declared-list fallback used when that snapshot is unavailable.
-        assert all(
-            group["precise"] for group in summary_by_job_id["by_release"]
-        )
-        assert all(
-            group["precise"] for group in summary_by_job_id["by_machine_type"]
-        )
 
         summary_by_feature_file = result_json(
             await client.call_tool(

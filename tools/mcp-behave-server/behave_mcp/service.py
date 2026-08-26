@@ -282,7 +282,6 @@ class BehaveService:
         log_dir = self._workspace.resolve_log_dir(resolved_repo_root)
         job_id = self._new_job_id()
         json_report_path = log_dir / f"{job_id}_report.json"
-        combo_report_path = log_dir / f"{job_id}_combo.jsonl"
         stdout_path = log_dir / f"{job_id}_stdout.log"
         metadata_path = log_dir / f"{job_id}_meta.json"
 
@@ -316,7 +315,6 @@ class BehaveService:
             scenario_name,
             releases,
             json_report_path,
-            combo_report_path,
         )
         env = self._workspace.subprocess_env()
 
@@ -369,7 +367,6 @@ class BehaveService:
                 "repo_root": str(resolved_repo_root),
                 "pid": handle.pid,
                 "artifacts": artifacts_dict,
-                "combo_report": str(combo_report_path),
             },
         )
         self._artifact_store.append_index_event(
@@ -642,37 +639,24 @@ class BehaveService:
             if report_data is None:
                 continue
 
-            combo_report_path = metadata_payload.get("combo_report")
-            combo_lines = (
-                self._artifact_store.read_text_lines(Path(combo_report_path))
-                if combo_report_path
-                else None
-            )
-            combo_map = (
-                domain.parse_combo_report(combo_lines)
-                if combo_lines is not None
-                else {}
-            )
             fallback_releases = metadata_payload.get("releases") or []
             fallback_machine_types = (
                 metadata_payload.get("machine_types") or []
             )
 
-            job_by_release, job_by_machine_type = domain.combo_group_counts(
-                report_data,
-                combo_map,
-                fallback_releases,
-                fallback_machine_types,
+            job_by_release, job_by_machine_type = (
+                domain.grouped_counts_from_report(
+                    report_data,
+                    fallback_releases,
+                    fallback_machine_types,
+                )
             )
-            domain.merge_combo_group_counts(by_release, job_by_release)
-            domain.merge_combo_group_counts(
-                by_machine_type, job_by_machine_type
-            )
+            domain.merge_grouped_counts(by_release, job_by_release)
+            domain.merge_grouped_counts(by_machine_type, job_by_machine_type)
             failures.extend(
-                domain.combo_failures_from_report(
+                domain.job_failures_from_report(
                     report_data,
                     job_id,
-                    combo_map,
                     fallback_releases,
                     fallback_machine_types,
                 )

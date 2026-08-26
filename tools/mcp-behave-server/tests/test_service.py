@@ -329,7 +329,9 @@ def test_start_scenario_builds_command(tmp_path):
     assert "--name" in call["command"]
     assert "-f" in call["command"]
     assert "json" in call["command"]
-    assert "features.behave_combo_formatter:ComboFormatter" in call["command"]
+    assert (
+        "features.behave_combo_formatter:ComboFormatter" not in call["command"]
+    )
     assert call["cwd"] == str(repo_root)
     assert call["env"]["UACLIENT_BEHAVE_CONTRACT_TOKEN"] == "token"
 
@@ -351,7 +353,7 @@ def test_start_scenario_uses_repo_root_override(tmp_path):
     assert launcher.calls[0]["cwd"] == str(repo_root)
 
 
-def test_start_scenario_writes_combo_report_path(tmp_path):
+def test_start_scenario_does_not_reference_combo_formatter(tmp_path):
     repo_root = _make_repo_with_outline(tmp_path)
     launcher = FakeLauncher()
     service = _make_service(
@@ -359,22 +361,15 @@ def test_start_scenario_writes_combo_report_path(tmp_path):
         launcher=launcher,
     )
 
-    result = service.start_scenario(
+    service.start_scenario(
         "features/cli/attach.feature",
         machine_types=["lxd-container", "lxd-vm"],
     ).model_dump(mode="json")
 
-    metadata_path = Path(result["artifacts"]["metadata"])
-    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-
-    assert metadata["combo_report"].endswith("_combo.jsonl")
     call = launcher.calls[0]
-    assert call["command"][-6:-2] == [
-        "-f",
-        "features.behave_combo_formatter:ComboFormatter",
-        "-o",
-        metadata["combo_report"],
-    ]
+    assert (
+        "features.behave_combo_formatter:ComboFormatter" not in call["command"]
+    )
     assert call["command"][-2:] == ["-f", "plain"]
 
 
@@ -1016,39 +1011,9 @@ def test_summarize_scenario_results_groups_by_release_and_machine_type(
     start_result = service.start_scenario(
         "features/cli/attach.feature",
         machine_types=["lxd-container", "lxd-vm"],
+        releases=["jammy", "resolute"],
     ).model_dump(mode="json")
     job_id = start_result["job_id"]
-    metadata_path = Path(start_result["artifacts"]["metadata"])
-    combo_report_path = Path(
-        json.loads(metadata_path.read_text(encoding="utf-8"))["combo_report"]
-    )
-
-    jammy_location = "features/cli/attach.feature:10"
-    resolute_location = "features/cli/attach.feature:11"
-    combo_report_path.write_text(
-        "\n".join(
-            [
-                json.dumps(
-                    {
-                        "location": jammy_location,
-                        "status": "passed",
-                        "release": "jammy",
-                        "machine_type": "lxd-container",
-                    }
-                ),
-                json.dumps(
-                    {
-                        "location": resolute_location,
-                        "status": "failed",
-                        "release": "resolute",
-                        "machine_type": "lxd-vm",
-                    }
-                ),
-            ]
-        )
-        + "\n",
-        encoding="utf-8",
-    )
 
     report_path = Path(start_result["artifacts"]["json_report"])
     report_path.write_text(
@@ -1059,7 +1024,7 @@ def test_summarize_scenario_results_groups_by_release_and_machine_type(
                     "elements": [
                         {
                             "name": "Attach on a machine -- @1.1",
-                            "location": jammy_location,
+                            "location": "features/cli/attach.feature:10",
                             "steps": [
                                 {
                                     "name": "step1",
@@ -1069,7 +1034,7 @@ def test_summarize_scenario_results_groups_by_release_and_machine_type(
                         },
                         {
                             "name": "Attach on a machine -- @1.2",
-                            "location": resolute_location,
+                            "location": "features/cli/attach.feature:11",
                             "steps": [
                                 {
                                     "name": "step2",
@@ -1099,18 +1064,30 @@ def test_summarize_scenario_results_groups_by_release_and_machine_type(
         "unknown": 0,
     }
     by_release = {g["name"]: g for g in result["by_release"]}
-    assert by_release["jammy"]["passed"] == 1
-    assert by_release["jammy"]["precise"] is True
-    assert by_release["resolute"]["failed"] == 1
+    assert by_release["jammy"] == {
+        "name": "jammy",
+        "total": 2,
+        "passed": 1,
+        "failed": 1,
+        "skipped": 0,
+        "unknown": 0,
+    }
+    assert by_release["resolute"] == {
+        "name": "resolute",
+        "total": 2,
+        "passed": 1,
+        "failed": 1,
+        "skipped": 0,
+        "unknown": 0,
+    }
     by_machine_type = {g["name"]: g for g in result["by_machine_type"]}
     assert by_machine_type["lxd-container"]["passed"] == 1
     assert by_machine_type["lxd-vm"]["failed"] == 1
     assert len(result["failures"]) == 1
     failure = result["failures"][0]
     assert failure["job_id"] == job_id
-    assert failure["releases"] == ["resolute"]
-    assert failure["machine_types"] == ["lxd-vm"]
-    assert failure["precise"] is True
+    assert failure["releases"] == ["jammy", "resolute"]
+    assert failure["machine_types"] == ["lxd-container", "lxd-vm"]
     assert result["matched_job_ids"] == [job_id]
     assert result["truncated"] is False
 
@@ -1150,7 +1127,7 @@ def test_summarize_scenario_results_filters_by_feature_file(tmp_path):
     assert result["matched_job_ids"] == ["jobmatch"]
 
 
-def test_summarize_scenario_results_falls_back_for_legacy_jobs(
+def test_summarize_scenario_results_recovers_disk_only_job(
     tmp_path,
 ):
     job_id = "joblegacy"
@@ -1196,7 +1173,6 @@ def test_summarize_scenario_results_falls_back_for_legacy_jobs(
 
     by_release = {g["name"]: g for g in result["by_release"]}
     assert by_release["jammy"]["passed"] == 1
-    assert by_release["jammy"]["precise"] is False
 
 
 def test_summarize_scenario_results_rejects_invalid_status(tmp_path):

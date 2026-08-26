@@ -5,7 +5,6 @@ inputs, and summarize behave JSON reports. Constants shared across modules
 also live here.
 """
 
-import json
 from pathlib import Path
 from typing import Any, NamedTuple
 
@@ -123,7 +122,6 @@ def build_command(
     scenario_name: str,
     releases: list[str] | None,
     json_report_path: Path,
-    combo_report_path: Path,
 ) -> list[str]:
     command = ["tox", "-e", "behave", "--", feature_file]
     if scenario_name:
@@ -132,14 +130,6 @@ def build_command(
         command.extend(["-D", f"releases={','.join(releases)}"])
     command.extend(["-D", f"machine_types={','.join(machine_types)}"])
     command.extend(["-f", "json", "-o", str(json_report_path)])
-    command.extend(
-        [
-            "-f",
-            "features.behave_combo_formatter:ComboFormatter",
-            "-o",
-            str(combo_report_path),
-        ]
-    )
     command.extend(["-f", "plain"])
     return command
 
@@ -334,57 +324,6 @@ def job_matches_result_filters(
     return True
 
 
-def resolve_scenario_combo(
-    location: str, combo_map: dict[str, Any]
-) -> tuple[str | None, str | None, bool]:
-    """Resolve ``(release, machine_type, precise)`` for a report element.
-
-    ``location`` is behave's ``"path:line"`` string for a scenario element;
-    ``combo_map`` is built by ``parse_combo_report`` from that same job's
-    ``ComboFormatter`` output, keyed by that identical ``location`` string.
-    Returns ``(None, None, False)`` when unresolved -- e.g. a job whose combo
-    report is missing/empty, or a scenario the formatter never saw.
-    """
-    entry = combo_map.get(location)
-    if not isinstance(entry, dict):
-        return None, None, False
-    release = entry.get("release")
-    machine_type = entry.get("machine_type")
-    if not release or not machine_type:
-        return None, None, False
-    return str(release), str(machine_type), True
-
-
-def parse_combo_report(lines: list[str]) -> dict[str, dict[str, Any]]:
-    """Parse ``ComboFormatter``'s JSONL output into a location -> combo map.
-
-    Malformed or incomplete lines are skipped rather than raised on, since
-    this reads a companion artifact to the JSON report, not the report
-    behave's own exit code already validated.
-    """
-    combo_map: dict[str, dict[str, Any]] = {}
-    for line in lines:
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            record = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if not isinstance(record, dict):
-            continue
-        location = record.get("location")
-        release = record.get("release")
-        machine_type = record.get("machine_type")
-        if not location or not release or not machine_type:
-            continue
-        combo_map[str(location)] = {
-            "release": release,
-            "machine_type": machine_type,
-        }
-    return combo_map
-
-
 def _empty_grouped_count() -> dict[str, Any]:
     return {
         "total": 0,
@@ -392,23 +331,19 @@ def _empty_grouped_count() -> dict[str, Any]:
         "failed": 0,
         "skipped": 0,
         "unknown": 0,
-        "precise": True,
     }
 
 
-def combo_group_counts(
+def grouped_counts_from_report(
     report_data: list[Any],
-    combo_map: dict[str, Any],
-    fallback_releases: list[str],
-    fallback_machine_types: list[str],
+    releases: list[str],
+    machine_types: list[str],
 ) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
     """Return one job's per-release and per-machine_type scenario counts.
 
-    Each returned dict maps a release/machine_type name to counts plus a
-    ``precise`` flag (see ``resolve_scenario_combo``). When a scenario's
-    combo can't be resolved, its result is attributed to every one of the
-    job's declared releases/machine_types instead (coarse fallback), with
-    ``precise`` set to False for those entries.
+    Every scenario in the report is attributed to all of the job's declared
+    ``releases``/``machine_types`` -- a single job's Examples rows aren't
+    mapped back to which specific row produced which scenario.
     """
     by_release: dict[str, dict[str, Any]] = {}
     by_machine_type: dict[str, dict[str, Any]] = {}
@@ -419,54 +354,37 @@ def combo_group_counts(
             scenarios = []
         for scenario in scenarios:
             status = scenario_status_from_element(scenario)
-            location = str(scenario.get("location", ""))
-            release, machine_type, precise = resolve_scenario_combo(
-                location, combo_map
-            )
 
-            release_names: list[str]
-            machine_type_names: list[str]
-            if precise and release is not None and machine_type is not None:
-                release_names = [release]
-                machine_type_names = [machine_type]
-            else:
-                precise = False
-                release_names = list(fallback_releases)
-                machine_type_names = list(fallback_machine_types)
-
-            for name in release_names:
+            for name in releases:
                 entry = by_release.setdefault(name, _empty_grouped_count())
                 entry["total"] += 1
                 entry[status] += 1
-                entry["precise"] = entry["precise"] and precise
-            for name in machine_type_names:
+            for name in machine_types:
                 entry = by_machine_type.setdefault(
                     name, _empty_grouped_count()
                 )
                 entry["total"] += 1
                 entry[status] += 1
-                entry["precise"] = entry["precise"] and precise
 
     return by_release, by_machine_type
 
 
-def merge_combo_group_counts(
+def merge_grouped_counts(
     target: dict[str, dict[str, Any]], source: dict[str, dict[str, Any]]
 ) -> None:
-    """Merge one job's ``combo_group_counts`` output into a running total."""
+    """Merge one job's ``grouped_counts_from_report`` output into a running
+    total."""
     for name, counts in source.items():
         entry = target.setdefault(name, _empty_grouped_count())
         for key in ("total", "passed", "failed", "skipped", "unknown"):
             entry[key] += counts.get(key, 0)
-        entry["precise"] = entry["precise"] and bool(
-            counts.get("precise", True)
-        )
 
 
 def grouped_counts_from_dict(
     counts: dict[str, dict[str, Any]],
 ) -> list[GroupedCount]:
-    """Project a merged ``combo_group_counts`` dict into sorted DTOs."""
+    """Project a merged ``grouped_counts_from_report`` dict into sorted
+    DTOs."""
     return [
         GroupedCount(
             name=name,
@@ -475,27 +393,24 @@ def grouped_counts_from_dict(
             failed=data["failed"],
             skipped=data["skipped"],
             unknown=data["unknown"],
-            precise=data["precise"],
         )
         for name, data in sorted(counts.items())
     ]
 
 
-def combo_failures_from_report(
+def job_failures_from_report(
     report_data: list[Any],
     job_id: str,
-    combo_map: dict[str, Any],
-    fallback_releases: list[str],
-    fallback_machine_types: list[str],
+    releases: list[str],
+    machine_types: list[str],
 ) -> list[Failure]:
-    """Extract failing steps tagged with job/combo context.
+    """Extract failing steps tagged with job/release/machine_type context.
 
     Mirrors ``summarize_report``'s failure extraction but attaches
-    ``job_id`` and the resolved (or, if unresolved, job-declared)
-    release/machine_type context to each failure. Used only by
-    ``summarize_scenario_results``; ``summarize_report`` stays untouched
-    since ``wait_for_completion``/``get_scenario_artifacts`` don't need
-    this extra context.
+    ``job_id`` and the job's declared releases/machine_types to each
+    failure. Used only by ``summarize_scenario_results``;
+    ``wait_for_completion``/``get_scenario_artifacts`` don't need this
+    extra context.
     """
     failures: list[Failure] = []
 
@@ -509,18 +424,6 @@ def combo_failures_from_report(
             steps = scenario.get("steps", [])
             if not isinstance(steps, list):
                 steps = []
-            location = str(scenario.get("location", ""))
-            release, machine_type, precise = resolve_scenario_combo(
-                location, combo_map
-            )
-            releases = (
-                [release] if precise and release else list(fallback_releases)
-            )
-            machine_types = (
-                [machine_type]
-                if precise and machine_type
-                else list(fallback_machine_types)
-            )
 
             for step in steps:
                 step_name = str(step.get("name", "unknown-step"))
@@ -537,9 +440,8 @@ def combo_failures_from_report(
                         status=step_status,
                         error_message=error_message[:2000],
                         job_id=job_id,
-                        releases=releases,
-                        machine_types=machine_types,
-                        precise=precise,
+                        releases=list(releases),
+                        machine_types=list(machine_types),
                     )
                 )
 

@@ -24,7 +24,7 @@ The server exposes these MCP tools:
   - Optional `limit` caps how many completed jobs are returned (most recent first). `total_completed` and `truncated` in the response tell you if older jobs were dropped.
 - `summarize_scenario_results` -- aggregates results across jobs.
   - Optional `job_ids`, `feature_file`, `scenario_name` (substring), `release`, `machine_type`, and `status` filters.
-  - Returns `job_counts` (status totals), scenario-level pass/fail counts grouped `by_release` and `by_machine_type`, and a flattened `failures` list tagged with `job_id` and combo context (capped at `limit`, with `truncated` set when more exist).
+  - Returns `job_counts` (status totals), scenario-level pass/fail counts grouped `by_release` and `by_machine_type` (each job's scenarios are attributed to all of that job's declared releases/machine_types), and a flattened `failures` list tagged with `job_id` and release/machine_type context (capped at `limit`, with `truncated` set when more exist).
   - Provides raw status/data only -- rerunning failed scenarios and judging flaky-vs-real failures is left to the caller.
 - `wait_for_scenario_completion` -- waits for completion.
   - Returns a compact completion summary, or a timeout payload.
@@ -158,6 +158,7 @@ One more variable is read at the point a job starts, and can vary per-call:
 - Add way to kill jobs if they are known to be hanging
 - Add different "install from" options. Continue defaulting to 'local'. Include git commit or other unique identifier for build for each option, and surface it as a `summarize_scenario_results` filter/grouping dimension once it exists.
 - Improve the job recovery mechanism; it's a little verbose on logs.
+- Precise per-scenario release/machine_type attribution in `summarize_scenario_results` (currently every scenario in a job is attributed to all of that job's declared releases/machine_types) -- deferred to a future change.
 
 Known limitation: job liveness after a server restart is determined by checking whether the recorded PID is still alive (`os.kill(pid, 0)`). If that PID has since been reused by an unrelated process, a dead job can be misreported as still running. This is considered an acceptable tradeoff for a local dev tool.
 
