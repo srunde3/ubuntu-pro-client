@@ -11,6 +11,11 @@ dependencies = [
 [project.optional-dependencies]
 test = ["pytest>=8.0"]
 
+[tool.pytest.ini_options]
+markers = [
+    "integration: exercises the real features/*.feature corpus instead of fixtures",
+]
+
 [tool.setuptools]
 packages = ["features"]
 package-dir = {"features" = "."}
