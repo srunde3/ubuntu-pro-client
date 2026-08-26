@@ -1,24 +1,15 @@
 #!/usr/bin/env python3
-"""Read and structurally summarize this repo's behave feature files.
+"""Parse Pro client ``behave`` feature files into typed, structured data.
 
-Turns a parsed behave ``Feature`` into typed, repo-specific data: scenario
-names/types/tags, Examples column names, and the distinct ``(release,
-machine_type)`` combos each scenario supports (including the hardcoded
-``Given a `<release>` `<machine_type>` machine ...`` step override -- see
-``combos_from_scenario``, and compare ``features/environment.py``'s own use
-of that same convention). ``features/`` is this repo's authority on what a
-``.feature`` file means -- its Examples table shape, its config-requirement
-tags, its machine_type vocabulary -- so this module lives here rather than
-in a generic tools directory; other tooling depends on these conventions,
-it doesn't define them.
+This module provides structures for testing conventions used in the Pro client
+that cannot be expressed by native ``behave``. For example, Pro client tests are
+frequently executed on permutations of ``<release>`` and ``<machine_type>``.
+This module provides a structured way to parse those facts from feature files.
 
-Consumed by ``tools/coverage_gaps.py`` (a plain sibling-package import, repo
-root already needs to be importable for that script to run) and by the
-behave MCP server (``tools/mcp-behave-server/behave_mcp/``, which reaches
-this module via the ``pro-client-features`` dependency). The MCP additionally
-owns everything about *executing* behave runs (subprocess lifecycle, job
-registry, artifacts) -- that stays MCP-only; this module only ever reads
-what's already on disk.
+As testing conventions change, this file and its tests should be kept current.
+This module should be considered downstream of the feature tests; if feature
+tests need to change their testing conventions, it is acceptable for this
+module to change.
 """
 
 import posixpath
@@ -55,15 +46,8 @@ class Combo:
 
 @dataclass
 class ExamplesBlock:
-    """One ``Examples:`` table within a Scenario Outline, with its own tags.
-
-    ``@releases:*``/``@machine_types:*`` tags are read from here, never
-    from the enclosing ``Scenario Outline:`` -- see
-    ``dev-docs/reference/release_coverage_tags.md``'s "Tag placement". A
-    scenario with a single ``Examples:`` block still gets exactly one of
-    these; there is no separate "whole-scenario" representation to keep in
-    sync with it.
-    """
+    """One ``Examples:`` table within a Scenario Outline, with its own
+    tags."""
 
     name: str
     tags: List[str]
@@ -74,10 +58,8 @@ class ExamplesBlock:
 class ScenarioSummary:
     """A scenario's browse/select metadata (no step text).
 
-    ``tags``/``combos``/``example_columns`` are the whole-scenario view,
-    unioned across every ``Examples:`` block (unchanged, pre-existing
-    behavior other consumers rely on). ``examples`` is the per-block view:
-    each block's own tags and only its own rows' combos.
+    ``examples`` is the per-``Examples:``-block view; the other fields are
+    unioned across all blocks.
     """
 
     name: str
