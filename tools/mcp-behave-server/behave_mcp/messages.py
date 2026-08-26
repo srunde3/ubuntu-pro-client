@@ -177,7 +177,8 @@ StartScenarioResult = Annotated[
 
 
 class RunningResponse(BaseModel):
-    """Internal: a job still in progress. Never returned at the MCP boundary."""
+    """Internal: a job still in progress. Never returned at the MCP
+    boundary."""
 
     status: Literal["running"] = "running"
     ok: bool = True

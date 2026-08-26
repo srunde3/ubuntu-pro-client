@@ -5,9 +5,10 @@ import os
 from pathlib import Path
 
 import pytest
-from behave_mcp.server import mcp, registry
 from conftest import result_json
 from mcp.shared.memory import create_connected_server_and_client_session
+
+from behave_mcp.server import mcp, registry
 
 
 @pytest.mark.e2e

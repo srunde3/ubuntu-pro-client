@@ -32,7 +32,8 @@ _SAMPLE_FEATURE = """\
 Feature: Sample feature
 
   Scenario Outline: Attach on a machine
-    Given a `<release>` `<machine_type>` machine with ubuntu-advantage-tools installed
+    Given a `<release>` `<machine_type>` machine with \
+ubuntu-advantage-tools installed
     When I attach
 
     Examples: ubuntu release

@@ -1,0 +1,54 @@
+---
+
+name: CI (mcp-behave-server)
+
+on:
+  push:
+    paths:
+      - "tools/mcp-behave-server/**"
+      - ".github/workflows/mcp-behave-server.yaml"
+  pull_request:
+    paths:
+      - "tools/mcp-behave-server/**"
+      - ".github/workflows/mcp-behave-server.yaml"
+
+defaults:
+  run:
+    shell: sh -ex {0}
+    working-directory: tools/mcp-behave-server
+
+jobs:
+  lint-and-style:
+    name: Static Analysis
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Git checkout
+        uses: actions/checkout@v3
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: uv sync --extra lint
+      - name: Formatting
+        run: |
+          uv run black --check behave_mcp tests
+          uv run isort --check-only behave_mcp tests
+      - name: Style
+        run: uv run flake8 behave_mcp tests
+      - name: Mypy
+        run: uv run mypy behave_mcp
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Git checkout
+        uses: actions/checkout@v3
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: uv sync --extra test
+      - name: Unit
+        run: uv run pytest -q -m "not e2e"

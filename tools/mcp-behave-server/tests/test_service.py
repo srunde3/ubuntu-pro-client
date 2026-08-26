@@ -133,7 +133,8 @@ _OUTLINE_FEATURE = """\
 Feature: Attach things
 
   Scenario Outline: Attach on a machine
-    Given a `<release>` `<machine_type>` machine with ubuntu-advantage-tools installed
+    Given a `<release>` `<machine_type>` machine with \
+ubuntu-advantage-tools installed
     When I attach
 
     Examples: ubuntu release
@@ -143,7 +144,8 @@ Feature: Attach things
 
   @arm64
   Scenario Outline: Attach invalid token
-    Given a `<release>` `<machine_type>` machine with ubuntu-advantage-tools installed
+    Given a `<release>` `<machine_type>` machine with \
+ubuntu-advantage-tools installed
     When I attach INVALID
 
     Examples: ubuntu release

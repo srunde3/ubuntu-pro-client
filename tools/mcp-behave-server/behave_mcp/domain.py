@@ -9,9 +9,9 @@ import json
 from pathlib import Path
 from typing import Any, NamedTuple
 
-from behave_mcp.messages import Artifacts, Failure, GroupedCount, ReportSummary
-
 from features.behave_features import ALLOWED_MACHINE_TYPES
+
+from behave_mcp.messages import Artifacts, Failure, GroupedCount, ReportSummary
 
 CLOUD_MACHINE_TYPES = {
     "aws.generic",

@@ -46,7 +46,8 @@ logger = logging.getLogger(__name__)
 
 
 class BehaveServiceError(Exception):
-    """Raised for expected, user-facing failures (bad input, unknown job, etc.).
+    """Raised for expected, user-facing failures (bad input, unknown job,
+    etc.).
 
     FastMCP catches any exception raised from a tool function and reports it
     to the MCP client as ``isError: true`` with this message as the text
