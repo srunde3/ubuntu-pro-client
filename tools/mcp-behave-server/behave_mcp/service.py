@@ -55,6 +55,18 @@ class BehaveServiceError(Exception):
     """
 
 
+class UnknownJobError(BehaveServiceError):
+    """Raised when a job_id isn't in the registry and can't be recovered
+    from disk."""
+
+    def __init__(self, job_id: str) -> None:
+        super().__init__(
+            f"Unknown job_id: {job_id}. Call list_scenario_jobs to see "
+            "known jobs, or pass repo_root if this job predates a server "
+            "restart."
+        )
+
+
 class BehaveService:
     """Coordinates feature discovery and behave job lifecycle.
 
@@ -440,7 +452,7 @@ class BehaveService:
             except ValueError as exc:
                 raise BehaveServiceError(str(exc)) from exc
             if job is None:
-                raise BehaveServiceError(f"Unknown job_id: {job_id}")
+                raise UnknownJobError(job_id)
 
         stdout_log = job.stdout_log
         json_report = job.json_report
@@ -474,7 +486,7 @@ class BehaveService:
             except ValueError as exc:
                 raise BehaveServiceError(str(exc)) from exc
             if job is None:
-                raise BehaveServiceError(f"Unknown job_id: {job_id}")
+                raise UnknownJobError(job_id)
 
         stdout_log = job.stdout_log
         json_report = job.json_report
@@ -745,7 +757,7 @@ class BehaveService:
             except ValueError as exc:
                 raise BehaveServiceError(str(exc)) from exc
             if job is None:
-                raise BehaveServiceError(f"Unknown job_id: {job_id}")
+                raise UnknownJobError(job_id)
 
         handle = job.process_handle
         stdout_log = job.stdout_log

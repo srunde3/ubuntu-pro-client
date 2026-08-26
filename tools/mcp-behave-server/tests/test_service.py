@@ -13,7 +13,11 @@ from behave_mcp.adapters import (
 )
 from behave_mcp.config import Settings
 from behave_mcp.ports import Job, LogFileOpenError, ProcessStartError
-from behave_mcp.service import BehaveService, BehaveServiceError
+from behave_mcp.service import (
+    BehaveService,
+    BehaveServiceError,
+    UnknownJobError,
+)
 
 
 class FakeHandle:
@@ -493,6 +497,15 @@ def test_start_scenario_reports_log_open_failure(tmp_path):
     assert registry.get("jobLog") is None
 
 
+def test_wait_for_completion_unknown_job_id_is_actionable(tmp_path):
+    service = _make_service(
+        FakeWorkspace(repo_root=tmp_path, log_dir=tmp_path)
+    )
+
+    with pytest.raises(UnknownJobError, match="list_scenario_jobs"):
+        service.wait_for_completion("nope", max_wait_seconds=1)
+
+
 def test_wait_for_completion_running_to_completed(tmp_path):
     registry = InMemoryJobRegistry()
     job_id = "job12345"
@@ -691,6 +704,15 @@ def test_get_logs_rejects_invalid_repo_root():
         service.get_logs("missing-job", repo_root="/bad")
 
 
+def test_get_logs_unknown_job_id_is_actionable(tmp_path):
+    service = _make_service(
+        FakeWorkspace(repo_root=tmp_path, log_dir=tmp_path)
+    )
+
+    with pytest.raises(UnknownJobError, match="list_scenario_jobs"):
+        service.get_logs("nope")
+
+
 def test_get_artifacts_returns_paths_and_metadata(tmp_path):
     registry = InMemoryJobRegistry()
     job_id = "jobmeta01"
@@ -732,6 +754,15 @@ def test_get_artifacts_rejects_invalid_repo_root():
 
     with pytest.raises(BehaveServiceError, match="Invalid repo_root"):
         service.get_artifacts("missing-job", repo_root="/bad")
+
+
+def test_get_artifacts_unknown_job_id_is_actionable(tmp_path):
+    service = _make_service(
+        FakeWorkspace(repo_root=tmp_path, log_dir=tmp_path)
+    )
+
+    with pytest.raises(UnknownJobError, match="list_scenario_jobs"):
+        service.get_artifacts("nope")
 
 
 # ---- Reattach after restart (recovered jobs, no live handle) ----
