@@ -12,6 +12,7 @@ The server exposes these MCP tools:
 - `find_scenarios`: reverse lookup across all features by optional `release`, `machine_type`, `tag`, and `text` (scenario-name substring) filters. Returns matching `feature_file`, `scenario_name`, `type`, required config, and the combos satisfying the filters.
 - `start_behave_scenario`: starts a behave scenario in the background and returns a `job_id`
 - `list_scenario_jobs`: lists active jobs plus a bounded window of recently completed ones, without needing a known `job_id` or access to system processes. Merges in-memory state with jobs recovered from disk, including jobs still running after a server restart.
+- `summarize_scenario_results`: aggregates results across jobs matching optional `job_ids`, `feature_file`, `scenario_name` (substring), `release`, `machine_type`, and `status` filters. Returns `job_counts` (status totals), scenario-level pass/fail counts grouped `by_release` and `by_machine_type`, and a flattened `failures` list tagged with `job_id` and combo context (capped at `limit`, with `truncated` set when more exist). Provides raw status/data only -- rerunning failed scenarios and judging flaky-vs-real failures is left to the caller.
 - `wait_for_scenario_completion`: waits for completion and returns a compact completion summary or timeout payload
 - `get_scenario_logs`: returns a bounded tail of captured stdout logs for a job
 - `get_scenario_artifacts`: returns disk artifact paths and metadata for a job
@@ -22,10 +23,21 @@ For each started job, the server writes artifacts under `.mcp_behave_logs`:
 
 - `<job_id>_stdout.log`: combined stdout/stderr stream
 - `<job_id>_report.json`: behave JSON formatter output
+- `<job_id>_combo.jsonl`: one JSON line per scenario with its resolved `(release, machine_type)` and status -- see below
 - `<job_id>_meta.json`: machine-readable metadata (command, params, status, timestamps, artifact paths)
 - `index.jsonl`: append-only per-job lifecycle events (`started`, `completed`)
 
 It also exposes a health endpoint at `/healthz` for basic checks.
+
+## Attributing results to a release/machine_type
+
+A single job's behave invocation can cover multiple `releases` x `machine_types` at once (each Examples row runs as its own scenario), but the JSON report's scenario name for an Outline row is just an index (e.g. `"Check pro version -- @1.1 version"`), not labeled with the actual release/machine_type values. Behave itself never serializes that mapping into any built-in formatter/reporter output (checked the full formatter/reporter list in behave's own docs -- `json`, `json.pretty`, `plain`, `pretty`, `progress*`, `rerun`, `sphinx.steps`, `steps.*`, `tags`, `tags.location`, `junit`, `summary`; none of them carry it), but it's still sitting on the live `Scenario` object as `scenario._row` throughout the run -- including for skipped scenarios.
+
+`start_behave_scenario` appends a small custom formatter, `features.behave_combo_formatter:ComboFormatter` (`features/behave_combo_formatter.py`, a `behave.formatter.base2.BaseFormatter2` subclass implementing `on_scenario_end`), to the behave command alongside the existing `-f json -o ... -f plain`. It writes one JSON line per scenario to `<job_id>_combo.jsonl`: `{"location": "path:line", "status": ..., "release": ..., "machine_type": ...}`, keyed by the same `location` the JSON report already uses. `summarize_scenario_results` joins the two by that key to attribute each scenario's result precisely (`precise: true` in `by_release`/`by_machine_type`/`failures`).
+
+This is generated fresh by the exact behave process that ran, so it can never drift the way a separately-maintained snapshot could. Jobs whose `<job_id>_combo.jsonl` is missing or empty (e.g. run against a `features/` that predates `behave_combo_formatter.py`) fall back to attributing their results across every one of the job's declared `releases`/`machine_types` instead (`precise: false`).
+
+**Note**: `features/behave_combo_formatter.py`, plus a `PYTHONPATH = {toxinidir}` `setenv` entry in `[testenv:behave]` in the repo-root `tox.ini`, must exist in whatever `repo_root` a job targets -- behave resolves `-f`/`-o` formatter arguments before it adds `features/` to `sys.path` itself, so the repo root needs to already be on `PYTHONPATH` for a dotted import like this to resolve at all. Both pieces are being contributed upstream as an independently useful change; until that lands (or until a target `repo_root` otherwise has them), `start_behave_scenario` will fail outright rather than degrade gracefully, since neither piece is checked for existence beforehand.
 
 ## Local usage
 
@@ -127,10 +139,8 @@ The server also supports one MCP-only safety toggle:
 
 - Better incorporate the shared file parsing library. Treated as a totally external dep right now, which introduces unnecessary code duplication. I don't quite yet know how I want to architect this.
 - Add way to kill jobs if they are known to be hanging
-- Add different "install from" options. Continue defaulting to 'local'. Include git commit or other unique identifier for build for each option
-- Include ability to get coverage summary based on results. Should be grouped by the version-under-test, so we won't try to aggregate results for archive vs. local.
+- Add different "install from" options. Continue defaulting to 'local'. Include git commit or other unique identifier for build for each option, and surface it as a `summarize_scenario_results` filter/grouping dimension once it exists.
 - Improve the job recovery mechanism; it's a little verbose on logs.
-- Consider some sort of report export/aggregation - can more easily show the results for the SRU, possibily with improved formatting.
 
 Known limitation: job liveness after a server restart is determined by checking whether the recorded PID is still alive (`os.kill(pid, 0)`). If that PID has since been reused by an unrelated process, a dead job can be misreported as still running. This is considered an acceptable tradeoff for a local dev tool.
 

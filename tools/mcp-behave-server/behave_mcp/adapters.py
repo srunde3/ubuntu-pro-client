@@ -9,8 +9,6 @@ from collections import deque
 from pathlib import Path
 from typing import Any
 
-from features import behave_features
-
 from behave_mcp import domain
 from behave_mcp.messages import (
     Combo,
@@ -27,6 +25,8 @@ from behave_mcp.ports import (
     ProcessStartError,
     ReservationResult,
 )
+
+from features import behave_features
 
 logger = logging.getLogger(__name__)
 
@@ -406,6 +406,14 @@ class LocalArtifactStore:
             return None
 
         return report_data
+
+    def read_text_lines(self, path: Path) -> list[str] | None:
+        if not path.exists():
+            return None
+        try:
+            return path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            return None
 
     def exists(self, path: Path) -> bool:
         return path.exists()

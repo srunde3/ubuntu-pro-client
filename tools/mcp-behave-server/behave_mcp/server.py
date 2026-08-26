@@ -3,9 +3,6 @@ import time
 import uuid
 from datetime import datetime, timezone
 
-from mcp.server import FastMCP
-from starlette.responses import JSONResponse
-
 from behave_mcp import domain
 from behave_mcp.adapters import (
     InMemoryJobRegistry,
@@ -17,6 +14,8 @@ from behave_mcp.adapters import (
 )
 from behave_mcp.config import load_settings
 from behave_mcp.service import BehaveService
+from mcp.server import FastMCP
+from starlette.responses import JSONResponse
 
 host = os.environ.get("MCP_HOST", "127.0.0.1")
 port = int(os.environ.get("MCP_PORT", "8000"))
@@ -162,6 +161,45 @@ def start_behave_scenario(
 )
 def list_scenario_jobs(repo_root: str = "") -> str:
     return _service.list_jobs(repo_root).model_dump_json()
+
+
+@mcp.tool(
+    description=(
+        "Summarize results across multiple behave jobs matching optional "
+        "filters (job_ids, feature_file, scenario_name substring, release, "
+        "machine_type, status). Returns job_counts (status totals -- how "
+        "far into a set of runs you are), scenario-level pass/fail counts "
+        "grouped by_release and by_machine_type (each group flagged "
+        "precise when every contributing scenario had a resolvable "
+        "Examples-row location, false for jobs started before that "
+        "tracking existed), a flattened failures list tagged with job_id "
+        "and combo context (capped at limit, with truncated set when more "
+        "exist), and matched_job_ids for pivoting to get_scenario_logs/"
+        "get_scenario_artifacts. Provides raw status/data only -- rerunning "
+        "failed scenarios and judging flaky-vs-real failures is left to "
+        "the caller."
+    )
+)
+def summarize_scenario_results(
+    job_ids: list[str] | None = None,
+    feature_file: str = "",
+    scenario_name: str = "",
+    release: str = "",
+    machine_type: str = "",
+    status: str = "",
+    limit: int = domain._DEFAULT_SUMMARIZE_FAILURES_LIMIT,
+    repo_root: str = "",
+) -> str:
+    return _service.summarize_scenario_results(
+        job_ids=job_ids,
+        feature_file=feature_file,
+        scenario_name=scenario_name,
+        release=release,
+        machine_type=machine_type,
+        status=status,
+        limit=limit,
+        repo_root=repo_root,
+    ).model_dump_json()
 
 
 @mcp.tool(

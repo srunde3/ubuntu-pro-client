@@ -94,13 +94,22 @@ class Capacity(BaseModel):
 
 
 class Failure(BaseModel):
-    """A single failing step extracted from a behave report."""
+    """A single failing step extracted from a behave report.
+
+    ``job_id``/``releases``/``machine_types``/``precise`` are only populated
+    by ``summarize_scenario_results``; ``wait_for_completion`` and
+    ``get_scenario_artifacts`` leave them at their defaults.
+    """
 
     feature: str
     scenario: str
     step: str
     status: str
     error_message: str
+    job_id: str | None = None
+    releases: list[str] = []
+    machine_types: list[str] = []
+    precise: bool = False
 
 
 class ReportSummary(BaseModel):
@@ -246,3 +255,42 @@ class JobSummary(BaseModel):
 class ListScenarioJobsResponse(BaseModel):
     repo_root: str = ""
     jobs: list[JobSummary] = []
+
+
+class GroupedCount(BaseModel):
+    """Scenario-level status counts for one release or machine_type value.
+
+    ``precise`` is true only while every scenario counted here had a
+    resolvable Examples-row location (see ``combo_locations`` in job
+    metadata); it becomes false once any contributing scenario had to fall
+    back to its job's declared release/machine_type lists (e.g. a job
+    started before that snapshot existed).
+    """
+
+    name: str = ""
+    total: int = 0
+    passed: int = 0
+    failed: int = 0
+    skipped: int = 0
+    unknown: int = 0
+    precise: bool = True
+
+
+class JobCounts(BaseModel):
+    """Job-level status totals -- the "how far into it" progress signal."""
+
+    total: int = 0
+    running: int = 0
+    completed_passed: int = 0
+    completed_failed: int = 0
+    unknown: int = 0
+
+
+class SummarizeScenarioResultsResponse(BaseModel):
+    repo_root: str = ""
+    job_counts: JobCounts = JobCounts()
+    by_release: list[GroupedCount] = []
+    by_machine_type: list[GroupedCount] = []
+    failures: list[Failure] = []
+    truncated: bool = False
+    matched_job_ids: list[str] = []

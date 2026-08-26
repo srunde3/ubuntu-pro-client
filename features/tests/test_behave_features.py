@@ -18,8 +18,9 @@ class _Table:
 
 
 class _Row:
-    def __init__(self, cells):
+    def __init__(self, cells, line=None):
         self.cells = cells
+        self.line = line
 
 
 class _Example:

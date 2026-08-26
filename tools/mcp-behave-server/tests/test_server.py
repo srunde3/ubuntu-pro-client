@@ -2,7 +2,6 @@ import json
 from pathlib import Path
 
 import pytest
-
 from behave_mcp import domain
 from behave_mcp.adapters import (
     InMemoryJobRegistry,
@@ -365,6 +364,7 @@ def test_start_scenario_builds_command(tmp_path):
     assert "--name" in call["command"]
     assert "-f" in call["command"]
     assert "json" in call["command"]
+    assert "features.behave_combo_formatter:ComboFormatter" in call["command"]
     assert call["cwd"] == str(repo_root)
     assert call["env"]["UACLIENT_BEHAVE_CONTRACT_TOKEN"] == "token"
 
@@ -386,6 +386,33 @@ def test_start_scenario_uses_repo_root_override(tmp_path):
 
     assert result["ok"] is True
     assert launcher.calls[0]["cwd"] == str(repo_root)
+
+
+def test_start_scenario_writes_combo_report_path(tmp_path):
+    repo_root = _make_repo_with_outline(tmp_path)
+    launcher = FakeLauncher()
+    service = _make_service(
+        FakeWorkspace(repo_root=repo_root, log_dir=tmp_path),
+        launcher=launcher,
+    )
+
+    result = service.start_scenario(
+        "features/cli/attach.feature",
+        machine_types=["lxd-container", "lxd-vm"],
+    ).model_dump(mode="json")
+
+    metadata_path = Path(result["artifacts"]["metadata"])
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+
+    assert metadata["combo_report"].endswith("_combo.jsonl")
+    call = launcher.calls[0]
+    assert call["command"][-6:-2] == [
+        "-f",
+        "features.behave_combo_formatter:ComboFormatter",
+        "-o",
+        metadata["combo_report"],
+    ]
+    assert call["command"][-2:] == ["-f", "plain"]
 
 
 def test_start_scenario_rejects_invalid_repo_root():
@@ -952,3 +979,257 @@ def test_list_jobs_rejects_invalid_repo_root():
 
     with pytest.raises(BehaveServiceError, match="Invalid repo_root"):
         service.list_jobs(repo_root="/bad")
+
+
+# ---- summarize_scenario_results ----
+
+
+def test_summarize_scenario_results_groups_by_release_and_machine_type(
+    tmp_path,
+):
+    repo_root = _make_repo_with_outline(tmp_path)
+    handle = FakeHandle(returncode=0)
+    launcher = FakeLauncher(handle=handle)
+    registry = InMemoryJobRegistry()
+    service = _make_service(
+        FakeWorkspace(repo_root=repo_root, log_dir=tmp_path),
+        launcher=launcher,
+        registry=registry,
+    )
+
+    start_result = service.start_scenario(
+        "features/cli/attach.feature",
+        machine_types=["lxd-container", "lxd-vm"],
+    ).model_dump(mode="json")
+    job_id = start_result["job_id"]
+    metadata_path = Path(start_result["artifacts"]["metadata"])
+    combo_report_path = Path(
+        json.loads(metadata_path.read_text(encoding="utf-8"))["combo_report"]
+    )
+
+    jammy_location = "features/cli/attach.feature:10"
+    resolute_location = "features/cli/attach.feature:11"
+    combo_report_path.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "location": jammy_location,
+                        "status": "passed",
+                        "release": "jammy",
+                        "machine_type": "lxd-container",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "location": resolute_location,
+                        "status": "failed",
+                        "release": "resolute",
+                        "machine_type": "lxd-vm",
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    report_path = Path(start_result["artifacts"]["json_report"])
+    report_path.write_text(
+        json.dumps(
+            [
+                {
+                    "name": "Attach things",
+                    "elements": [
+                        {
+                            "name": "Attach on a machine -- @1.1",
+                            "location": jammy_location,
+                            "steps": [
+                                {
+                                    "name": "step1",
+                                    "result": {"status": "passed"},
+                                }
+                            ],
+                        },
+                        {
+                            "name": "Attach on a machine -- @1.2",
+                            "location": resolute_location,
+                            "steps": [
+                                {
+                                    "name": "step2",
+                                    "result": {
+                                        "status": "failed",
+                                        "error_message": "boom",
+                                    },
+                                }
+                            ],
+                        },
+                    ],
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = service.summarize_scenario_results(job_ids=[job_id]).model_dump(
+        mode="json"
+    )
+
+    assert result["job_counts"] == {
+        "total": 1,
+        "running": 0,
+        "completed_passed": 1,
+        "completed_failed": 0,
+        "unknown": 0,
+    }
+    by_release = {g["name"]: g for g in result["by_release"]}
+    assert by_release["jammy"]["passed"] == 1
+    assert by_release["jammy"]["precise"] is True
+    assert by_release["resolute"]["failed"] == 1
+    by_machine_type = {g["name"]: g for g in result["by_machine_type"]}
+    assert by_machine_type["lxd-container"]["passed"] == 1
+    assert by_machine_type["lxd-vm"]["failed"] == 1
+    assert len(result["failures"]) == 1
+    failure = result["failures"][0]
+    assert failure["job_id"] == job_id
+    assert failure["releases"] == ["resolute"]
+    assert failure["machine_types"] == ["lxd-vm"]
+    assert failure["precise"] is True
+    assert result["matched_job_ids"] == [job_id]
+    assert result["truncated"] is False
+
+
+def test_summarize_scenario_results_filters_by_feature_file(tmp_path):
+    (tmp_path / "jobmatch_meta.json").write_text(
+        json.dumps(
+            {
+                "feature_file": "features/a.feature",
+                "started_at": "T1",
+                "releases": [],
+                "machine_types": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "jobother_meta.json").write_text(
+        json.dumps(
+            {
+                "feature_file": "features/b.feature",
+                "started_at": "T2",
+                "releases": [],
+                "machine_types": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    service = _make_service(
+        FakeWorkspace(repo_root=tmp_path, log_dir=tmp_path),
+    )
+
+    result = service.summarize_scenario_results(
+        feature_file="features/a.feature"
+    ).model_dump(mode="json")
+
+    assert result["matched_job_ids"] == ["jobmatch"]
+
+
+def test_summarize_scenario_results_falls_back_for_legacy_jobs(
+    tmp_path,
+):
+    job_id = "joblegacy"
+    (tmp_path / f"{job_id}_meta.json").write_text(
+        json.dumps(
+            {
+                "feature_file": "features/a.feature",
+                "started_at": "T1",
+                "releases": ["jammy"],
+                "machine_types": ["lxd-container"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / f"{job_id}_report.json").write_text(
+        json.dumps(
+            [
+                {
+                    "name": "feature",
+                    "elements": [
+                        {
+                            "name": "scenario",
+                            "location": "features/a.feature:99",
+                            "steps": [
+                                {
+                                    "name": "step",
+                                    "result": {"status": "passed"},
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    service = _make_service(
+        FakeWorkspace(repo_root=tmp_path, log_dir=tmp_path),
+    )
+
+    result = service.summarize_scenario_results().model_dump(mode="json")
+
+    by_release = {g["name"]: g for g in result["by_release"]}
+    assert by_release["jammy"]["passed"] == 1
+    assert by_release["jammy"]["precise"] is False
+
+
+def test_summarize_scenario_results_rejects_invalid_status(tmp_path):
+    service = _make_service(
+        FakeWorkspace(repo_root=tmp_path, log_dir=tmp_path),
+    )
+
+    with pytest.raises(BehaveServiceError, match="Invalid status filter"):
+        service.summarize_scenario_results(status="bogus")
+
+
+def test_summarize_scenario_results_truncates_failures(tmp_path):
+    job_id = "jobtrunc"
+    (tmp_path / f"{job_id}_meta.json").write_text(
+        json.dumps(
+            {
+                "feature_file": "features/a.feature",
+                "started_at": "T1",
+                "releases": [],
+                "machine_types": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    elements = [
+        {
+            "name": f"scenario{i}",
+            "location": f"features/a.feature:{i}",
+            "steps": [
+                {
+                    "name": "step",
+                    "result": {"status": "failed", "error_message": "boom"},
+                }
+            ],
+        }
+        for i in range(3)
+    ]
+    (tmp_path / f"{job_id}_report.json").write_text(
+        json.dumps([{"name": "feature", "elements": elements}]),
+        encoding="utf-8",
+    )
+
+    service = _make_service(
+        FakeWorkspace(repo_root=tmp_path, log_dir=tmp_path),
+    )
+
+    result = service.summarize_scenario_results(limit=2).model_dump(
+        mode="json"
+    )
+
+    assert len(result["failures"]) == 2
+    assert result["truncated"] is True

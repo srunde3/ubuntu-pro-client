@@ -1,9 +1,8 @@
 import subprocess
 from pathlib import Path
 
-import pytest
-
 import behave_mcp.adapters as adapters_module
+import pytest
 from behave_mcp.adapters import (
     InMemoryJobRegistry,
     LocalArtifactStore,

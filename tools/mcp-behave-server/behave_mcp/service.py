@@ -2,7 +2,7 @@
 
 import logging
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 from behave_mcp import domain
 from behave_mcp.config import Settings
@@ -13,8 +13,10 @@ from behave_mcp.messages import (
     CompletedResponse,
     DescribeFeatureResponse,
     ExistsFlags,
+    Failure,
     FeatureDetail,
     FindScenariosResponse,
+    JobCounts,
     JobSummary,
     ListDimensionsResponse,
     ListFeaturesResponse,
@@ -24,6 +26,7 @@ from behave_mcp.messages import (
     ScenarioMatch,
     StartScenarioResponse,
     StartScenarioResult,
+    SummarizeScenarioResultsResponse,
     TimeoutResponse,
     WaitForCompletionResult,
 )
@@ -278,6 +281,7 @@ class BehaveService:
         log_dir = self._workspace.resolve_log_dir(resolved_repo_root)
         job_id = self._new_job_id()
         json_report_path = log_dir / f"{job_id}_report.json"
+        combo_report_path = log_dir / f"{job_id}_combo.jsonl"
         stdout_path = log_dir / f"{job_id}_stdout.log"
         metadata_path = log_dir / f"{job_id}_meta.json"
 
@@ -311,6 +315,7 @@ class BehaveService:
             scenario_name,
             releases,
             json_report_path,
+            combo_report_path,
         )
         env = self._workspace.subprocess_env()
 
@@ -363,6 +368,7 @@ class BehaveService:
                 "repo_root": str(resolved_repo_root),
                 "pid": handle.pid,
                 "artifacts": artifacts_dict,
+                "combo_report": str(combo_report_path),
             },
         )
         self._artifact_store.append_index_event(
@@ -539,6 +545,140 @@ class BehaveService:
 
         return ListScenarioJobsResponse(
             repo_root=str(resolved_repo_root), jobs=trimmed
+        )
+
+    def summarize_scenario_results(
+        self,
+        job_ids: list[str] | None = None,
+        feature_file: str = "",
+        scenario_name: str = "",
+        release: str = "",
+        machine_type: str = "",
+        status: str = "",
+        limit: int = domain._DEFAULT_SUMMARIZE_FAILURES_LIMIT,
+        repo_root: str = "",
+    ) -> SummarizeScenarioResultsResponse:
+        if status and status not in ("running", "completed", "unknown"):
+            raise BehaveServiceError(
+                "Invalid status filter: "
+                f"{status}. Allowed values: running, completed, unknown"
+            )
+
+        try:
+            resolved_repo_root = self._workspace.resolve_repo_root(
+                repo_root or None
+            )
+        except ValueError as exc:
+            raise BehaveServiceError(str(exc)) from exc
+
+        normalized_feature_file = (
+            self._feature_catalog.normalize_feature_file_arg(feature_file)
+            if feature_file
+            else None
+        )
+        job_ids_filter = set(job_ids) if job_ids else None
+        limit = max(1, min(limit, domain._MAX_SUMMARIZE_FAILURES_LIMIT))
+
+        log_dir = self._workspace.resolve_log_dir(resolved_repo_root)
+        in_memory_jobs = {job.job_id: job for job in self._registry.snapshot()}
+        disk_job_ids = set(self._artifact_store.list_job_ids(log_dir))
+
+        job_counts = JobCounts()
+        by_release: dict[str, dict[str, Any]] = {}
+        by_machine_type: dict[str, dict[str, Any]] = {}
+        failures: list[Failure] = []
+        matched_job_ids: list[str] = []
+
+        for job_id in sorted(set(in_memory_jobs) | disk_job_ids):
+            job = in_memory_jobs.get(job_id)
+            if job is None:
+                job = self._recover_job(job_id, repo_root or None)
+                if job is None:
+                    continue
+
+            metadata_payload = self._artifact_store.read_metadata(job.metadata)
+            if not domain.job_matches_result_filters(
+                metadata_payload,
+                job_id=job_id,
+                job_ids=job_ids_filter,
+                feature_file=normalized_feature_file,
+                scenario_name=scenario_name or None,
+                release=release or None,
+                machine_type=machine_type or None,
+            ):
+                continue
+
+            summary = self._job_summary(job_id, job)
+            if status and summary.status != status:
+                continue
+
+            matched_job_ids.append(job_id)
+            job_counts.total += 1
+            if summary.status == "running":
+                job_counts.running += 1
+            elif summary.status == "completed":
+                if summary.ok:
+                    job_counts.completed_passed += 1
+                else:
+                    job_counts.completed_failed += 1
+            else:
+                job_counts.unknown += 1
+
+            if summary.status != "completed":
+                continue
+
+            report_data = self._artifact_store.read_report_json(
+                job.json_report
+            )
+            if report_data is None:
+                continue
+
+            combo_report_path = metadata_payload.get("combo_report")
+            combo_lines = (
+                self._artifact_store.read_text_lines(Path(combo_report_path))
+                if combo_report_path
+                else None
+            )
+            combo_map = (
+                domain.parse_combo_report(combo_lines)
+                if combo_lines is not None
+                else {}
+            )
+            fallback_releases = metadata_payload.get("releases") or []
+            fallback_machine_types = (
+                metadata_payload.get("machine_types") or []
+            )
+
+            job_by_release, job_by_machine_type = domain.combo_group_counts(
+                report_data,
+                combo_map,
+                fallback_releases,
+                fallback_machine_types,
+            )
+            domain.merge_combo_group_counts(by_release, job_by_release)
+            domain.merge_combo_group_counts(
+                by_machine_type, job_by_machine_type
+            )
+            failures.extend(
+                domain.combo_failures_from_report(
+                    report_data,
+                    job_id,
+                    combo_map,
+                    fallback_releases,
+                    fallback_machine_types,
+                )
+            )
+
+        truncated = len(failures) > limit
+
+        return SummarizeScenarioResultsResponse(
+            repo_root=str(resolved_repo_root),
+            job_counts=job_counts,
+            by_release=domain.grouped_counts_from_dict(by_release),
+            by_machine_type=domain.grouped_counts_from_dict(by_machine_type),
+            failures=failures[:limit],
+            truncated=truncated,
+            matched_job_ids=matched_job_ids,
         )
 
     def _job_summary(self, job_id: str, job: Job) -> JobSummary:

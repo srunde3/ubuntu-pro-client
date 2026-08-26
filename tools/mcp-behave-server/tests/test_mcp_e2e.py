@@ -5,10 +5,9 @@ import os
 from pathlib import Path
 
 import pytest
+from behave_mcp.server import mcp, registry
 from conftest import result_json
 from mcp.shared.memory import create_connected_server_and_client_session
-
-from behave_mcp.server import mcp, registry
 
 
 @pytest.mark.e2e
@@ -102,3 +101,83 @@ async def test_mcp_e2e_long_running_attach_flow(monkeypatch):
         assert artifacts_payload["exists"]["metadata"] is True
         assert artifacts_payload["metadata"]["status"] == "completed"
         assert finished_jobs[job_id]["ok"] == completed_payload["ok"]
+
+        summary_by_job_id = result_json(
+            await client.call_tool(
+                "summarize_scenario_results", {"job_ids": [job_id]}
+            )
+        )
+        assert summary_by_job_id["matched_job_ids"] == [job_id]
+        assert summary_by_job_id["job_counts"]["total"] == 1
+        assert summary_by_job_id["by_release"]
+        assert summary_by_job_id["by_machine_type"]
+        # A real behave run resolves combo_locations against its own
+        # report, so attribution should be precise, not the coarse
+        # declared-list fallback used when that snapshot is unavailable.
+        assert all(
+            group["precise"] for group in summary_by_job_id["by_release"]
+        )
+        assert all(
+            group["precise"] for group in summary_by_job_id["by_machine_type"]
+        )
+
+        summary_by_feature_file = result_json(
+            await client.call_tool(
+                "summarize_scenario_results",
+                {"feature_file": "features/cli/attach.feature"},
+            )
+        )
+        assert job_id in summary_by_feature_file["matched_job_ids"]
+
+        summary_by_other_feature_file = result_json(
+            await client.call_tool(
+                "summarize_scenario_results",
+                {"feature_file": "features/cli/does-not-exist.feature"},
+            )
+        )
+        assert job_id not in summary_by_other_feature_file["matched_job_ids"]
+
+        summary_by_release = result_json(
+            await client.call_tool(
+                "summarize_scenario_results", {"release": "noble"}
+            )
+        )
+        assert job_id in summary_by_release["matched_job_ids"]
+
+        summary_by_other_release = result_json(
+            await client.call_tool(
+                "summarize_scenario_results", {"release": "jammy"}
+            )
+        )
+        assert job_id not in summary_by_other_release["matched_job_ids"]
+
+        summary_by_machine_type = result_json(
+            await client.call_tool(
+                "summarize_scenario_results",
+                {"machine_type": "lxd-container"},
+            )
+        )
+        assert job_id in summary_by_machine_type["matched_job_ids"]
+
+        summary_by_other_machine_type = result_json(
+            await client.call_tool(
+                "summarize_scenario_results", {"machine_type": "lxd-vm"}
+            )
+        )
+        assert job_id not in summary_by_other_machine_type["matched_job_ids"]
+
+        summary_by_completed_status = result_json(
+            await client.call_tool(
+                "summarize_scenario_results",
+                {"job_ids": [job_id], "status": "completed"},
+            )
+        )
+        assert summary_by_completed_status["matched_job_ids"] == [job_id]
+
+        summary_by_running_status = result_json(
+            await client.call_tool(
+                "summarize_scenario_results",
+                {"job_ids": [job_id], "status": "running"},
+            )
+        )
+        assert job_id not in summary_by_running_status["matched_job_ids"]

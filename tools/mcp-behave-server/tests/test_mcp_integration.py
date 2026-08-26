@@ -1,12 +1,11 @@
 from pathlib import Path
 
-import pytest
-from conftest import FakeProcess, result_error_text, result_json
-from mcp.shared.memory import create_connected_server_and_client_session
-
 import behave_mcp.adapters as adapters_module
 import behave_mcp.server as server_module
+import pytest
 from behave_mcp.server import mcp
+from conftest import FakeProcess, result_error_text, result_json
+from mcp.shared.memory import create_connected_server_and_client_session
 
 
 def _make_fake_repo(tmp_path: Path) -> Path:
@@ -31,6 +30,7 @@ async def test_mcp_lists_expected_tools():
     assert "find_scenarios" in tools
     assert "start_behave_scenario" in tools
     assert "list_scenario_jobs" in tools
+    assert "summarize_scenario_results" in tools
     assert "wait_for_scenario_completion" in tools
     assert "get_scenario_logs" in tools
     assert "get_scenario_artifacts" in tools
@@ -137,6 +137,19 @@ async def test_mcp_start_wait_and_log_flow(monkeypatch, tmp_path):
         )
         artifacts_payload = result_json(artifacts_result)
         assert artifacts_payload["exists"]["stdout_log"] is True
+
+        summary_result = await client.call_tool(
+            "summarize_scenario_results", {"job_ids": [job_id]}
+        )
+        summary_payload = result_json(summary_result)
+        assert summary_payload["matched_job_ids"] == [job_id]
+        assert summary_payload["job_counts"]["completed_passed"] == 1
+        assert summary_payload["job_counts"]["total"] == 1
+        total_passed = sum(
+            group["passed"] for group in summary_payload["by_release"]
+        )
+        assert total_passed == 1
+        assert summary_payload["failures"] == []
 
 
 @pytest.mark.asyncio

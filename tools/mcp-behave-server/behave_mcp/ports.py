@@ -213,6 +213,10 @@ class ArtifactStore(Protocol):
         """Return the behave JSON report list, or None if missing/invalid."""
         ...
 
+    def read_text_lines(self, path: Path) -> list[str] | None:
+        """Return every line of a text file, or None if missing."""
+        ...
+
     def exists(self, path: Path) -> bool:
         """Return whether ``path`` exists."""
         ...
