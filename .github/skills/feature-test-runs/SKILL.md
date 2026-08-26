@@ -1,30 +1,23 @@
 ---
 name: feature-test-runs
-description: "Use when deciding how and when to run `features/` behave integration tests."
+description: "Use when running, discovering, or debugging `features/` behave integration tests or scenarios."
 ---
 
 # Feature Test Runs
 
-TODO: will need to mention the MCP once it is running. This is a WIP skill.
+Use the `behave` MCP server (`tools/mcp-behave-server`) for all `features/`
+test discovery and execution. Don't run `tox -e behave` by hand, and don't
+grep `features/*.feature` files directly to find scenarios or valid
+release/machine_type values -- the MCP tools already do this.
 
-Use this skill when a change touches integration behavior under `features/` or when you need to validate a change with behave.
+Start with `list_features`, `find_scenarios`, or `list_dimensions` to
+discover what's available, then `start_scenario` plus
+`wait_for_scenario_completion`/`list_scenario_jobs`/
+`summarize_scenario_results` to run scenarios and check results. Each
+tool's own description covers its parameters and output shape -- read
+those (or call `list_tools`) rather than looking here for details.
 
-## When to run
+See [tools/mcp-behave-server/README.md](../../../tools/mcp-behave-server/README.md)
+if the MCP server isn't configured yet, or for env vars and safety
+constraints (allowed machine types, cloud gating, parallel job limits).
 
-- Run a targeted `features/*.feature` test after changing CLI flows, cloud setup, packaging, AppArmor, or other integration paths.
-- Prefer the smallest useful slice: a single feature, scenario line, release, or machine type.
-- Use `UACLIENT_BEHAVE_INSTALL_FROM=local` when validating local code changes.
-- Use `@wip` for new or unstable scenarios, then run only WIP scenarios with `tox -e behave -- -w`.
-
-## How to run
-
-- Single feature file: `tox -e behave -- features/unattached_commands.feature`
-- Single scenario by line: `tox -e behave -- features/config.feature:132`
-- Specific release and machine type: `tox -e behave -- features/config.feature -D releases=jammy -D machine_types=lxd-vm`
-- Local code under test: `UACLIENT_BEHAVE_INSTALL_FROM=local tox -e behave -- features/cli/attach.feature -D releases=resolute -D machine_types=lxd-container,lxd-vm`
-
-## Notes
-
-- `features/` is the integration-test entry point for behave.
-- Read [dev-docs/how-to/integration_testing.md](dev-docs/how-to/integration_testing.md) before adding new commands or conventions.
-- Cloud-backed runs may require the right credentials and `UACLIENT_BEHAVE_CONTRACT_TOKEN`.
