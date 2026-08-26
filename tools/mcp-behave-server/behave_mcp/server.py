@@ -16,6 +16,18 @@ from behave_mcp.adapters import (
     PopenLauncher,
 )
 from behave_mcp.config import load_settings
+from behave_mcp.messages import (
+    ArtifactsResponse,
+    DescribeFeatureResponse,
+    FindScenariosResponse,
+    ListDimensionsResponse,
+    ListFeaturesResponse,
+    ListScenarioJobsResponse,
+    LogsResponse,
+    StartScenarioResult,
+    SummarizeScenarioResultsResponse,
+    WaitForCompletionResult,
+)
 from behave_mcp.service import BehaveService
 
 _settings = load_settings(os.environ)
@@ -73,14 +85,14 @@ def list_features(
     tag: str = "",
     text: str = "",
     repo_root: str = "",
-) -> str:
+) -> ListFeaturesResponse:
     return _service.list_features(
         release=release or None,
         machine_type=machine_type or None,
         tag=tag or None,
         text=text or None,
         repo_root=repo_root,
-    ).model_dump_json()
+    )
 
 
 @mcp.tool(
@@ -92,8 +104,10 @@ def list_features(
         "returned by list_features."
     )
 )
-def describe_feature(feature_file: str, repo_root: str = "") -> str:
-    return _service.describe_feature(feature_file, repo_root).model_dump_json()
+def describe_feature(
+    feature_file: str, repo_root: str = ""
+) -> DescribeFeatureResponse:
+    return _service.describe_feature(feature_file, repo_root)
 
 
 @mcp.tool(
@@ -104,8 +118,8 @@ def describe_feature(feature_file: str, repo_root: str = "") -> str:
         "list_features or find_scenarios."
     )
 )
-def list_dimensions(repo_root: str = "") -> str:
-    return _service.list_dimensions(repo_root).model_dump_json()
+def list_dimensions(repo_root: str = "") -> ListDimensionsResponse:
+    return _service.list_dimensions(repo_root)
 
 
 @mcp.tool(
@@ -122,37 +136,41 @@ def find_scenarios(
     tag: str = "",
     text: str = "",
     repo_root: str = "",
-) -> str:
+) -> FindScenariosResponse:
     return _service.find_scenarios(
         release=release or None,
         machine_type=machine_type or None,
         tag=tag or None,
         text=text or None,
         repo_root=repo_root,
-    ).model_dump_json()
+    )
 
 
 @mcp.tool(
     description=(
         "Start a listed behave scenario through tox in the background and "
-        "return a job_id immediately. Call wait_for_scenario_completion to "
-        "wait for completion."
+        "return a job_id immediately. feature_file must be a path returned "
+        "by list_features. machine_types is required (lxd-container, "
+        "lxd-vm; cloud machine types are blocked unless "
+        "MCP_ALLOW_CLOUD_MACHINE_TYPES is set). scenario_name (substring) "
+        "and releases are optional filters onto the feature's Examples "
+        "rows. Call wait_for_scenario_completion to wait for completion."
     )
 )
-def start_behave_scenario(
+def start_scenario(
     feature_file: str,
     machine_types: list[str],
     scenario_name: str = "",
     releases: list[str] | None = None,
     repo_root: str = "",
-) -> str:
+) -> StartScenarioResult:
     return _service.start_scenario(
         feature_file,
         machine_types,
         scenario_name,
         releases,
         repo_root,
-    ).model_dump_json()
+    )
 
 
 @mcp.tool(
@@ -162,8 +180,8 @@ def start_behave_scenario(
         "with jobs recovered from disk (e.g. after a server restart)."
     )
 )
-def list_scenario_jobs(repo_root: str = "") -> str:
-    return _service.list_jobs(repo_root).model_dump_json()
+def list_scenario_jobs(repo_root: str = "") -> ListScenarioJobsResponse:
+    return _service.list_jobs(repo_root)
 
 
 @mcp.tool(
@@ -192,7 +210,7 @@ def summarize_scenario_results(
     status: str = "",
     limit: int = domain._DEFAULT_SUMMARIZE_FAILURES_LIMIT,
     repo_root: str = "",
-) -> str:
+) -> SummarizeScenarioResultsResponse:
     return _service.summarize_scenario_results(
         job_ids=job_ids,
         feature_file=feature_file,
@@ -202,12 +220,13 @@ def summarize_scenario_results(
         status=status,
         limit=limit,
         repo_root=repo_root,
-    ).model_dump_json()
+    )
 
 
 @mcp.tool(
     description=(
         "Wait for a running behave job to complete by polling internally. "
+        "job_id must come from start_scenario or list_scenario_jobs. "
         "Returns a compact structured summary on completion, or a timeout "
         "payload with recent output if the wait limit is reached."
     )
@@ -217,37 +236,41 @@ def wait_for_scenario_completion(
     max_wait_seconds: int = domain._DEFAULT_WAIT_TIMEOUT_SECONDS,
     poll_interval_seconds: float = domain._DEFAULT_WAIT_POLL_INTERVAL_SECONDS,
     repo_root: str = "",
-) -> str:
+) -> WaitForCompletionResult:
     return _service.wait_for_completion(
         job_id,
         max_wait_seconds,
         poll_interval_seconds,
         repo_root,
-    ).model_dump_json()
+    )
 
 
 @mcp.tool(
     description=(
-        "Return a tail of the stdout log for a behave job. Use this for human "
-        "debugging without flooding agent context with full logs."
+        "Return a tail of the stdout log for a behave job. job_id must "
+        "come from start_scenario or list_scenario_jobs. Use this for "
+        "human debugging without flooding agent context with full logs."
     )
 )
 def get_scenario_logs(
     job_id: str,
     lines: int = domain._DEFAULT_LOG_TAIL_LINES,
     repo_root: str = "",
-) -> str:
-    return _service.get_logs(job_id, lines, repo_root).model_dump_json()
+) -> LogsResponse:
+    return _service.get_logs(job_id, lines, repo_root)
 
 
 @mcp.tool(
     description=(
         "Return artifact paths and metadata for a behave job so agents can "
-        "parse full logs and reports from disk."
+        "parse full logs and reports from disk. job_id must come from "
+        "start_scenario or list_scenario_jobs."
     )
 )
-def get_scenario_artifacts(job_id: str, repo_root: str = "") -> str:
-    return _service.get_artifacts(job_id, repo_root).model_dump_json()
+def get_scenario_artifacts(
+    job_id: str, repo_root: str = ""
+) -> ArtifactsResponse:
+    return _service.get_artifacts(job_id, repo_root)
 
 
 def main() -> None:

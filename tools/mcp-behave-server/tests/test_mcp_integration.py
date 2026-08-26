@@ -24,13 +24,13 @@ async def test_mcp_lists_expected_tools():
     assert "describe_feature" in tools
     assert "list_dimensions" in tools
     assert "find_scenarios" in tools
-    assert "start_behave_scenario" in tools
+    assert "start_scenario" in tools
     assert "list_scenario_jobs" in tools
     assert "summarize_scenario_results" in tools
     assert "wait_for_scenario_completion" in tools
     assert "get_scenario_logs" in tools
     assert "get_scenario_artifacts" in tools
-    assert tools["start_behave_scenario"].description
+    assert tools["start_scenario"].description
 
 
 @pytest.mark.asyncio
@@ -94,7 +94,7 @@ async def test_mcp_start_wait_and_log_flow(monkeypatch, tmp_path):
 
     async with create_connected_server_and_client_session(mcp) as client:
         start_result = await client.call_tool(
-            "start_behave_scenario",
+            "start_scenario",
             {
                 "feature_file": "features/cli/attach.feature",
                 "machine_types": ["lxd-container"],
@@ -152,7 +152,7 @@ async def test_mcp_start_wait_and_log_flow(monkeypatch, tmp_path):
 async def test_mcp_start_requires_machine_types():
     async with create_connected_server_and_client_session(mcp) as client:
         result = await client.call_tool(
-            "start_behave_scenario",
+            "start_scenario",
             {
                 "feature_file": "features/cli/attach.feature",
                 "machine_types": [],
@@ -167,7 +167,7 @@ async def test_mcp_start_requires_machine_types():
 async def test_mcp_start_rejects_unlisted_feature():
     async with create_connected_server_and_client_session(mcp) as client:
         result = await client.call_tool(
-            "start_behave_scenario",
+            "start_scenario",
             {
                 "feature_file": "features/cli/does-not-exist.feature",
                 "machine_types": ["lxd-container"],
@@ -188,7 +188,7 @@ async def test_mcp_start_rejects_cloud_machine_types():
 
     async with create_connected_server_and_client_session(mcp) as client:
         result = await client.call_tool(
-            "start_behave_scenario",
+            "start_scenario",
             {
                 "feature_file": "features/cli/attach.feature",
                 "machine_types": ["azure.generic"],

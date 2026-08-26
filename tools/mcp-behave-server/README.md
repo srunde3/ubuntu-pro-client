@@ -16,7 +16,7 @@ The server exposes these MCP tools:
 - `find_scenarios` -- reverse lookup across all features.
   - Optional `release`, `machine_type`, `tag`, and `text` (scenario-name substring) filters.
   - Returns matching `feature_file`, `scenario_name`, `type`, required config, and the combos satisfying the filters.
-- `start_behave_scenario` -- starts a behave scenario in the background.
+- `start_scenario` -- starts a behave scenario in the background.
   - Returns a `job_id`.
 - `list_scenario_jobs` -- lists active jobs plus a bounded window of recently completed ones.
   - No known `job_id` or access to system processes required.
@@ -131,7 +131,7 @@ when configuring an MCP client.
 The server also reads these variables at startup:
 
 - `MCP_ALLOW_CLOUD_MACHINE_TYPES`: defaults to disabled. Set to `1` (or `true`/`yes`/`on`) to allow cloud machine types (`aws.generic`, `gcp.generic`, `azure.generic`, `aws.pro`, `gcp.pro`, `azure.pro`).
-- `MCP_MAX_PARALLEL_JOBS`: positive integer limit for concurrently running behave jobs. Defaults to `1` when unset. When the limit is reached, `start_behave_scenario` fails fast with `status: capacity_exceeded`.
+- `MCP_MAX_PARALLEL_JOBS`: positive integer limit for concurrently running behave jobs. Defaults to `1` when unset. When the limit is reached, `start_scenario` fails fast with `status: capacity_exceeded`.
 - `MCP_TRANSPORT`: one of `stdio` (default), `sse`, or `streamable-http`.
 - `MCP_HOST`: host to bind when using the `sse`/`streamable-http` transports. Defaults to `127.0.0.1`. Ignored for `stdio`.
 - `MCP_PORT`: port to bind when using the `sse`/`streamable-http` transports. Defaults to `8000`. Ignored for `stdio`.

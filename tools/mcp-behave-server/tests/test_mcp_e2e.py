@@ -27,7 +27,7 @@ async def test_mcp_e2e_long_running_attach_flow(monkeypatch):
 
     async with create_connected_server_and_client_session(mcp) as client:
         start_result = await client.call_tool(
-            "start_behave_scenario",
+            "start_scenario",
             {
                 "feature_file": "features/cli/attach.feature",
                 "machine_types": ["lxd-container"],
