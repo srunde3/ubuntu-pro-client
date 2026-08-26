@@ -395,9 +395,9 @@ class BehaveService:
     def wait_for_completion(
         self,
         job_id: str,
-        max_wait_seconds: int = domain._DEFAULT_WAIT_TIMEOUT_SECONDS,
+        max_wait_seconds: int = domain.DEFAULT_WAIT_TIMEOUT_SECONDS,
         poll_interval_seconds: float = (
-            domain._DEFAULT_WAIT_POLL_INTERVAL_SECONDS
+            domain.DEFAULT_WAIT_POLL_INTERVAL_SECONDS
         ),
         repo_root: str = "",
     ) -> WaitForCompletionResult:
@@ -431,10 +431,10 @@ class BehaveService:
     def get_logs(
         self,
         job_id: str,
-        lines: int = domain._DEFAULT_LOG_TAIL_LINES,
+        lines: int = domain.DEFAULT_LOG_TAIL_LINES,
         repo_root: str = "",
     ) -> LogsResponse:
-        lines = max(1, min(lines, domain._MAX_LOG_TAIL_LINES))
+        lines = max(1, min(lines, domain.MAX_LOG_TAIL_LINES))
 
         job = self._registry.get(job_id)
         if job is None:
@@ -503,7 +503,7 @@ class BehaveService:
     def list_jobs(
         self,
         repo_root: str = "",
-        limit: int = domain._DEFAULT_JOB_LIST_LIMIT,
+        limit: int = domain.DEFAULT_JOB_LIST_LIMIT,
     ) -> ListScenarioJobsResponse:
         try:
             resolved_repo_root = self._workspace.resolve_repo_root(
@@ -512,7 +512,7 @@ class BehaveService:
         except ValueError as exc:
             raise BehaveServiceError(str(exc)) from exc
 
-        limit = max(1, min(limit, domain._MAX_JOB_LIST_LIMIT))
+        limit = max(1, min(limit, domain.MAX_JOB_LIST_LIMIT))
         log_dir = self._workspace.resolve_log_dir(resolved_repo_root)
 
         in_memory_jobs = {job.job_id: job for job in self._registry.snapshot()}
@@ -564,7 +564,7 @@ class BehaveService:
         release: str = "",
         machine_type: str = "",
         status: str = "",
-        limit: int = domain._DEFAULT_SUMMARIZE_FAILURES_LIMIT,
+        limit: int = domain.DEFAULT_SUMMARIZE_FAILURES_LIMIT,
         repo_root: str = "",
     ) -> SummarizeScenarioResultsResponse:
         if status and status not in ("running", "completed", "unknown"):
@@ -586,7 +586,7 @@ class BehaveService:
             else None
         )
         job_ids_filter = set(job_ids) if job_ids else None
-        limit = max(1, min(limit, domain._MAX_SUMMARIZE_FAILURES_LIMIT))
+        limit = max(1, min(limit, domain.MAX_SUMMARIZE_FAILURES_LIMIT))
 
         log_dir = self._workspace.resolve_log_dir(resolved_repo_root)
         in_memory_jobs = {job.job_id: job for job in self._registry.snapshot()}
@@ -774,7 +774,7 @@ class BehaveService:
             return RunningResponse(
                 job_id=job_id,
                 recent_output=self._artifact_store.tail_file(
-                    stdout_log, domain._DEFAULT_RUNNING_TAIL_LINES
+                    stdout_log, domain.DEFAULT_RUNNING_TAIL_LINES
                 ),
                 artifacts=domain.artifacts_payload(
                     log_dir=log_dir,
@@ -821,7 +821,7 @@ class BehaveService:
             return RunningResponse(
                 job_id=job_id,
                 recent_output=self._artifact_store.tail_file(
-                    stdout_log, domain._DEFAULT_RUNNING_TAIL_LINES
+                    stdout_log, domain.DEFAULT_RUNNING_TAIL_LINES
                 ),
                 artifacts=domain.artifacts_payload(
                     log_dir=log_dir,
@@ -847,7 +847,7 @@ class BehaveService:
                 summary=None,
                 failures=[],
                 recent_output=self._artifact_store.tail_file(
-                    stdout_log, domain._DEFAULT_RUNNING_TAIL_LINES
+                    stdout_log, domain.DEFAULT_RUNNING_TAIL_LINES
                 ),
             )
         else:

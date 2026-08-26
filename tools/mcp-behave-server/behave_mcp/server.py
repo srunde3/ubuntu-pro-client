@@ -185,7 +185,7 @@ def start_scenario(
 )
 def list_scenario_jobs(
     repo_root: str = "",
-    limit: int = domain._DEFAULT_JOB_LIST_LIMIT,
+    limit: int = domain.DEFAULT_JOB_LIST_LIMIT,
 ) -> ListScenarioJobsResponse:
     return _service.list_jobs(repo_root, limit)
 
@@ -214,7 +214,7 @@ def summarize_scenario_results(
     release: str = "",
     machine_type: str = "",
     status: str = "",
-    limit: int = domain._DEFAULT_SUMMARIZE_FAILURES_LIMIT,
+    limit: int = domain.DEFAULT_SUMMARIZE_FAILURES_LIMIT,
     repo_root: str = "",
 ) -> SummarizeScenarioResultsResponse:
     return _service.summarize_scenario_results(
@@ -239,8 +239,8 @@ def summarize_scenario_results(
 )
 def wait_for_scenario_completion(
     job_id: str,
-    max_wait_seconds: int = domain._DEFAULT_WAIT_TIMEOUT_SECONDS,
-    poll_interval_seconds: float = domain._DEFAULT_WAIT_POLL_INTERVAL_SECONDS,
+    max_wait_seconds: int = domain.DEFAULT_WAIT_TIMEOUT_SECONDS,
+    poll_interval_seconds: float = domain.DEFAULT_WAIT_POLL_INTERVAL_SECONDS,
     repo_root: str = "",
 ) -> WaitForCompletionResult:
     return _service.wait_for_completion(
@@ -260,7 +260,7 @@ def wait_for_scenario_completion(
 )
 def get_scenario_logs(
     job_id: str,
-    lines: int = domain._DEFAULT_LOG_TAIL_LINES,
+    lines: int = domain.DEFAULT_LOG_TAIL_LINES,
     repo_root: str = "",
 ) -> LogsResponse:
     return _service.get_logs(job_id, lines, repo_root)

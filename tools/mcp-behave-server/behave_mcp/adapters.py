@@ -367,7 +367,7 @@ class LocalArtifactStore:
             return
 
     def append_index_event(self, log_dir: Path, event: dict[str, Any]) -> None:
-        index_path = log_dir / domain._JOB_INDEX_FILE_NAME
+        index_path = log_dir / domain.JOB_INDEX_FILE_NAME
         try:
             with index_path.open("a", encoding="utf-8") as index_stream:
                 index_stream.write(

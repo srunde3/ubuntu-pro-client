@@ -916,7 +916,7 @@ def test_list_jobs_merges_in_memory_and_disk_only(tmp_path):
 
 
 def test_list_jobs_caps_completed_history(tmp_path):
-    total = domain._DEFAULT_JOB_LIST_LIMIT + 5
+    total = domain.DEFAULT_JOB_LIST_LIMIT + 5
     for i in range(total):
         job_id = f"jobold{i:03d}"
         (tmp_path / f"{job_id}_meta.json").write_text(
@@ -929,7 +929,7 @@ def test_list_jobs_caps_completed_history(tmp_path):
 
     result = service.list_jobs().model_dump(mode="json")
 
-    assert len(result["jobs"]) == domain._DEFAULT_JOB_LIST_LIMIT
+    assert len(result["jobs"]) == domain.DEFAULT_JOB_LIST_LIMIT
     assert result["total_completed"] == total
     assert result["truncated"] is True
     kept_ids = {job["job_id"] for job in result["jobs"]}
@@ -938,7 +938,7 @@ def test_list_jobs_caps_completed_history(tmp_path):
 
 
 def test_list_jobs_limit_overrides_default(tmp_path):
-    total = domain._DEFAULT_JOB_LIST_LIMIT + 5
+    total = domain.DEFAULT_JOB_LIST_LIMIT + 5
     for i in range(total):
         job_id = f"jobold{i:03d}"
         (tmp_path / f"{job_id}_meta.json").write_text(
@@ -980,7 +980,7 @@ def test_list_jobs_limit_clamped_to_bounds(tmp_path):
     )
 
     too_high = service.list_jobs(
-        limit=domain._MAX_JOB_LIST_LIMIT + 1000
+        limit=domain.MAX_JOB_LIST_LIMIT + 1000
     ).model_dump(mode="json")
     assert too_high["truncated"] is False
 

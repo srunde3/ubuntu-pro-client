@@ -60,7 +60,7 @@ def _parse_flag(environ: Mapping[str, str], name: str) -> bool:
 def _parse_max_parallel_jobs(environ: Mapping[str, str]) -> int:
     raw = environ.get(domain.MAX_PARALLEL_JOBS_ENV_VAR, "").strip()
     if not raw:
-        return domain._DEFAULT_MAX_PARALLEL_JOBS
+        return domain.DEFAULT_MAX_PARALLEL_JOBS
 
     try:
         value = int(raw)
