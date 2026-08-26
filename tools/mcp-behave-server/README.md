@@ -21,6 +21,7 @@ The server exposes these MCP tools:
 - `list_scenario_jobs` -- lists active jobs plus a bounded window of recently completed ones.
   - No known `job_id` or access to system processes required.
   - Merges in-memory state with jobs recovered from disk, including jobs still running after a server restart.
+  - Optional `limit` caps how many completed jobs are returned (most recent first). `total_completed` and `truncated` in the response tell you if older jobs were dropped.
 - `summarize_scenario_results` -- aggregates results across jobs.
   - Optional `job_ids`, `feature_file`, `scenario_name` (substring), `release`, `machine_type`, and `status` filters.
   - Returns `job_counts` (status totals), scenario-level pass/fail counts grouped `by_release` and `by_machine_type`, and a flattened `failures` list tagged with `job_id` and combo context (capped at `limit`, with `truncated` set when more exist).

@@ -930,9 +930,62 @@ def test_list_jobs_caps_completed_history(tmp_path):
     result = service.list_jobs().model_dump(mode="json")
 
     assert len(result["jobs"]) == domain._DEFAULT_JOB_LIST_LIMIT
+    assert result["total_completed"] == total
+    assert result["truncated"] is True
     kept_ids = {job["job_id"] for job in result["jobs"]}
     assert f"jobold{total - 1:03d}" in kept_ids
     assert "jobold000" not in kept_ids
+
+
+def test_list_jobs_limit_overrides_default(tmp_path):
+    total = domain._DEFAULT_JOB_LIST_LIMIT + 5
+    for i in range(total):
+        job_id = f"jobold{i:03d}"
+        (tmp_path / f"{job_id}_meta.json").write_text(
+            json.dumps({"started_at": f"T{i:03d}"}), encoding="utf-8"
+        )
+
+    service = _make_service(
+        FakeWorkspace(repo_root=tmp_path, log_dir=tmp_path),
+    )
+
+    result = service.list_jobs(limit=total).model_dump(mode="json")
+
+    assert len(result["jobs"]) == total
+    assert result["total_completed"] == total
+    assert result["truncated"] is False
+
+
+def test_list_jobs_not_truncated_when_under_limit(tmp_path):
+    (tmp_path / "jobold000_meta.json").write_text(
+        json.dumps({"started_at": "T000"}), encoding="utf-8"
+    )
+
+    service = _make_service(
+        FakeWorkspace(repo_root=tmp_path, log_dir=tmp_path),
+    )
+
+    result = service.list_jobs().model_dump(mode="json")
+
+    assert result["total_completed"] == 1
+    assert result["truncated"] is False
+
+
+def test_list_jobs_limit_clamped_to_bounds(tmp_path):
+    (tmp_path / "jobold000_meta.json").write_text(
+        json.dumps({"started_at": "T000"}), encoding="utf-8"
+    )
+    service = _make_service(
+        FakeWorkspace(repo_root=tmp_path, log_dir=tmp_path),
+    )
+
+    too_high = service.list_jobs(
+        limit=domain._MAX_JOB_LIST_LIMIT + 1000
+    ).model_dump(mode="json")
+    assert too_high["truncated"] is False
+
+    too_low = service.list_jobs(limit=0).model_dump(mode="json")
+    assert len(too_low["jobs"]) == 1
 
 
 def test_list_jobs_rejects_invalid_repo_root():

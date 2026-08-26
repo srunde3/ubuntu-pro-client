@@ -256,6 +256,8 @@ class JobSummary(BaseModel):
 class ListScenarioJobsResponse(BaseModel):
     repo_root: str = ""
     jobs: list[JobSummary] = []
+    total_completed: int = 0
+    truncated: bool = False
 
 
 class GroupedCount(BaseModel):

@@ -500,7 +500,11 @@ class BehaveService:
             ),
         )
 
-    def list_jobs(self, repo_root: str = "") -> ListScenarioJobsResponse:
+    def list_jobs(
+        self,
+        repo_root: str = "",
+        limit: int = domain._DEFAULT_JOB_LIST_LIMIT,
+    ) -> ListScenarioJobsResponse:
         try:
             resolved_repo_root = self._workspace.resolve_repo_root(
                 repo_root or None
@@ -508,6 +512,7 @@ class BehaveService:
         except ValueError as exc:
             raise BehaveServiceError(str(exc)) from exc
 
+        limit = max(1, min(limit, domain._MAX_JOB_LIST_LIMIT))
         log_dir = self._workspace.resolve_log_dir(resolved_repo_root)
 
         in_memory_jobs = {job.job_id: job for job in self._registry.snapshot()}
@@ -535,7 +540,7 @@ class BehaveService:
         summaries.sort(key=lambda summary: summary.started_at or "")
         running = [s for s in summaries if s.status == "running"]
         others = [s for s in summaries if s.status != "running"]
-        trimmed = running + others[-domain._DEFAULT_JOB_LIST_LIMIT :]
+        trimmed = running + others[-limit:]
 
         logger.info(
             "listing jobs: %d in-memory, %d disk-only, %d total returned",
@@ -545,7 +550,10 @@ class BehaveService:
         )
 
         return ListScenarioJobsResponse(
-            repo_root=str(resolved_repo_root), jobs=trimmed
+            repo_root=str(resolved_repo_root),
+            jobs=trimmed,
+            total_completed=len(others),
+            truncated=len(others) > limit,
         )
 
     def summarize_scenario_results(

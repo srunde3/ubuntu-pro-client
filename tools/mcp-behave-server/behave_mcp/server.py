@@ -176,12 +176,18 @@ def start_scenario(
 @mcp.tool(
     description=(
         "List behave jobs. Returns every currently active job plus a "
-        "bounded window of recently completed ones, merging in-memory state "
-        "with jobs recovered from disk (e.g. after a server restart)."
+        "bounded window of recently completed ones (most recent first, "
+        "capped at limit), merging in-memory state with jobs recovered "
+        "from disk (e.g. after a server restart). total_completed is the "
+        "full completed-job count regardless of limit, and truncated is "
+        "set when older completed jobs were dropped to fit."
     )
 )
-def list_scenario_jobs(repo_root: str = "") -> ListScenarioJobsResponse:
-    return _service.list_jobs(repo_root)
+def list_scenario_jobs(
+    repo_root: str = "",
+    limit: int = domain._DEFAULT_JOB_LIST_LIMIT,
+) -> ListScenarioJobsResponse:
+    return _service.list_jobs(repo_root, limit)
 
 
 @mcp.tool(
