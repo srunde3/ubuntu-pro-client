@@ -13,6 +13,10 @@ import behave_mcp.adapters as adapters_module
 import behave_mcp.server as server_module
 from behave_mcp.server import mcp
 
+# The real ubuntu-pro-client repo this package lives in.
+# Used by tests that need to parse actual features/*.feature files.
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+
 
 @pytest.mark.asyncio
 async def test_mcp_lists_expected_tools():
@@ -35,8 +39,7 @@ async def test_mcp_lists_expected_tools():
 
 @pytest.mark.asyncio
 async def test_mcp_list_features_returns_json(monkeypatch):
-    repo_root = Path(__file__).resolve().parents[3]
-    monkeypatch.setenv("UBUNTU_PRO_CLIENT_REPO", str(repo_root))
+    monkeypatch.setenv("UBUNTU_PRO_CLIENT_REPO", str(_REPO_ROOT))
 
     async with create_connected_server_and_client_session(mcp) as client:
         result = await client.call_tool("list_features", {})
@@ -78,9 +81,50 @@ async def test_mcp_list_features_rejects_invalid_repo_root(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_mcp_describe_feature_returns_detail(monkeypatch):
+    monkeypatch.setenv("UBUNTU_PRO_CLIENT_REPO", str(_REPO_ROOT))
+
+    async with create_connected_server_and_client_session(mcp) as client:
+        result = await client.call_tool(
+            "describe_feature",
+            {"feature_file": "features/cli/attach.feature"},
+        )
+
+    payload = result_json(result)
+    assert payload["feature_file"] == "features/cli/attach.feature"
+    assert payload["scenarios"]
+
+
+@pytest.mark.asyncio
+async def test_mcp_list_dimensions_returns_values(monkeypatch):
+    monkeypatch.setenv("UBUNTU_PRO_CLIENT_REPO", str(_REPO_ROOT))
+
+    async with create_connected_server_and_client_session(mcp) as client:
+        result = await client.call_tool("list_dimensions", {})
+
+    payload = result_json(result)
+    assert payload["releases"]
+    assert payload["machine_types"]
+
+
+@pytest.mark.asyncio
+async def test_mcp_find_scenarios_matches_by_text(monkeypatch):
+    monkeypatch.setenv("UBUNTU_PRO_CLIENT_REPO", str(_REPO_ROOT))
+
+    async with create_connected_server_and_client_session(mcp) as client:
+        result = await client.call_tool("find_scenarios", {"text": "attach"})
+
+    payload = result_json(result)
+    assert payload["matches"]
+    assert all(
+        "attach" in match["scenario_name"].lower()
+        for match in payload["matches"]
+    )
+
+
+@pytest.mark.asyncio
 async def test_mcp_start_wait_and_log_flow(monkeypatch, tmp_path):
-    repo_root = Path(__file__).resolve().parents[3]
-    monkeypatch.setenv("UBUNTU_PRO_CLIENT_REPO", str(repo_root))
+    monkeypatch.setenv("UBUNTU_PRO_CLIENT_REPO", str(_REPO_ROOT))
     monkeypatch.setenv("MCP_LOG_DIR", str(tmp_path))
 
     def fake_popen(command, cwd, env, stdout, stderr, text):
@@ -133,6 +177,10 @@ async def test_mcp_start_wait_and_log_flow(monkeypatch, tmp_path):
         )
         artifacts_payload = result_json(artifacts_result)
         assert artifacts_payload["exists"]["stdout_log"] is True
+
+        jobs_result = await client.call_tool("list_scenario_jobs", {})
+        jobs_payload = result_json(jobs_result)
+        assert job_id in {job["job_id"] for job in jobs_payload["jobs"]}
 
         summary_result = await client.call_tool(
             "summarize_scenario_results", {"job_ids": [job_id]}
