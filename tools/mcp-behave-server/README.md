@@ -6,16 +6,29 @@ This package provides a host-side MCP server for running selected behave scenari
 
 The server exposes these MCP tools:
 
-- `list_features`: returns a lightweight catalog of feature files. Each entry has `path`, `title`, `scenario_count`, `requires_config`, and the `releases` and `machine_types` the feature covers. Optional `release`, `machine_type`, `tag`, and `text` filters keep only features with at least one matching scenario.
-- `describe_feature`: returns full detail for a single feature (`feature_file` must be a path from `list_features`): its title, tags, required config, and every scenario with name, type, tags, required config, `Examples` column names, and the distinct `(release, machine_type)` combos it supports.
-- `list_dimensions`: returns every distinct `release` and `machine_type` (substrate) used across the whole suite, each with a count of scenarios that reference it. Use it to discover valid filter values.
-- `find_scenarios`: reverse lookup across all features by optional `release`, `machine_type`, `tag`, and `text` (scenario-name substring) filters. Returns matching `feature_file`, `scenario_name`, `type`, required config, and the combos satisfying the filters.
-- `start_behave_scenario`: starts a behave scenario in the background and returns a `job_id`
-- `list_scenario_jobs`: lists active jobs plus a bounded window of recently completed ones, without needing a known `job_id` or access to system processes. Merges in-memory state with jobs recovered from disk, including jobs still running after a server restart.
-- `summarize_scenario_results`: aggregates results across jobs matching optional `job_ids`, `feature_file`, `scenario_name` (substring), `release`, `machine_type`, and `status` filters. Returns `job_counts` (status totals), scenario-level pass/fail counts grouped `by_release` and `by_machine_type`, and a flattened `failures` list tagged with `job_id` and combo context (capped at `limit`, with `truncated` set when more exist). Provides raw status/data only -- rerunning failed scenarios and judging flaky-vs-real failures is left to the caller.
-- `wait_for_scenario_completion`: waits for completion and returns a compact completion summary or timeout payload
-- `get_scenario_logs`: returns a bounded tail of captured stdout logs for a job
-- `get_scenario_artifacts`: returns disk artifact paths and metadata for a job
+- `list_features` -- lightweight catalog of feature files.
+  - Each entry: `path`, `title`, `scenario_count`, `requires_config`, `releases`, `machine_types`.
+  - Optional `release`, `machine_type`, `tag`, `text` filters keep only features with at least one matching scenario.
+- `describe_feature` -- full detail for a single feature (`feature_file` must be a path from `list_features`).
+  - Returns its title, tags, required config, and every scenario: name, type, tags, required config, `Examples` column names, and the distinct `(release, machine_type)` combos it supports.
+- `list_dimensions` -- every distinct `release` and `machine_type` (substrate) used across the whole suite, each with a count of scenarios that reference it.
+  - Use it to discover valid filter values.
+- `find_scenarios` -- reverse lookup across all features.
+  - Optional `release`, `machine_type`, `tag`, and `text` (scenario-name substring) filters.
+  - Returns matching `feature_file`, `scenario_name`, `type`, required config, and the combos satisfying the filters.
+- `start_behave_scenario` -- starts a behave scenario in the background.
+  - Returns a `job_id`.
+- `list_scenario_jobs` -- lists active jobs plus a bounded window of recently completed ones.
+  - No known `job_id` or access to system processes required.
+  - Merges in-memory state with jobs recovered from disk, including jobs still running after a server restart.
+- `summarize_scenario_results` -- aggregates results across jobs.
+  - Optional `job_ids`, `feature_file`, `scenario_name` (substring), `release`, `machine_type`, and `status` filters.
+  - Returns `job_counts` (status totals), scenario-level pass/fail counts grouped `by_release` and `by_machine_type`, and a flattened `failures` list tagged with `job_id` and combo context (capped at `limit`, with `truncated` set when more exist).
+  - Provides raw status/data only -- rerunning failed scenarios and judging flaky-vs-real failures is left to the caller.
+- `wait_for_scenario_completion` -- waits for completion.
+  - Returns a compact completion summary, or a timeout payload.
+- `get_scenario_logs` -- returns a bounded tail of captured stdout logs for a job.
+- `get_scenario_artifacts` -- returns disk artifact paths and metadata for a job.
 
 Release and substrate values are derived by parsing each feature's Gherkin `Examples` tables with the `behave` library, so the catalog always reflects the current feature files (no hardcoded release/substrate lists).
 
