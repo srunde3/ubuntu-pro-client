@@ -2,8 +2,9 @@
 """Parse Pro client ``behave`` feature files into typed, structured data.
 
 This module provides structures for testing conventions used in the Pro client
-that cannot be expressed by native ``behave``. For example, Pro client tests are
-frequently executed on permutations of ``<release>`` and ``<machine_type>``.
+that cannot be expressed by native ``behave``. For example, Pro client tests
+are frequently executed on permutations of ``<release>`` and
+``<machine_type>``.
 This module provides a structured way to parse those facts from feature files.
 
 As testing conventions change, this file and its tests should be kept current.

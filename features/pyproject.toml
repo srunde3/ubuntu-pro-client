@@ -2,6 +2,8 @@
 name = "pro-client-features"
 version = "0.0.1"
 description = "Structural/parsing layer for the ubuntu-pro-client e2e feature suite -- .feature file conventions (behave_features.py) and @releases:*/@machine_types:* tag semantics (tools/), shared by coverage_gaps.py and mcp-behave-server."
+# Dev-tooling only; unlike the shipped client (Python 3.5/Xenial), this
+# structural/parsing layer runs only in developer and CI environments.
 requires-python = ">=3.10"
 dependencies = [
     "behave>=1.2.6",
