@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 import pytest
+from conftest import FakeWorkspace, make_repo_with_feature
 
 from behave_mcp import domain
 from behave_mcp.adapters import (
@@ -56,34 +57,6 @@ class FakeLauncher:
         return pid in self._alive_pids
 
 
-class FakeWorkspace:
-    def __init__(
-        self,
-        *,
-        repo_root=None,
-        log_dir=None,
-        env=None,
-        repo_root_error=None,
-    ):
-        self._repo_root = repo_root
-        self._log_dir = log_dir
-        self._env = env if env is not None else {}
-        self._repo_root_error = repo_root_error
-
-    def resolve_repo_root(self, override):
-        if self._repo_root_error is not None:
-            raise ValueError(self._repo_root_error)
-        if override:
-            return Path(override)
-        return self._repo_root
-
-    def resolve_log_dir(self, repo_root):
-        return self._log_dir
-
-    def subprocess_env(self):
-        return dict(self._env)
-
-
 def _settings(*, allow_cloud=False, max_parallel_jobs=1) -> Settings:
     return Settings(
         allow_cloud_machine_types=allow_cloud,
@@ -92,17 +65,6 @@ def _settings(*, allow_cloud=False, max_parallel_jobs=1) -> Settings:
         host="127.0.0.1",
         port=8000,
     )
-
-
-def _make_repo_with_feature(
-    tmp_path, rel="features/cli/attach.feature"
-) -> Path:
-    repo_root = tmp_path / "repo"
-    feature_path = repo_root / rel
-    feature_path.parent.mkdir(parents=True, exist_ok=True)
-    (repo_root / "tox.ini").write_text("[tox]\n", encoding="utf-8")
-    feature_path.write_text("Feature: sample\n", encoding="utf-8")
-    return repo_root
 
 
 def _make_service(
@@ -134,7 +96,7 @@ def _make_service(
 
 
 def test_list_features_returns_feature_files(tmp_path):
-    repo_root = _make_repo_with_feature(tmp_path)
+    repo_root = make_repo_with_feature(tmp_path, "features/cli/attach.feature")
     service = _make_service(FakeWorkspace(repo_root=repo_root))
 
     result = service.list_features().model_dump(mode="json")
@@ -144,9 +106,7 @@ def test_list_features_returns_feature_files(tmp_path):
 
 
 def test_list_features_uses_repo_root_override(tmp_path):
-    repo_root = _make_repo_with_feature(
-        tmp_path, "features/cli/sample.feature"
-    )
+    repo_root = make_repo_with_feature(tmp_path, "features/cli/sample.feature")
     service = _make_service(FakeWorkspace(repo_root=None))
 
     result = service.list_features(repo_root=str(repo_root)).model_dump(
@@ -303,7 +263,7 @@ def test_find_scenarios_filters_combos_by_machine_type(tmp_path):
 
 
 def test_start_scenario_rejects_unlisted_feature(tmp_path):
-    repo_root = _make_repo_with_feature(tmp_path)
+    repo_root = make_repo_with_feature(tmp_path, "features/cli/attach.feature")
     service = _make_service(
         FakeWorkspace(repo_root=repo_root, log_dir=tmp_path)
     )
@@ -318,7 +278,7 @@ def test_start_scenario_rejects_unlisted_feature(tmp_path):
 
 
 def test_start_scenario_accepts_normalized_listed_feature(tmp_path):
-    repo_root = _make_repo_with_feature(tmp_path)
+    repo_root = make_repo_with_feature(tmp_path, "features/cli/attach.feature")
     launcher = FakeLauncher()
     service = _make_service(
         FakeWorkspace(repo_root=repo_root, log_dir=tmp_path),
@@ -336,7 +296,7 @@ def test_start_scenario_accepts_normalized_listed_feature(tmp_path):
 
 
 def test_start_scenario_builds_command(tmp_path):
-    repo_root = _make_repo_with_feature(tmp_path)
+    repo_root = make_repo_with_feature(tmp_path, "features/cli/attach.feature")
     launcher = FakeLauncher()
     service = _make_service(
         FakeWorkspace(
@@ -373,9 +333,7 @@ def test_start_scenario_builds_command(tmp_path):
 
 
 def test_start_scenario_uses_repo_root_override(tmp_path):
-    repo_root = _make_repo_with_feature(
-        tmp_path, "features/cli/sample.feature"
-    )
+    repo_root = make_repo_with_feature(tmp_path, "features/cli/sample.feature")
     launcher = FakeLauncher()
     service = _make_service(
         FakeWorkspace(repo_root=None, log_dir=tmp_path), launcher=launcher
@@ -432,7 +390,7 @@ def test_start_scenario_rejects_invalid_repo_root():
 
 
 def test_start_scenario_requires_machine_types(tmp_path):
-    repo_root = _make_repo_with_feature(tmp_path)
+    repo_root = make_repo_with_feature(tmp_path, "features/cli/attach.feature")
     service = _make_service(
         FakeWorkspace(repo_root=repo_root, log_dir=tmp_path)
     )
@@ -442,7 +400,7 @@ def test_start_scenario_requires_machine_types(tmp_path):
 
 
 def test_start_scenario_rejects_cloud_machine_type_by_default(tmp_path):
-    repo_root = _make_repo_with_feature(tmp_path)
+    repo_root = make_repo_with_feature(tmp_path, "features/cli/attach.feature")
     service = _make_service(
         FakeWorkspace(repo_root=repo_root, log_dir=tmp_path)
     )
@@ -457,7 +415,7 @@ def test_start_scenario_rejects_cloud_machine_type_by_default(tmp_path):
 
 
 def test_start_scenario_allows_cloud_machine_type_with_toggle(tmp_path):
-    repo_root = _make_repo_with_feature(tmp_path)
+    repo_root = make_repo_with_feature(tmp_path, "features/cli/attach.feature")
     service = _make_service(
         FakeWorkspace(repo_root=repo_root, log_dir=tmp_path),
         settings=_settings(allow_cloud=True),
@@ -471,7 +429,7 @@ def test_start_scenario_allows_cloud_machine_type_with_toggle(tmp_path):
 
 
 def test_start_scenario_fails_fast_when_capacity_reached(tmp_path):
-    repo_root = _make_repo_with_feature(tmp_path)
+    repo_root = make_repo_with_feature(tmp_path, "features/cli/attach.feature")
     registry = InMemoryJobRegistry()
     ids = iter(["job1", "job2"])
     launcher = FakeLauncher(handle=FakeHandle(returncode=None))
@@ -498,7 +456,7 @@ def test_start_scenario_fails_fast_when_capacity_reached(tmp_path):
 
 
 def test_start_scenario_releases_slot_when_process_start_fails(tmp_path):
-    repo_root = _make_repo_with_feature(tmp_path)
+    repo_root = make_repo_with_feature(tmp_path, "features/cli/attach.feature")
     registry = InMemoryJobRegistry()
     launcher = FakeLauncher(error=ProcessStartError("boom"))
     service = _make_service(
@@ -518,7 +476,7 @@ def test_start_scenario_releases_slot_when_process_start_fails(tmp_path):
 
 
 def test_start_scenario_reports_log_open_failure(tmp_path):
-    repo_root = _make_repo_with_feature(tmp_path)
+    repo_root = make_repo_with_feature(tmp_path, "features/cli/attach.feature")
     registry = InMemoryJobRegistry()
     launcher = FakeLauncher(error=LogFileOpenError("denied"))
     service = _make_service(

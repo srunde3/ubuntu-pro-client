@@ -1,12 +1,8 @@
-"""Shared fixtures/helpers for the MCP protocol-level test files.
-
-``clear_jobs`` applies automatically to every test in this directory.
-``result_json``, ``result_error_text``, and ``FakeProcess`` look unused
-here -- they're imported directly by test_mcp_integration.py and
-test_mcp_e2e.py, which is the whole point of keeping them in conftest.py.
+"""Shared fixtures/helpers for the test files in this directory.
 """
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -18,6 +14,58 @@ def clear_jobs():
     registry.clear()
     yield
     registry.clear()
+
+
+def make_repo_with_feature(
+    tmp_path: Path,
+    rel: str | None = "features/cli/sample.feature",
+    *,
+    name: str = "repo",
+) -> Path:
+    """Build a minimal valid repo_root: a tox.ini plus one feature file.
+
+    Pass ``rel=None`` to get just the ``features/`` directory with no
+    feature file, for tests that only care about repo_root validation.
+    """
+    repo_root = tmp_path / name
+    if rel is None:
+        (repo_root / "features").mkdir(parents=True)
+    else:
+        feature_path = repo_root / rel
+        feature_path.parent.mkdir(parents=True, exist_ok=True)
+        feature_path.write_text("Feature: sample\n", encoding="utf-8")
+    (repo_root / "tox.ini").write_text("[tox]\n", encoding="utf-8")
+    return repo_root
+
+
+class FakeWorkspace:
+    """A ``Workspace``-shaped test double usable across test files."""
+
+    def __init__(
+        self,
+        *,
+        repo_root=None,
+        log_dir=None,
+        env=None,
+        repo_root_error=None,
+    ):
+        self._repo_root = repo_root
+        self._log_dir = log_dir
+        self._env = env if env is not None else {}
+        self._repo_root_error = repo_root_error
+
+    def resolve_repo_root(self, override):
+        if self._repo_root_error is not None:
+            raise ValueError(self._repo_root_error)
+        if override:
+            return Path(override)
+        return self._repo_root
+
+    def resolve_log_dir(self, repo_root):
+        return self._log_dir
+
+    def subprocess_env(self):
+        return dict(self._env)
 
 
 def result_json(result):

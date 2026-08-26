@@ -1,21 +1,17 @@
 from pathlib import Path
 
-import behave_mcp.adapters as adapters_module
-import behave_mcp.server as server_module
 import pytest
-from behave_mcp.server import mcp
-from conftest import FakeProcess, result_error_text, result_json
+from conftest import (
+    FakeProcess,
+    make_repo_with_feature,
+    result_error_text,
+    result_json,
+)
 from mcp.shared.memory import create_connected_server_and_client_session
 
-
-def _make_fake_repo(tmp_path: Path) -> Path:
-    repo_root = tmp_path / "fake-repo"
-    (repo_root / "features" / "cli").mkdir(parents=True)
-    (repo_root / "tox.ini").write_text("[tox]\n", encoding="utf-8")
-    (repo_root / "features" / "cli" / "sample.feature").write_text(
-        "Feature: sample\n", encoding="utf-8"
-    )
-    return repo_root
+import behave_mcp.adapters as adapters_module
+import behave_mcp.server as server_module
+from behave_mcp.server import mcp
 
 
 @pytest.mark.asyncio
@@ -53,7 +49,7 @@ async def test_mcp_list_features_returns_json(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_mcp_list_features_uses_repo_root_override(tmp_path):
-    fake_repo = _make_fake_repo(tmp_path)
+    fake_repo = make_repo_with_feature(tmp_path)
 
     async with create_connected_server_and_client_session(mcp) as client:
         result = await client.call_tool(

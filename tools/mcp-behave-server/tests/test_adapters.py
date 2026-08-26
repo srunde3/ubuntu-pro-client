@@ -1,7 +1,7 @@
 import subprocess
-from pathlib import Path
 
 import pytest
+from conftest import make_repo_with_feature
 
 import behave_mcp.adapters as adapters_module
 from behave_mcp.adapters import (
@@ -113,20 +113,14 @@ def test_read_report_json(tmp_path):
 # ---- LocalWorkspace ----
 
 
-def _make_valid_repo(base: Path) -> Path:
-    (base / "features").mkdir(parents=True)
-    (base / "tox.ini").write_text("", encoding="utf-8")
-    return base
-
-
 def test_resolve_repo_root_override(tmp_path):
-    repo = _make_valid_repo(tmp_path / "repo")
+    repo = make_repo_with_feature(tmp_path, rel=None)
     workspace = LocalWorkspace()
     assert workspace.resolve_repo_root(str(repo)) == repo.resolve()
 
 
 def test_resolve_repo_root_env(tmp_path, monkeypatch):
-    repo = _make_valid_repo(tmp_path / "repo")
+    repo = make_repo_with_feature(tmp_path, rel=None)
     monkeypatch.setenv("UBUNTU_PRO_CLIENT_REPO", str(repo))
     workspace = LocalWorkspace()
     assert workspace.resolve_repo_root(None) == repo.resolve()
@@ -141,7 +135,7 @@ def test_resolve_repo_root_invalid(tmp_path):
 
 
 def test_detect_repo_root_walks_up_to_features_and_tox(tmp_path):
-    repo = _make_valid_repo(tmp_path / "repo")
+    repo = make_repo_with_feature(tmp_path, rel=None)
     nested = repo / "tools" / "mcp-behave-server" / "behave_mcp"
     nested.mkdir(parents=True)
     workspace = LocalWorkspace()

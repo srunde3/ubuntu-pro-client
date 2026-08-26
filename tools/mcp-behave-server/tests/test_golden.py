@@ -5,7 +5,8 @@ per-log-dir index, plus the JSON key ordering of tool response payloads.
 """
 
 import json
-from pathlib import Path
+
+from conftest import FakeWorkspace
 
 from behave_mcp.adapters import (
     InMemoryJobRegistry,
@@ -35,20 +36,6 @@ def test_append_index_event_byte_shape(tmp_path):
     )
 
 
-class _StubWorkspace:
-    def __init__(self, tmp_path):
-        self._tmp_path = tmp_path
-
-    def resolve_repo_root(self, override):
-        return self._tmp_path
-
-    def resolve_log_dir(self, repo_root):
-        return self._tmp_path
-
-    def subprocess_env(self):
-        return {}
-
-
 _SETTINGS = Settings(
     allow_cloud_machine_types=False,
     max_parallel_jobs=1,
@@ -60,7 +47,7 @@ _SETTINGS = Settings(
 
 def _service(tmp_path, registry) -> BehaveService:
     return BehaveService(
-        workspace=_StubWorkspace(tmp_path),
+        workspace=FakeWorkspace(repo_root=tmp_path, log_dir=tmp_path),
         settings=_SETTINGS,
         feature_reader=LocalFeatureFileReader(),
         feature_catalog=LocalFeatureCatalog(),
@@ -190,7 +177,7 @@ def test_timeout_key_order(tmp_path):
 
     values = iter([0.0, 1.1])
     service = BehaveService(
-        workspace=_StubWorkspace(tmp_path),
+        workspace=FakeWorkspace(repo_root=tmp_path, log_dir=tmp_path),
         settings=_SETTINGS,
         feature_reader=LocalFeatureFileReader(),
         feature_catalog=LocalFeatureCatalog(),
