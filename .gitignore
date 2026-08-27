@@ -52,14 +52,10 @@ docs/build/
 .sphinx
 
 # local MCP package artifacts
-tools/mcp-behave-server/build/
-tools/mcp-behave-server/.venv/
-tools/mcp-behave-server/.pytest_cache/
+tools/mcp_server_behave/build/
+tools/mcp_server_behave/.venv/
+tools/mcp_server_behave/.pytest_cache/
 .mcp_behave_logs/
-
-# local features package artifacts
-features/.venv/
-features/.pytest_cache/
 
 # compiled translations
 debian/po/usr
