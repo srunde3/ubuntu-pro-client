@@ -141,7 +141,7 @@ class FeatureFileReader(Protocol):
 class FeatureCatalog(Protocol):
     """Pure catalog/filtering operations over parsed feature data.
 
-    These are owned by the ``pro-client-features`` dependency, same as
+    These are owned by ``behave_mcp.behave_features``, same as
     ``FeatureFileReader``, but are pure transformations rather than disk
     I/O, so they get their own port/adapter instead of being imported
     directly into ``domain.py``.

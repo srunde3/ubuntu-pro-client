@@ -8,8 +8,7 @@ also live here.
 from pathlib import Path
 from typing import Any, NamedTuple
 
-from features.behave_features import ALLOWED_MACHINE_TYPES
-
+from behave_mcp.behave_features import ALLOWED_MACHINE_TYPES
 from behave_mcp.messages import Artifacts, Failure, GroupedCount, ReportSummary
 
 CLOUD_MACHINE_TYPES = {

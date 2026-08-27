@@ -8,7 +8,6 @@ dependencies = [
   "uvicorn>=0.30.0",
   "behave>=1.2.6",
   "pydantic>=2,<3",
-  "pro-client-features",
 ]
 
 [project.optional-dependencies]
@@ -27,9 +26,6 @@ lint = [
 [project.scripts]
 mcp-behave-server = "behave_mcp.server:main"
 
-[tool.uv.sources]
-pro-client-features = { path = "../../features", editable = true }
-
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
@@ -39,6 +35,7 @@ testpaths = ["tests"]
 markers = [
   "e2e: End-to-end tests that exercise real subprocess-backed MCP flows",
   "long_running: Tests expected to run for minutes",
+  "integration: exercises the real features/*.feature corpus instead of fixtures",
 ]
 
 # black/isort discover the *nearest* pyproject.toml to each file, so
@@ -50,11 +47,6 @@ line-length = 79
 [tool.isort]
 profile = "black"
 line_length = 79
-
-[tool.mypy]
-# pro-client-features is installed editable via a setuptools finder that
-# mypy's import resolution can't see; point it at the source tree instead.
-mypy_path = "../.."
 
 [[tool.mypy.overrides]]
 # Matches the root pyproject.toml override: behave ships no type stubs.

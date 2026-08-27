@@ -1,4 +1,4 @@
-"""Integration tests for ``features.behave_features`` against the real
+"""Integration tests for ``behave_mcp.behave_features`` against the real
 ``features/*.feature`` files.
 """
 
@@ -6,9 +6,9 @@ import pathlib
 
 import pytest
 
-from features import behave_features
+from behave_mcp import behave_features
 
-_REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
+_REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
 
 
 @pytest.mark.integration

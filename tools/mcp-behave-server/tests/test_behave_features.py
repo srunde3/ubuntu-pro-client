@@ -1,9 +1,9 @@
-"""Unit tests for ``features.behave_features``."""
+"""Unit tests for ``behave_mcp.behave_features``."""
 
 import dataclasses
 import os
 
-from features import behave_features
+from behave_mcp import behave_features
 
 
 class _Step:

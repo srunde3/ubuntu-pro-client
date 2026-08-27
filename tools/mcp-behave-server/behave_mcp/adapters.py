@@ -9,9 +9,7 @@ from collections import deque
 from pathlib import Path
 from typing import Any
 
-from features import behave_features
-
-from behave_mcp import domain
+from behave_mcp import behave_features, domain
 from behave_mcp.messages import (
     Combo,
     Dimensions,
