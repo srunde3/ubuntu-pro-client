@@ -29,7 +29,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install dependencies
-        run: uv sync --extra lint
+        run: uv sync --locked --extra lint
       - name: Formatting
         run: |
           uv run black --check behave_mcp tests
@@ -49,6 +49,6 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install dependencies
-        run: uv sync --extra test
+        run: uv sync --locked --extra test
       - name: Unit
         run: uv run pytest -q -m "not e2e"
