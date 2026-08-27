@@ -3,14 +3,8 @@
 
 This module provides structures for testing conventions used in the Pro client
 that cannot be expressed by native ``behave``. For example, Pro client tests
-are frequently executed on permutations of ``<release>`` and
-``<machine_type>``.
+are frequently executed on combos of ``<release>`` and ``<machine_type>``.
 This module provides a structured way to parse those facts from feature files.
-
-As testing conventions change, this file and its tests should be kept current.
-This module should be considered downstream of the feature tests; if feature
-tests need to change their testing conventions, it is acceptable for this
-module to change.
 """
 
 import posixpath

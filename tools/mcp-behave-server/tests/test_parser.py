@@ -1,9 +1,9 @@
-"""Unit tests for ``behave_mcp.behave_features``."""
+"""Unit tests for ``behave_mcp.parser``."""
 
 import dataclasses
 import os
 
-from behave_mcp import behave_features
+from behave_mcp import parser
 
 
 class _Step:
@@ -72,7 +72,7 @@ def test_requires_config_from_tags_extracts_and_sorts():
         "arm64",
         "uses.config.contract_token_staging_expired",
     ]
-    assert behave_features.requires_config_from_tags(tags) == [
+    assert parser.requires_config_from_tags(tags) == [
         "contract_token",
         "contract_token_staging_expired",
     ]
@@ -84,7 +84,7 @@ def test_combos_from_outline_examples():
         ["release", "machine_type"],
         [["jammy", "lxd-container"], ["resolute", "lxd-vm"]],
     )
-    assert _combo_dicts(behave_features.combos_from_scenario(scenario)) == [
+    assert _combo_dicts(parser.combos_from_scenario(scenario)) == [
         {"release": "jammy", "machine_type": "lxd-container"},
         {"release": "resolute", "machine_type": "lxd-vm"},
     ]
@@ -101,7 +101,7 @@ def test_hardcoded_step_overrides_example_release():
         ],
         [_Example(["release", "machine_type"], [["noble", "lxd-vm"]])],
     )
-    assert _combo_dicts(behave_features.combos_from_scenario(scenario)) == [
+    assert _combo_dicts(parser.combos_from_scenario(scenario)) == [
         {"release": "jammy", "machine_type": "lxd-vm"}
     ]
 
@@ -127,7 +127,7 @@ def test_examples_blocks_from_scenario_carries_per_block_tags():
             ),
         ],
     )
-    blocks = behave_features.examples_blocks_from_scenario(scenario)
+    blocks = parser.examples_blocks_from_scenario(scenario)
     assert [b.name for b in blocks] == ["standard", "clouds"]
     assert [b.tags for b in blocks] == [
         ["releases:lts_supported"],
@@ -154,7 +154,7 @@ def test_summarize_feature_shapes_scenarios():
             )
         ],
     )
-    summary = dataclasses.asdict(behave_features.summarize_feature(feature))
+    summary = dataclasses.asdict(parser.summarize_feature(feature))
     assert summary["title"] == "CLI attach"
     assert summary["requires_config"] == ["contract_token"]
     scenario = summary["scenarios"][0]
@@ -174,42 +174,40 @@ def test_summarize_feature_shapes_scenarios():
 
 
 def test_catalog_entry_aggregates_scenarios():
-    detail = behave_features.FeatureDetail(
+    detail = parser.FeatureDetail(
         path="features/cli/attach.feature",
         title="CLI attach",
         tags=["uses.config.contract_token"],
         requires_config=["contract_token"],
         scenarios=[
-            behave_features.ScenarioSummary(
+            parser.ScenarioSummary(
                 name="Attach on a machine",
                 type="scenario_outline",
                 tags=[],
                 requires_config=["contract_token"],
                 example_columns=[],
                 combos=[
-                    behave_features.Combo(
-                        release="resolute", machine_type="lxd-vm"
-                    ),
-                    behave_features.Combo(
+                    parser.Combo(release="resolute", machine_type="lxd-vm"),
+                    parser.Combo(
                         release="jammy", machine_type="lxd-container"
                     ),
                 ],
             ),
-            behave_features.ScenarioSummary(
+            parser.ScenarioSummary(
                 name="Attach invalid token",
                 type="scenario_outline",
                 tags=[],
                 requires_config=["contract_token_staging_expired"],
                 example_columns=[],
                 combos=[
-                    behave_features.Combo(
+                    parser.Combo(
                         release="jammy", machine_type="lxd-container"
                     ),
                 ],
             ),
         ],
     )
-    assert dataclasses.asdict(behave_features.catalog_entry(detail)) == {
+    assert dataclasses.asdict(parser.catalog_entry(detail)) == {
         "path": "features/cli/attach.feature",
         "title": "CLI attach",
         "scenario_count": 2,
@@ -223,60 +221,56 @@ def test_catalog_entry_aggregates_scenarios():
 
 
 def test_scenario_matches_filters():
-    scenario = behave_features.ScenarioSummary(
+    scenario = parser.ScenarioSummary(
         name="Attach on a machine",
         type="scenario",
         tags=["arm64"],
         requires_config=[],
         example_columns=[],
         combos=[
-            behave_features.Combo(
-                release="jammy", machine_type="lxd-container"
-            ),
-            behave_features.Combo(release="resolute", machine_type="lxd-vm"),
+            parser.Combo(release="jammy", machine_type="lxd-container"),
+            parser.Combo(release="resolute", machine_type="lxd-vm"),
         ],
     )
-    assert behave_features.scenario_matches(
+    assert parser.scenario_matches(
         scenario, [], release="resolute", machine_type="lxd-vm"
     )
-    assert not behave_features.scenario_matches(
+    assert not parser.scenario_matches(
         scenario, [], release="resolute", machine_type="lxd-container"
     )
-    assert behave_features.scenario_matches(scenario, [], tag="arm64")
-    assert behave_features.scenario_matches(scenario, [], text="MACHINE")
+    assert parser.scenario_matches(scenario, [], tag="arm64")
+    assert parser.scenario_matches(scenario, [], text="MACHINE")
 
 
 def test_aggregate_dimensions_counts_scenarios_once_per_value():
     details = [
-        behave_features.FeatureDetail(
+        parser.FeatureDetail(
             path="features/cli/attach.feature",
             title="CLI attach",
             tags=[],
             requires_config=[],
             scenarios=[
-                behave_features.ScenarioSummary(
+                parser.ScenarioSummary(
                     name="Attach on a machine",
                     type="scenario",
                     tags=[],
                     requires_config=[],
                     example_columns=[],
                     combos=[
-                        behave_features.Combo(
+                        parser.Combo(
                             release="jammy", machine_type="lxd-container"
                         ),
-                        behave_features.Combo(
-                            release="jammy", machine_type="lxd-vm"
-                        ),
+                        parser.Combo(release="jammy", machine_type="lxd-vm"),
                     ],
                 ),
-                behave_features.ScenarioSummary(
+                parser.ScenarioSummary(
                     name="Detach",
                     type="scenario",
                     tags=[],
                     requires_config=[],
                     example_columns=[],
                     combos=[
-                        behave_features.Combo(
+                        parser.Combo(
                             release="resolute", machine_type="lxd-vm"
                         ),
                     ],
@@ -284,9 +278,7 @@ def test_aggregate_dimensions_counts_scenarios_once_per_value():
             ],
         )
     ]
-    dimensions = dataclasses.asdict(
-        behave_features.aggregate_dimensions(details)
-    )
+    dimensions = dataclasses.asdict(parser.aggregate_dimensions(details))
     assert dimensions["releases"] == [
         {"name": "jammy", "scenario_count": 1},
         {"name": "resolute", "scenario_count": 1},
@@ -321,7 +313,7 @@ def test_discover_feature_files_sorted(tmp_path):
     )
     (tmp_path / "features" / "notes.txt").write_text("", encoding="utf-8")
 
-    assert behave_features.discover_feature_files(tmp_path) == [
+    assert parser.discover_feature_files(tmp_path) == [
         "features/b.feature",
         "features/cli/a.feature",
     ]
@@ -333,7 +325,7 @@ def test_discover_feature_details_parses_scenarios(tmp_path):
         _SAMPLE_FEATURE, encoding="utf-8"
     )
 
-    details = behave_features.discover_feature_details(tmp_path)
+    details = parser.discover_feature_details(tmp_path)
 
     assert len(details) == 1
     assert details[0].path == "features/cli/sample.feature"
@@ -351,7 +343,7 @@ def test_discover_feature_details_skips_unparseable(tmp_path):
         encoding="utf-8",
     )
 
-    assert behave_features.discover_feature_details(tmp_path) == []
+    assert parser.discover_feature_details(tmp_path) == []
 
 
 def test_discover_feature_details_uses_mtime_cache(tmp_path):
@@ -360,11 +352,11 @@ def test_discover_feature_details_uses_mtime_cache(tmp_path):
     feature_path = features_dir / "sample.feature"
     feature_path.write_text(_SAMPLE_FEATURE, encoding="utf-8")
 
-    first = behave_features.discover_feature_details(tmp_path)
+    first = parser.discover_feature_details(tmp_path)
     assert first[0].title == "Sample feature"
 
     stat = feature_path.stat()
     feature_path.write_text("Feature: Changed\n", encoding="utf-8")
     os.utime(feature_path, (stat.st_atime, stat.st_mtime))
-    cached = behave_features.discover_feature_details(tmp_path)
+    cached = parser.discover_feature_details(tmp_path)
     assert cached[0].title == "Sample feature"

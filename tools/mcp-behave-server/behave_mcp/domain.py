@@ -8,8 +8,8 @@ also live here.
 from pathlib import Path
 from typing import Any, NamedTuple
 
-from behave_mcp.behave_features import ALLOWED_MACHINE_TYPES
 from behave_mcp.messages import Artifacts, Failure, GroupedCount, ReportSummary
+from behave_mcp.parser import ALLOWED_MACHINE_TYPES
 
 CLOUD_MACHINE_TYPES = {
     "aws.generic",
