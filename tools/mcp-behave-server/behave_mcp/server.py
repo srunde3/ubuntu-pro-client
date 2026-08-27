@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from typing import Annotated
 
 from mcp.server import FastMCP
+from mcp.server.fastmcp.server import Settings
 from pydantic import Field
 from starlette.responses import JSONResponse
 
@@ -38,6 +39,13 @@ try:
 except ConfigError as exc:
     print(f"mcp-behave-server: invalid configuration: {exc}", file=sys.stderr)
     raise SystemExit(1) from None
+
+# mcp's Settings.lifespan field has an unresolved forward reference at class
+# definition time; rebuilding it here, once, avoids an
+# IncompleteFieldDefinitionWarning on FastMCP() construction below.
+# Workaround for an upstream mcp bug, pinned to mcp==1.28.1 in pyproject.toml;
+# safe to drop once upgrading mcp no longer triggers the warning.
+Settings.model_rebuild()
 
 mcp = FastMCP(
     "Ubuntu Pro Client Behave MCP",
