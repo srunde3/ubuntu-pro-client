@@ -10,15 +10,6 @@ from pathlib import Path
 from typing import Any
 
 from behave_mcp import domain, parser
-from behave_mcp.messages import (
-    Combo,
-    Dimensions,
-    DimensionValue,
-    ExamplesBlock,
-    FeatureCatalogEntry,
-    FeatureDetail,
-    ScenarioSummary,
-)
 from behave_mcp.ports import (
     Job,
     LogFileOpenError,
@@ -158,183 +149,15 @@ class InMemoryJobRegistry:
 
 
 class LocalFeatureFileReader:
-    """Filesystem-backed reader for the repository's feature file catalog.
-
-    Delegates to ``parser``, translating its dataclasses into our
-    own message DTOs so callers never depend on that package's shapes.
-    """
+    """Filesystem-backed reader for the repository's feature file catalog."""
 
     def discover_feature_files(self, repo_root: Path) -> list[str]:
         return parser.discover_feature_files(repo_root)
 
-    def discover_feature_details(self, repo_root: Path) -> list[FeatureDetail]:
-        return [
-            _to_internal_feature_detail(detail)
-            for detail in parser.discover_feature_details(repo_root)
-        ]
-
-
-class LocalFeatureCatalog:
-    """Delegates pure catalog/filtering operations to ``parser``.
-
-    Split from ``LocalFeatureFileReader`` because these are transformations
-    over already-parsed data, not disk I/O -- same dependency, different
-    kind of boundary. Every call converts our message DTOs to that
-    package's dataclasses and back, so its shapes never leak past here.
-    """
-
-    def normalize_feature_file_arg(self, feature_file: str) -> str:
-        return parser.normalize_feature_file_arg(feature_file)
-
-    def catalog_entry(
-        self, feature_detail: FeatureDetail
-    ) -> FeatureCatalogEntry:
-        external = parser.catalog_entry(
-            _to_external_feature_detail(feature_detail)
-        )
-        return FeatureCatalogEntry(
-            path=external.path,
-            title=external.title,
-            scenario_count=external.scenario_count,
-            requires_config=list(external.requires_config),
-            releases=list(external.releases),
-            machine_types=list(external.machine_types),
-        )
-
-    def aggregate_dimensions(
-        self, feature_details: list[FeatureDetail]
-    ) -> Dimensions:
-        external = parser.aggregate_dimensions(
-            [_to_external_feature_detail(detail) for detail in feature_details]
-        )
-        return Dimensions(
-            releases=[
-                DimensionValue(
-                    name=value.name, scenario_count=value.scenario_count
-                )
-                for value in external.releases
-            ],
-            machine_types=[
-                DimensionValue(
-                    name=value.name, scenario_count=value.scenario_count
-                )
-                for value in external.machine_types
-            ],
-        )
-
-    def scenario_matches(
-        self,
-        scenario: ScenarioSummary,
-        feature_tags: list[str],
-        *,
-        release: str | None = None,
-        machine_type: str | None = None,
-        tag: str | None = None,
-        text: str | None = None,
-    ) -> bool:
-        return parser.scenario_matches(
-            _to_external_scenario_summary(scenario),
-            feature_tags,
-            release=release,
-            machine_type=machine_type,
-            tag=tag,
-            text=text,
-        )
-
-    def filtered_combos(
-        self,
-        scenario: ScenarioSummary,
-        release: str | None = None,
-        machine_type: str | None = None,
-    ) -> list[Combo]:
-        external_combos = parser.filtered_combos(
-            _to_external_scenario_summary(scenario), release, machine_type
-        )
-        return [_to_internal_combo(combo) for combo in external_combos]
-
-
-def _to_internal_combo(combo: Any) -> Combo:
-    return Combo(release=combo.release, machine_type=combo.machine_type)
-
-
-def _to_external_combo(combo: Combo) -> parser.Combo:
-    return parser.Combo(release=combo.release, machine_type=combo.machine_type)
-
-
-def _to_internal_examples_block(block: Any) -> ExamplesBlock:
-    return ExamplesBlock(
-        name=block.name,
-        tags=list(block.tags),
-        combos=[_to_internal_combo(combo) for combo in block.combos],
-    )
-
-
-def _to_external_examples_block(
-    block: ExamplesBlock,
-) -> parser.ExamplesBlock:
-    return parser.ExamplesBlock(
-        name=block.name,
-        tags=list(block.tags),
-        combos=[_to_external_combo(combo) for combo in block.combos],
-    )
-
-
-def _to_internal_scenario_summary(scenario: Any) -> ScenarioSummary:
-    return ScenarioSummary(
-        name=scenario.name,
-        type=scenario.type,
-        tags=list(scenario.tags),
-        requires_config=list(scenario.requires_config),
-        example_columns=list(scenario.example_columns),
-        combos=[_to_internal_combo(combo) for combo in scenario.combos],
-        examples=[
-            _to_internal_examples_block(block) for block in scenario.examples
-        ],
-    )
-
-
-def _to_external_scenario_summary(
-    scenario: ScenarioSummary,
-) -> parser.ScenarioSummary:
-    return parser.ScenarioSummary(
-        name=scenario.name,
-        type=scenario.type,
-        tags=list(scenario.tags),
-        requires_config=list(scenario.requires_config),
-        example_columns=list(scenario.example_columns),
-        combos=[_to_external_combo(combo) for combo in scenario.combos],
-        examples=[
-            _to_external_examples_block(block) for block in scenario.examples
-        ],
-    )
-
-
-def _to_internal_feature_detail(detail: Any) -> FeatureDetail:
-    return FeatureDetail(
-        path=detail.path,
-        title=detail.title,
-        tags=list(detail.tags),
-        requires_config=list(detail.requires_config),
-        scenarios=[
-            _to_internal_scenario_summary(scenario)
-            for scenario in detail.scenarios
-        ],
-    )
-
-
-def _to_external_feature_detail(
-    detail: FeatureDetail,
-) -> parser.FeatureDetail:
-    return parser.FeatureDetail(
-        path=detail.path,
-        title=detail.title,
-        tags=list(detail.tags),
-        requires_config=list(detail.requires_config),
-        scenarios=[
-            _to_external_scenario_summary(scenario)
-            for scenario in detail.scenarios
-        ],
-    )
+    def discover_feature_details(
+        self, repo_root: Path
+    ) -> list[parser.FeatureDetail]:
+        return parser.discover_feature_details(repo_root)
 
 
 class LocalArtifactStore:

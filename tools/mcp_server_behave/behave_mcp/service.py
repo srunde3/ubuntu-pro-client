@@ -4,7 +4,7 @@ import logging
 from pathlib import Path
 from typing import Any, Callable
 
-from behave_mcp import domain
+from behave_mcp import domain, parser
 from behave_mcp.config import Settings
 from behave_mcp.messages import (
     ArtifactsResponse,
@@ -14,7 +14,6 @@ from behave_mcp.messages import (
     DescribeFeatureResponse,
     ExistsFlags,
     Failure,
-    FeatureDetail,
     FindScenariosResponse,
     JobCounts,
     JobSummary,
@@ -32,7 +31,6 @@ from behave_mcp.messages import (
 )
 from behave_mcp.ports import (
     ArtifactStore,
-    FeatureCatalog,
     FeatureFileReader,
     Job,
     JobRegistry,
@@ -80,7 +78,6 @@ class BehaveService:
         workspace: Workspace,
         settings: Settings,
         feature_reader: FeatureFileReader,
-        feature_catalog: FeatureCatalog,
         artifact_store: ArtifactStore,
         registry: JobRegistry,
         launcher: ProcessLauncher,
@@ -92,7 +89,6 @@ class BehaveService:
         self._workspace = workspace
         self._settings = settings
         self._feature_reader = feature_reader
-        self._feature_catalog = feature_catalog
         self._artifact_store = artifact_store
         self._registry = registry
         self._launcher = launcher
@@ -120,7 +116,7 @@ class BehaveService:
             resolved_repo_root
         )
         features = [
-            self._feature_catalog.catalog_entry(detail)
+            domain.to_catalog_entry(parser.catalog_entry(detail))
             for detail in details
             if self._feature_has_match(
                 detail,
@@ -146,9 +142,7 @@ class BehaveService:
         except ValueError as exc:
             raise BehaveServiceError(str(exc)) from exc
 
-        normalized = self._feature_catalog.normalize_feature_file_arg(
-            feature_file
-        )
+        normalized = parser.normalize_feature_file_arg(feature_file)
         details = self._feature_reader.discover_feature_details(
             resolved_repo_root
         )
@@ -157,9 +151,12 @@ class BehaveService:
                 return DescribeFeatureResponse(
                     feature_file=detail.path,
                     title=detail.title,
-                    tags=detail.tags,
-                    requires_config=detail.requires_config,
-                    scenarios=detail.scenarios,
+                    tags=list(detail.tags),
+                    requires_config=list(detail.requires_config),
+                    scenarios=[
+                        domain.to_scenario_summary(scenario)
+                        for scenario in detail.scenarios
+                    ],
                 )
 
         raise BehaveServiceError(
@@ -177,7 +174,7 @@ class BehaveService:
         details = self._feature_reader.discover_feature_details(
             resolved_repo_root
         )
-        dimensions = self._feature_catalog.aggregate_dimensions(details)
+        dimensions = domain.to_dimensions(parser.aggregate_dimensions(details))
         return ListDimensionsResponse(
             repo_root=str(resolved_repo_root),
             releases=dimensions.releases,
@@ -205,7 +202,7 @@ class BehaveService:
         matches: list[ScenarioMatch] = []
         for detail in details:
             for scenario in detail.scenarios:
-                if not self._feature_catalog.scenario_matches(
+                if not parser.scenario_matches(
                     scenario,
                     detail.tags,
                     release=release,
@@ -219,10 +216,13 @@ class BehaveService:
                         feature_file=detail.path,
                         scenario_name=scenario.name,
                         type=scenario.type,
-                        requires_config=scenario.requires_config,
-                        combos=self._feature_catalog.filtered_combos(
-                            scenario, release, machine_type
-                        ),
+                        requires_config=list(scenario.requires_config),
+                        combos=[
+                            domain.to_combo(combo)
+                            for combo in parser.filtered_combos(
+                                scenario, release, machine_type
+                            )
+                        ],
                     )
                 )
 
@@ -233,7 +233,7 @@ class BehaveService:
 
     def _feature_has_match(
         self,
-        feature_detail: FeatureDetail,
+        feature_detail: parser.FeatureDetail,
         *,
         release: str | None,
         machine_type: str | None,
@@ -248,7 +248,7 @@ class BehaveService:
         ):
             return True
         return any(
-            self._feature_catalog.scenario_matches(
+            parser.scenario_matches(
                 scenario,
                 feature_detail.tags,
                 release=release,
@@ -274,9 +274,7 @@ class BehaveService:
         except ValueError as exc:
             raise BehaveServiceError(str(exc)) from exc
 
-        normalized = self._feature_catalog.normalize_feature_file_arg(
-            feature_file
-        )
+        normalized = parser.normalize_feature_file_arg(feature_file)
         allowed_features = set(
             self._feature_reader.discover_feature_files(resolved_repo_root)
         )
@@ -602,7 +600,7 @@ class BehaveService:
             raise BehaveServiceError(str(exc)) from exc
 
         normalized_feature_file = (
-            self._feature_catalog.normalize_feature_file_arg(feature_file)
+            parser.normalize_feature_file_arg(feature_file)
             if feature_file
             else None
         )

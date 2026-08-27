@@ -32,16 +32,6 @@ class ScenarioSummary(BaseModel):
     examples: list[ExamplesBlock] = []
 
 
-class FeatureDetail(BaseModel):
-    """Full parsed metadata for one feature file."""
-
-    path: str = ""
-    title: str = ""
-    tags: list[str] = []
-    requires_config: list[str] = []
-    scenarios: list[ScenarioSummary] = []
-
-
 class FeatureCatalogEntry(BaseModel):
     """Lightweight catalog projection of a feature."""
 

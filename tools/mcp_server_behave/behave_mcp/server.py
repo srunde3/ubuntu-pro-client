@@ -14,7 +14,6 @@ from behave_mcp import domain
 from behave_mcp.adapters import (
     InMemoryJobRegistry,
     LocalArtifactStore,
-    LocalFeatureCatalog,
     LocalFeatureFileReader,
     LocalWorkspace,
     PopenLauncher,
@@ -103,7 +102,6 @@ def _utc_timestamp() -> str:
 
 _workspace = LocalWorkspace()
 _feature_reader = LocalFeatureFileReader()
-_feature_catalog = LocalFeatureCatalog()
 _artifact_store = LocalArtifactStore()
 registry = InMemoryJobRegistry()
 _launcher = PopenLauncher()
@@ -111,7 +109,6 @@ _service = BehaveService(
     workspace=_workspace,
     settings=_settings,
     feature_reader=_feature_reader,
-    feature_catalog=_feature_catalog,
     artifact_store=_artifact_store,
     registry=registry,
     launcher=_launcher,

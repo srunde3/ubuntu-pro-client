@@ -13,7 +13,6 @@ from behave_mcp import domain
 from behave_mcp.adapters import (
     InMemoryJobRegistry,
     LocalArtifactStore,
-    LocalFeatureCatalog,
     LocalFeatureFileReader,
 )
 from behave_mcp.config import Settings
@@ -50,7 +49,6 @@ def _make_service(
         workspace=workspace,
         settings=settings if settings is not None else _settings(),
         feature_reader=LocalFeatureFileReader(),
-        feature_catalog=LocalFeatureCatalog(),
         artifact_store=LocalArtifactStore(),
         registry=registry if registry is not None else InMemoryJobRegistry(),
         launcher=launcher if launcher is not None else FakeLauncher(),
