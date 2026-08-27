@@ -62,8 +62,8 @@ non-editable copy, so repo auto-detection doesn't work -- set
       "command": "uvx",
       "args": [
         "--from",
-        "/path/to/repo/tools/mcp-behave-server",
-        "mcp-behave-server"
+        "/path/to/repo/tools/mcp_server_behave",
+        "mcp-server-behave"
       ],
       "env": {
         "UBUNTU_PRO_CLIENT_REPO": "/path/to/repo"
@@ -79,7 +79,7 @@ Other env vars (contract token, concurrency limits, etc.) go in the same
 If you prefer keeping cache enabled, clear stale entries after package changes:
 
 ```bash
-uv cache clean mcp-behave-server
+uv cache clean mcp-server-behave
 ```
 
 ## Testing
@@ -116,10 +116,6 @@ uv run flake8 behave_mcp tests
 uv run mypy behave_mcp
 ```
 
-`pro-client-features` is installed editable via a setuptools finder that
-mypy's import resolution can't see on its own; `[tool.mypy] mypy_path`
-in `pyproject.toml` points mypy at the source tree instead.
-
 ## Environment variables
 
 The server forwards its **entire** environment to the behave subprocess.
@@ -154,7 +150,6 @@ One more variable is read at the point a job starts, and can vary per-call:
 
 ## TODOs
 
-- Better incorporate the shared file parsing library. Treated as a totally external dep right now, which introduces unnecessary code duplication. I don't quite yet know how I want to architect this.
 - Add way to kill jobs if they are known to be hanging
 - Add different "install from" options. Continue defaulting to 'local'. Include git commit or other unique identifier for build for each option, and surface it as a `summarize_scenario_results` filter/grouping dimension once it exists.
 - Improve the job recovery mechanism; it's a little verbose on logs.

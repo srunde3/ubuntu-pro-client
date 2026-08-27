@@ -24,7 +24,7 @@ def test_invalid_config_exits_nonzero_with_clean_message():
 
     assert result.returncode == 1
     assert result.stderr.strip() == (
-        "mcp-behave-server: invalid configuration: "
+        "mcp-server-behave: invalid configuration: "
         "MCP_PORT must be a valid port number, got 'notanumber'"
     )
     assert "Traceback" not in result.stderr

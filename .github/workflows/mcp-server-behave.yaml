@@ -1,21 +1,21 @@
 ---
 
-name: CI (mcp-behave-server)
+name: CI (mcp-server-behave)
 
 on:
   push:
     paths:
-      - "tools/mcp-behave-server/**"
-      - ".github/workflows/mcp-behave-server.yaml"
+      - "tools/mcp_server_behave/**"
+      - ".github/workflows/mcp-server-behave.yaml"
   pull_request:
     paths:
-      - "tools/mcp-behave-server/**"
-      - ".github/workflows/mcp-behave-server.yaml"
+      - "tools/mcp_server_behave/**"
+      - ".github/workflows/mcp-server-behave.yaml"
 
 defaults:
   run:
     shell: sh -ex {0}
-    working-directory: tools/mcp-behave-server
+    working-directory: tools/mcp_server_behave
 
 jobs:
   lint-and-style:

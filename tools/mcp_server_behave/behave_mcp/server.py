@@ -37,7 +37,7 @@ from behave_mcp.service import BehaveService
 try:
     _settings = load_settings(os.environ)
 except ConfigError as exc:
-    print(f"mcp-behave-server: invalid configuration: {exc}", file=sys.stderr)
+    print(f"mcp-server-behave: invalid configuration: {exc}", file=sys.stderr)
     raise SystemExit(1) from None
 
 # mcp's Settings.lifespan field has an unresolved forward reference at class

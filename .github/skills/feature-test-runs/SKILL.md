@@ -5,7 +5,7 @@ description: "Use when running, discovering, or debugging `features/` behave int
 
 # Feature Test Runs
 
-Use the `behave` MCP server (`tools/mcp-behave-server`) for all `features/`
+Use the `behave` MCP server (`tools/mcp_server_behave`) for all `features/`
 test discovery and execution. Don't run `tox -e behave` by hand, and don't
 grep `features/*.feature` files directly to find scenarios or valid
 release/machine_type values -- the MCP tools already do this.
@@ -17,7 +17,7 @@ discover what's available, then `start_scenario` plus
 tool's own description covers its parameters and output shape -- read
 those (or call `list_tools`) rather than looking here for details.
 
-See [tools/mcp-behave-server/README.md](../../../tools/mcp-behave-server/README.md)
+See [tools/mcp_server_behave/README.md](../../../tools/mcp_server_behave/README.md)
 if the MCP server isn't configured yet, or for env vars and safety
 constraints (allowed machine types, cloud gating, parallel job limits).
 

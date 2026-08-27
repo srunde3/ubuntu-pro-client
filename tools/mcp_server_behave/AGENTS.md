@@ -1,4 +1,4 @@
-# AGENTS.md -- tools/mcp-behave-server
+# AGENTS.md -- tools/mcp_server_behave
 
 This subproject is a standalone `uv`-managed package: a host-side MCP server for
 running behave scenarios. It has its own `pyproject.toml`, virtualenv, and CI
@@ -38,7 +38,7 @@ uv run flake8 behave_mcp tests
 uv run mypy behave_mcp
 ```
 
-CI (`.github/workflows/mcp-behave-server.yaml`) runs these on changes under
+CI (`.github/workflows/mcp-server-behave.yaml`) runs these on changes under
 this path only.
 
 ## Test conventions

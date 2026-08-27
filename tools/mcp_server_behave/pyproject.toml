@@ -1,5 +1,5 @@
 [project]
-name = "mcp-behave-server"
+name = "mcp-server-behave"
 version = "0.1.0"
 description = "Host-side MCP server for running behave tests for ubuntu-pro-client"
 requires-python = ">=3.10"
@@ -24,7 +24,7 @@ lint = [
 ]
 
 [project.scripts]
-mcp-behave-server = "behave_mcp.server:main"
+mcp-server-behave = "behave_mcp.server:main"
 
 [build-system]
 requires = ["setuptools>=68"]

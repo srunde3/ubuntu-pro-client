@@ -137,7 +137,7 @@ def test_resolve_repo_root_invalid(tmp_path):
 
 def test_detect_repo_root_walks_up_to_features_and_tox(tmp_path):
     repo = make_repo_with_feature(tmp_path, rel=None)
-    nested = repo / "tools" / "mcp-behave-server" / "behave_mcp"
+    nested = repo / "tools" / "mcp_server_behave" / "behave_mcp"
     nested.mkdir(parents=True)
     workspace = LocalWorkspace()
     assert (
