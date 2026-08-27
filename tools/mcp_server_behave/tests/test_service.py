@@ -2,7 +2,12 @@ import json
 from pathlib import Path
 
 import pytest
-from conftest import FakeWorkspace, make_repo_with_feature
+from conftest import (
+    FakeLauncher,
+    FakeProcessHandle,
+    FakeWorkspace,
+    make_repo_with_feature,
+)
 
 from behave_mcp import domain
 from behave_mcp.adapters import (
@@ -18,47 +23,6 @@ from behave_mcp.service import (
     BehaveServiceError,
     UnknownJobError,
 )
-
-
-class FakeHandle:
-    def __init__(self, returncode=None, pid=4242):
-        self.returncode = returncode
-        self.pid = pid
-        self.closed = False
-        self.terminated = False
-
-    def poll(self):
-        return self.returncode
-
-    def close(self):
-        self.closed = True
-
-    def terminate(self):
-        self.terminated = True
-
-
-class FakeLauncher:
-    def __init__(self, handle=None, error=None, alive_pids=None):
-        self.calls = []
-        self._handle = handle if handle is not None else FakeHandle()
-        self._error = error
-        self._alive_pids = set(alive_pids) if alive_pids else set()
-
-    def launch(self, command, cwd, env, stdout_log_path):
-        self.calls.append(
-            {
-                "command": command,
-                "cwd": cwd,
-                "env": env,
-                "stdout_log_path": stdout_log_path,
-            }
-        )
-        if self._error is not None:
-            raise self._error
-        return self._handle
-
-    def is_pid_alive(self, pid):
-        return pid in self._alive_pids
 
 
 def _settings(*, allow_cloud=False, max_parallel_jobs=1) -> Settings:
@@ -433,7 +397,7 @@ def test_start_scenario_fails_fast_when_capacity_reached(tmp_path):
     repo_root = make_repo_with_feature(tmp_path, "features/cli/attach.feature")
     registry = InMemoryJobRegistry()
     ids = iter(["job1", "job2"])
-    launcher = FakeLauncher(handle=FakeHandle(returncode=None))
+    launcher = FakeLauncher(handle=FakeProcessHandle(returncode=None))
     service = _make_service(
         FakeWorkspace(repo_root=repo_root, log_dir=tmp_path),
         settings=_settings(max_parallel_jobs=1),
@@ -513,7 +477,7 @@ def test_wait_for_completion_running_to_completed(tmp_path):
     report = tmp_path / f"{job_id}_report.json"
     metadata = tmp_path / f"{job_id}_meta.json"
     stdout_log.write_text("line1\nline2\n", encoding="utf-8")
-    handle = FakeHandle(returncode=None)
+    handle = FakeProcessHandle(returncode=None)
     registry.register(
         job_id,
         Job(
@@ -573,7 +537,7 @@ def test_wait_for_completion_missing_report_fallback(tmp_path):
     job_id = "job54321"
     stdout_log = tmp_path / f"{job_id}_stdout.log"
     stdout_log.write_text("setup failed\n", encoding="utf-8")
-    handle = FakeHandle(returncode=2)
+    handle = FakeProcessHandle(returncode=2)
     registry.register(
         job_id,
         Job(
@@ -601,7 +565,7 @@ def test_wait_for_completion_timeout(tmp_path):
     job_id = "jobtimeout"
     stdout_log = tmp_path / f"{job_id}_stdout.log"
     stdout_log.write_text("still running\n", encoding="utf-8")
-    handle = FakeHandle(returncode=None)
+    handle = FakeProcessHandle(returncode=None)
     registry.register(
         job_id,
         Job(
@@ -634,7 +598,7 @@ def test_completed_job_remains_in_registry_and_reemits_events(tmp_path):
     job_id = "jobkeep"
     stdout_log = tmp_path / f"{job_id}_stdout.log"
     stdout_log.write_text("done\n", encoding="utf-8")
-    handle = FakeHandle(returncode=0)
+    handle = FakeProcessHandle(returncode=0)
     registry.register(
         job_id,
         Job(
@@ -938,7 +902,7 @@ def test_list_jobs_merges_in_memory_and_disk_only(tmp_path):
         running_job_id,
         Job(
             job_id=running_job_id,
-            process_handle=FakeHandle(returncode=None, pid=111),
+            process_handle=FakeProcessHandle(returncode=None, pid=111),
             stdout_log=stdout_running,
             json_report=tmp_path / f"{running_job_id}_report.json",
             metadata=tmp_path / f"{running_job_id}_meta.json",
@@ -1074,7 +1038,7 @@ def test_summarize_scenario_results_groups_by_release_and_machine_type(
     tmp_path,
 ):
     repo_root = _make_repo_with_outline(tmp_path)
-    handle = FakeHandle(returncode=0)
+    handle = FakeProcessHandle(returncode=0)
     launcher = FakeLauncher(handle=handle)
     registry = InMemoryJobRegistry()
     service = _make_service(

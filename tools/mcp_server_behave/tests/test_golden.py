@@ -6,7 +6,7 @@ per-log-dir index, plus the JSON key ordering of tool response payloads.
 
 import json
 
-from conftest import FakeWorkspace
+from conftest import FakeLauncher, FakeProcessHandle, FakeWorkspace
 
 from behave_mcp.adapters import (
     InMemoryJobRegistry,
@@ -53,26 +53,12 @@ def _service(tmp_path, registry) -> BehaveService:
         feature_catalog=LocalFeatureCatalog(),
         artifact_store=LocalArtifactStore(),
         registry=registry,
-        launcher=None,
+        launcher=FakeLauncher(),
         monotonic=lambda: 0.0,
         sleep=lambda seconds: None,
         now_utc=lambda: "T0",
         new_job_id=lambda: "job0001",
     )
-
-
-class _Handle:
-    def __init__(self, returncode):
-        self.returncode = returncode
-
-    def poll(self):
-        return self.returncode
-
-    def close(self):
-        pass
-
-    def terminate(self):
-        pass
 
 
 def _register(registry, tmp_path, job_id, handle, report=None):
@@ -118,7 +104,7 @@ def test_completed_with_summary_key_order(tmp_path):
         ),
         encoding="utf-8",
     )
-    _register(registry, tmp_path, job_id, _Handle(0), report=report)
+    _register(registry, tmp_path, job_id, FakeProcessHandle(0), report=report)
 
     payload = (
         _service(tmp_path, registry)
@@ -145,7 +131,7 @@ def test_completed_fallback_key_order(tmp_path):
     registry = InMemoryJobRegistry()
     job_id = "job0001"
     (tmp_path / f"{job_id}_stdout.log").write_text("boom\n", encoding="utf-8")
-    _register(registry, tmp_path, job_id, _Handle(2))
+    _register(registry, tmp_path, job_id, FakeProcessHandle(2))
 
     payload = (
         _service(tmp_path, registry)
@@ -173,7 +159,7 @@ def test_timeout_key_order(tmp_path):
     (tmp_path / f"{job_id}_stdout.log").write_text(
         "running\n", encoding="utf-8"
     )
-    _register(registry, tmp_path, job_id, _Handle(None))
+    _register(registry, tmp_path, job_id, FakeProcessHandle(None))
 
     values = iter([0.0, 1.1])
     service = BehaveService(
@@ -183,7 +169,7 @@ def test_timeout_key_order(tmp_path):
         feature_catalog=LocalFeatureCatalog(),
         artifact_store=LocalArtifactStore(),
         registry=registry,
-        launcher=None,
+        launcher=FakeLauncher(),
         monotonic=lambda: next(values),
         sleep=lambda seconds: None,
         now_utc=lambda: "T0",

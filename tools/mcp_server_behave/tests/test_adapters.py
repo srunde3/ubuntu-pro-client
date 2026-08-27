@@ -1,7 +1,7 @@
 import subprocess
 
 import pytest
-from conftest import make_repo_with_feature
+from conftest import FakeProcessHandle, make_repo_with_feature
 
 import behave_mcp.adapters as adapters_module
 from behave_mcp.adapters import (
@@ -185,19 +185,6 @@ def test_subprocess_env_forwards_all(monkeypatch):
 # ---- PopenLauncher ----
 
 
-class _FakeProcess:
-    def __init__(self):
-        self.returncode = None
-        self.terminated = False
-        self.pid = 4321
-
-    def poll(self):
-        return self.returncode
-
-    def terminate(self):
-        self.terminated = True
-
-
 def test_launcher_success(tmp_path, monkeypatch):
     calls = {}
 
@@ -208,7 +195,7 @@ def test_launcher_success(tmp_path, monkeypatch):
         calls["stdout"] = stdout
         calls["stderr"] = stderr
         calls["text"] = text
-        return _FakeProcess()
+        return FakeProcessHandle(pid=4321)
 
     monkeypatch.setattr(adapters_module.subprocess, "Popen", fake_popen)
     launcher = PopenLauncher()
@@ -270,20 +257,6 @@ def test_is_pid_alive_false_for_nonexistent_pid():
 # ---- InMemoryJobRegistry ----
 
 
-class _Handle:
-    def __init__(self, returncode):
-        self._returncode = returncode
-
-    def poll(self):
-        return self._returncode
-
-    def close(self):
-        pass
-
-    def terminate(self):
-        pass
-
-
 def _job(job_id, tmp_path, handle=None, reserved=False) -> Job:
     return Job(
         job_id=job_id,
@@ -310,7 +283,9 @@ def test_registry_try_reserve_respects_capacity(tmp_path):
 
 def test_registry_counts_running_processes(tmp_path):
     registry = InMemoryJobRegistry()
-    registry.register("a", _job("a", tmp_path, handle=_Handle(None)))
+    registry.register(
+        "a", _job("a", tmp_path, handle=FakeProcessHandle(returncode=None))
+    )
 
     result = registry.try_reserve(_job("b", tmp_path, reserved=True), 1)
     assert result.reserved is False
@@ -319,7 +294,9 @@ def test_registry_counts_running_processes(tmp_path):
 
 def test_registry_ignores_completed_processes(tmp_path):
     registry = InMemoryJobRegistry()
-    registry.register("a", _job("a", tmp_path, handle=_Handle(0)))
+    registry.register(
+        "a", _job("a", tmp_path, handle=FakeProcessHandle(returncode=0))
+    )
 
     result = registry.try_reserve(_job("b", tmp_path, reserved=True), 1)
     assert result.reserved is True

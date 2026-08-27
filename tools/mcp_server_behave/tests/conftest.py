@@ -38,33 +38,92 @@ def make_repo_with_feature(
     return repo_root
 
 
+class FakeProcessHandle:
+    """Fake process handle: doubles as a bare ``subprocess.Popen`` return
+    value (``PopenLauncher`` tests) and as a ``ProcessHandle`` port
+    implementation (``Job.process_handle`` in service/registry tests)."""
+
+    def __init__(self, returncode=None, pid=4242):
+        self.returncode = returncode
+        self.pid = pid
+        self.closed = False
+        self.terminated = False
+
+    def poll(self):
+        return self.returncode
+
+    def close(self):
+        self.closed = True
+
+    def terminate(self):
+        self.terminated = True
+
+
+class FakeLauncher:
+    """A ``ProcessLauncher``-shaped test double usable across test files."""
+
+    def __init__(
+        self,
+        handle: FakeProcessHandle | None = None,
+        error: Exception | None = None,
+        alive_pids: set[int] | None = None,
+    ) -> None:
+        self.calls: list[dict] = []
+        self._handle = handle if handle is not None else FakeProcessHandle()
+        self._error = error
+        self._alive_pids = set(alive_pids) if alive_pids else set()
+
+    def launch(self, command, cwd, env, stdout_log_path):
+        self.calls.append(
+            {
+                "command": command,
+                "cwd": cwd,
+                "env": env,
+                "stdout_log_path": stdout_log_path,
+            }
+        )
+        if self._error is not None:
+            raise self._error
+        return self._handle
+
+    def is_pid_alive(self, pid: int) -> bool:
+        return pid in self._alive_pids
+
+
 class FakeWorkspace:
     """A ``Workspace``-shaped test double usable across test files."""
 
     def __init__(
         self,
         *,
-        repo_root=None,
-        log_dir=None,
-        env=None,
-        repo_root_error=None,
-    ):
+        repo_root: Path | None = None,
+        log_dir: Path | None = None,
+        env: dict[str, str] | None = None,
+        repo_root_error: str | None = None,
+    ) -> None:
         self._repo_root = repo_root
         self._log_dir = log_dir
         self._env = env if env is not None else {}
         self._repo_root_error = repo_root_error
 
-    def resolve_repo_root(self, override):
+    def resolve_repo_root(self, override: str | None) -> Path:
         if self._repo_root_error is not None:
             raise ValueError(self._repo_root_error)
         if override:
             return Path(override)
+        if self._repo_root is None:
+            raise ValueError(
+                "FakeWorkspace has no repo_root configured and no "
+                "override was given"
+            )
         return self._repo_root
 
-    def resolve_log_dir(self, repo_root):
+    def resolve_log_dir(self, repo_root: Path) -> Path:
+        if self._log_dir is None:
+            raise ValueError("FakeWorkspace has no log_dir configured")
         return self._log_dir
 
-    def subprocess_env(self):
+    def subprocess_env(self) -> dict[str, str]:
         return dict(self._env)
 
 
