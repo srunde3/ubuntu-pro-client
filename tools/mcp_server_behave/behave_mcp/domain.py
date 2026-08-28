@@ -5,6 +5,7 @@ inputs, and summarize behave JSON reports. Constants shared across modules
 also live here.
 """
 
+from enum import Enum
 from pathlib import Path
 from typing import Any, NamedTuple
 
@@ -17,7 +18,10 @@ from behave_mcp.messages import (
     Failure,
     FeatureCatalogEntry,
     GroupedCount,
+    JobRecord,
     ReportSummary,
+    RunStatus,
+    ScenarioStatus,
     ScenarioSummary,
 )
 from behave_mcp.parser import ALLOWED_MACHINE_TYPES
@@ -141,19 +145,29 @@ def validate_machine_types(
     return None
 
 
-class JobStatus(NamedTuple):
-    """Pure classification of a job's status from observable signals.
+class ClassifyReason(str, Enum):
+    """Machine-readable explanation for a ``classify_job_state`` outcome."""
 
-    ``reason`` is a machine-readable explanation the service layer logs but
-    never needs to unit test beyond this function's own assertions.
+    LIVE_HANDLE_RUNNING = "live_handle_running"
+    LIVE_HANDLE_EXITED = "live_handle_exited"
+    REPORT_PRESENT = "report_present"
+    PID_UNKNOWN_NO_REPORT = "pid_unknown_no_report"
+    PID_ALIVE_NO_REPORT = "pid_alive_no_report"
+    PID_DEAD_NO_REPORT = "pid_dead_no_report"
+
+
+class JobState(NamedTuple):
+    """Classification of a job's state from observable signals.
+
+    ``reason`` is a machine-readable explanation the service layer logs.
     """
 
-    status: str  # "running" | "completed" | "unknown"
+    status: RunStatus
     ok: bool | None
-    reason: str
+    reason: ClassifyReason
 
 
-def classify_job_status(
+def classify_job_state(
     *,
     has_live_handle: bool,
     returncode: int | None,
@@ -161,7 +175,7 @@ def classify_job_status(
     report_ok: bool | None,
     pid: int | None,
     pid_alive: bool,
-) -> JobStatus:
+) -> JobState:
     """Decide a job's status from process/report/pid signals.
 
     No I/O happens here -- callers gather ``report_present``/``report_ok``
@@ -170,19 +184,35 @@ def classify_job_status(
     """
     if has_live_handle:
         if returncode is None:
-            return JobStatus("running", None, "live_handle_running")
-        return JobStatus("completed", returncode == 0, "live_handle_exited")
+            return JobState(
+                RunStatus.RUNNING, None, ClassifyReason.LIVE_HANDLE_RUNNING
+            )
+        return JobState(
+            RunStatus.COMPLETED,
+            returncode == 0,
+            ClassifyReason.LIVE_HANDLE_EXITED,
+        )
 
     if report_present:
-        return JobStatus("completed", bool(report_ok), "report_present")
+        return JobState(
+            RunStatus.COMPLETED,
+            bool(report_ok),
+            ClassifyReason.REPORT_PRESENT,
+        )
 
     if pid is None:
-        return JobStatus("unknown", False, "pid_unknown_no_report")
+        return JobState(
+            RunStatus.UNKNOWN, False, ClassifyReason.PID_UNKNOWN_NO_REPORT
+        )
 
     if pid_alive:
-        return JobStatus("running", None, "pid_alive_no_report")
+        return JobState(
+            RunStatus.RUNNING, None, ClassifyReason.PID_ALIVE_NO_REPORT
+        )
 
-    return JobStatus("unknown", False, "pid_dead_no_report")
+    return JobState(
+        RunStatus.UNKNOWN, False, ClassifyReason.PID_DEAD_NO_REPORT
+    )
 
 
 def build_command(
@@ -220,31 +250,34 @@ def job_artifact_paths(log_dir: Path, job_id: str) -> JobArtifactPaths:
     )
 
 
-def scenario_status_from_steps(steps: list[dict[str, Any]]) -> str:
+_FAILING_STEP_STATUSES = frozenset({"failed", "error", "undefined"})
+
+
+def scenario_status_from_steps(steps: list[dict[str, Any]]) -> ScenarioStatus:
     statuses = {
         str(step.get("result", {}).get("status", "unknown")) for step in steps
     }
-    if statuses & {"failed", "error", "undefined"}:
-        return "failed"
+    if statuses & _FAILING_STEP_STATUSES:
+        return ScenarioStatus.FAILED
     if statuses == {"skipped"}:
-        return "skipped"
+        return ScenarioStatus.SKIPPED
     if "passed" in statuses:
-        return "passed"
-    return "unknown"
+        return ScenarioStatus.PASSED
+    return ScenarioStatus.UNKNOWN
 
 
 _SCENARIO_STATUS_MAP = {
-    "passed": "passed",
-    "failed": "failed",
-    "error": "failed",
-    "hook_error": "failed",
-    "cleanup_error": "failed",
-    "undefined": "failed",
-    "skipped": "skipped",
+    "passed": ScenarioStatus.PASSED,
+    "failed": ScenarioStatus.FAILED,
+    "error": ScenarioStatus.FAILED,
+    "hook_error": ScenarioStatus.FAILED,
+    "cleanup_error": ScenarioStatus.FAILED,
+    "undefined": ScenarioStatus.FAILED,
+    "skipped": ScenarioStatus.SKIPPED,
 }
 
 
-def scenario_status_from_element(scenario: dict[str, Any]) -> str:
+def scenario_status_from_element(scenario: dict[str, Any]) -> ScenarioStatus:
     """Classify a report scenario element into passed/failed/skipped/unknown.
 
     Prefers behave's own scenario-level ``status`` -- the JSON report
@@ -304,7 +337,7 @@ def summarize_report(report_data: list[Any]) -> ReportSummary:
             scenarios = []
 
         summary["features"]["total"] += 1
-        scenario_statuses: list[str] = []
+        scenario_statuses: list[ScenarioStatus] = []
 
         for scenario in scenarios:
             scenario_name = str(scenario.get("name", "unknown-scenario"))
@@ -329,7 +362,7 @@ def summarize_report(report_data: list[Any]) -> ReportSummary:
                     summary["steps"].get(step_status, 0) + 1
                 )
 
-                if step_status in {"failed", "error", "undefined"}:
+                if step_status in _FAILING_STEP_STATUSES:
                     error_message = str(
                         result.get("error_message", "")
                     ).strip()
@@ -343,16 +376,20 @@ def summarize_report(report_data: list[Any]) -> ReportSummary:
                         )
                     )
 
-        if any(status == "failed" for status in scenario_statuses):
-            feature_status = "failed"
-        elif scenario_statuses and all(
-            status == "skipped" for status in scenario_statuses
+        if any(
+            status == ScenarioStatus.FAILED for status in scenario_statuses
         ):
-            feature_status = "skipped"
-        elif any(status == "passed" for status in scenario_statuses):
-            feature_status = "passed"
+            feature_status = ScenarioStatus.FAILED
+        elif scenario_statuses and all(
+            status == ScenarioStatus.SKIPPED for status in scenario_statuses
+        ):
+            feature_status = ScenarioStatus.SKIPPED
+        elif any(
+            status == ScenarioStatus.PASSED for status in scenario_statuses
+        ):
+            feature_status = ScenarioStatus.PASSED
         else:
-            feature_status = "unknown"
+            feature_status = ScenarioStatus.UNKNOWN
 
         summary["features"][feature_status] = (
             summary["features"].get(feature_status, 0) + 1
@@ -362,7 +399,7 @@ def summarize_report(report_data: list[Any]) -> ReportSummary:
 
 
 def job_matches_result_filters(
-    metadata: dict[str, Any],
+    record: JobRecord,
     *,
     job_id: str,
     job_ids: set[str] | None,
@@ -371,26 +408,20 @@ def job_matches_result_filters(
     release: str | None,
     machine_type: str | None,
 ) -> bool:
-    """Return whether a job's metadata satisfies ``summarize_scenario_results``
+    """Return whether a job's record satisfies ``summarize_scenario_results``
     filters. Only ``job_ids`` inspects ``job_id`` directly; the rest read
-    fields already present in that job's ``_meta.json``.
+    fields already present in that job's record.
     """
     if job_ids is not None and job_id not in job_ids:
         return False
-    if (
-        feature_file is not None
-        and metadata.get("feature_file") != feature_file
-    ):
+    if feature_file is not None and record.feature_file != feature_file:
         return False
     if scenario_name is not None:
-        stored_name = str(metadata.get("scenario_name", ""))
-        if scenario_name.lower() not in stored_name.lower():
+        if scenario_name.lower() not in record.scenario_name.lower():
             return False
-    if release is not None and release not in (metadata.get("releases") or []):
+    if release is not None and release not in record.releases:
         return False
-    if machine_type is not None and machine_type not in (
-        metadata.get("machine_types") or []
-    ):
+    if machine_type is not None and machine_type not in record.machine_types:
         return False
     return True
 
@@ -500,7 +531,7 @@ def job_failures_from_report(
                 step_name = str(step.get("name", "unknown-step"))
                 result = step.get("result", {})
                 step_status = str(result.get("status", "unknown"))
-                if step_status not in {"failed", "error", "undefined"}:
+                if step_status not in _FAILING_STEP_STATUSES:
                     continue
                 error_message = str(result.get("error_message", "")).strip()
                 failures.append(

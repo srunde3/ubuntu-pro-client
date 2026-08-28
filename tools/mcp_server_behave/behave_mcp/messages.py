@@ -1,6 +1,7 @@
 """Typed request/response DTOs for the behave MCP server."""
 
-from typing import Annotated, Any, Literal, Union
+from enum import Enum
+from typing import Annotated, Literal, Union
 
 from pydantic import BaseModel, Field
 
@@ -74,6 +75,49 @@ class Artifacts(BaseModel):
     stdout_log: str
     json_report: str
     metadata: str
+
+
+class JobStatus(str, Enum):
+    """Persisted lifecycle status of a behave job."""
+
+    STARTED = "started"
+    COMPLETED = "completed"
+
+
+class RunStatus(str, Enum):
+    """Derived run status of a behave job."""
+
+    RUNNING = "running"
+    COMPLETED = "completed"
+    UNKNOWN = "unknown"
+
+
+class ScenarioStatus(str, Enum):
+    """Classified outcome of a scenario or feature in a behave report."""
+
+    PASSED = "passed"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+    UNKNOWN = "unknown"
+
+
+class JobRecord(BaseModel):
+    """Persisted metadata for one behave job."""
+
+    job_id: str = ""
+    status: JobStatus | None = None
+    started_at: str | None = None
+    completed_at: str | None = None
+    feature_file: str = ""
+    scenario_name: str = ""
+    machine_types: list[str] = []
+    releases: list[str] = []
+    command: list[str] = []
+    repo_root: str = ""
+    pid: int | None = None
+    returncode: int | None = None
+    ok: bool | None = None
+    artifacts: Artifacts | None = None
 
 
 class Capacity(BaseModel):
@@ -200,7 +244,7 @@ class TimeoutResponse(BaseModel):
     job_id: str = ""
     max_wait_seconds: int = 0
     poll_interval_seconds: float = 0.0
-    last_status: str = "running"
+    last_status: RunStatus = RunStatus.RUNNING
     recent_output: str = ""
     artifacts: Artifacts | None = None
 
@@ -223,7 +267,7 @@ class LogsResponse(BaseModel):
 class ArtifactsResponse(BaseModel):
     job_id: str = ""
     artifacts: Artifacts | None = None
-    metadata: dict[str, Any] = {}
+    metadata: JobRecord | None = None
     exists: ExistsFlags | None = None
 
 
@@ -231,7 +275,7 @@ class JobSummary(BaseModel):
     """One row in a job listing (in-memory or disk-recovered jobs)."""
 
     job_id: str = ""
-    status: str = "unknown"  # "running" | "completed" | "unknown"
+    status: RunStatus = RunStatus.UNKNOWN
     ok: bool | None = None
     returncode: int | None = None
     feature_file: str = ""

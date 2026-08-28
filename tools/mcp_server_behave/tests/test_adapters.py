@@ -11,6 +11,7 @@ from behave_mcp.adapters import (
     LocalWorkspace,
     PopenLauncher,
 )
+from behave_mcp.messages import JobRecord
 from behave_mcp.ports import Job, LogFileOpenError, ProcessStartError
 
 # ---- LocalFeatureFileReader ----
@@ -64,21 +65,22 @@ def _store(tmp_path):
     return LocalJobResultStoreFactory().bind(tmp_path)
 
 
-def test_read_metadata_missing_or_invalid(tmp_path):
+def test_read_record_missing_or_invalid(tmp_path):
     store = _store(tmp_path)
-    assert store.read_metadata("missing") == {}
+    assert store.read_record("missing") == JobRecord()
 
     (tmp_path / "bad_meta.json").write_text("not json", encoding="utf-8")
-    assert store.read_metadata("bad") == {}
+    assert store.read_record("bad") == JobRecord()
 
     (tmp_path / "list_meta.json").write_text("[]", encoding="utf-8")
-    assert store.read_metadata("list") == {}
+    assert store.read_record("list") == JobRecord()
 
 
-def test_write_and_read_metadata_roundtrip(tmp_path):
+def test_write_and_read_record_roundtrip(tmp_path):
     store = _store(tmp_path)
-    store.write_metadata("jobx", {"job_id": "x", "status": "started"})
-    assert store.read_metadata("jobx") == {"job_id": "x", "status": "started"}
+    record = JobRecord(job_id="x", status="started", pid=42)
+    store.write_record("jobx", record)
+    assert store.read_record("jobx") == record
 
 
 def test_log_tail_and_lines(tmp_path):

@@ -9,8 +9,10 @@ from collections import deque
 from pathlib import Path
 from typing import Any
 
+from pydantic import ValidationError
+
 from behave_mcp import domain, parser
-from behave_mcp.messages import Artifacts, ExistsFlags
+from behave_mcp.messages import Artifacts, ExistsFlags, JobRecord
 from behave_mcp.ports import (
     Job,
     LogFileOpenError,
@@ -197,22 +199,30 @@ class LocalJobResultStore:
             metadata=str(paths.metadata),
         )
 
-    def read_metadata(self, job_id: str) -> dict[str, Any]:
+    def read_record(self, job_id: str) -> JobRecord:
         path = self._paths(job_id).metadata
         if not path.exists():
-            return {}
+            return JobRecord()
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
-            return {}
-        return payload if isinstance(payload, dict) else {}
+            return JobRecord()
+        if not isinstance(payload, dict):
+            return JobRecord()
+        try:
+            return JobRecord.model_validate(payload)
+        except ValidationError:
+            return JobRecord()
 
-    def write_metadata(self, job_id: str, payload: dict[str, Any]) -> None:
+    def write_record(self, job_id: str, record: JobRecord) -> None:
         path = self._paths(job_id).metadata
         try:
             path.write_text(
                 json.dumps(
-                    payload, ensure_ascii=True, sort_keys=True, indent=2
+                    record.model_dump(mode="json"),
+                    ensure_ascii=True,
+                    sort_keys=True,
+                    indent=2,
                 )
                 + "\n",
                 encoding="utf-8",

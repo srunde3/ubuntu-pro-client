@@ -14,12 +14,15 @@ from behave_mcp.messages import (
     Failure,
     FindScenariosResponse,
     JobCounts,
+    JobRecord,
+    JobStatus,
     JobSummary,
     ListDimensionsResponse,
     ListFeaturesResponse,
     ListScenarioJobsResponse,
     LogsResponse,
     RunningResponse,
+    RunStatus,
     ScenarioMatch,
     StartScenarioResponse,
     StartScenarioResult,
@@ -354,21 +357,21 @@ class BehaveService:
 
         artifacts = results.artifacts(job_id)
         artifacts_dict = artifacts.model_dump(mode="json")
-        results.write_metadata(
+        results.write_record(
             job_id,
-            {
-                "job_id": job_id,
-                "status": "started",
-                "started_at": self._now_utc(),
-                "feature_file": feature_file,
-                "scenario_name": scenario_name,
-                "machine_types": machine_types,
-                "releases": releases or [],
-                "command": command,
-                "repo_root": str(resolved_repo_root),
-                "pid": handle.pid,
-                "artifacts": artifacts_dict,
-            },
+            JobRecord(
+                job_id=job_id,
+                status=JobStatus.STARTED,
+                started_at=self._now_utc(),
+                feature_file=feature_file,
+                scenario_name=scenario_name,
+                machine_types=machine_types,
+                releases=releases or [],
+                command=command,
+                repo_root=str(resolved_repo_root),
+                pid=handle.pid,
+                artifacts=artifacts,
+            ),
         )
         results.append_event(
             {
@@ -418,7 +421,7 @@ class BehaveService:
                     job_id=job_id,
                     max_wait_seconds=max_wait_seconds,
                     poll_interval_seconds=poll_interval_seconds,
-                    last_status="running",
+                    last_status=RunStatus.RUNNING,
                     recent_output=payload.recent_output,
                     artifacts=payload.artifacts,
                 )
@@ -478,7 +481,7 @@ class BehaveService:
         return ArtifactsResponse(
             job_id=job_id,
             artifacts=results.artifacts(job_id),
-            metadata=results.read_metadata(job_id),
+            metadata=results.read_record(job_id),
             exists=results.exists(job_id),
         )
 
@@ -526,8 +529,8 @@ class BehaveService:
             summaries.append(summary)
 
         summaries.sort(key=lambda summary: summary.started_at or "")
-        running = [s for s in summaries if s.status == "running"]
-        others = [s for s in summaries if s.status != "running"]
+        running = [s for s in summaries if s.status == RunStatus.RUNNING]
+        others = [s for s in summaries if s.status != RunStatus.RUNNING]
         trimmed = running + others[-limit:]
 
         logger.info(
@@ -556,11 +559,16 @@ class BehaveService:
         limit: int = domain.DEFAULT_SUMMARIZE_FAILURES_LIMIT,
         repo_root: str = "",
     ) -> SummarizeScenarioResultsResponse:
-        if status and status not in ("running", "completed", "unknown"):
-            raise BehaveServiceError(
-                "Invalid status filter: "
-                f"{status}. Allowed values: running, completed, unknown"
-            )
+        status_filter: RunStatus | None = None
+        if status:
+            try:
+                status_filter = RunStatus(status)
+            except ValueError:
+                allowed = ", ".join(s.value for s in RunStatus)
+                raise BehaveServiceError(
+                    f"Invalid status filter: {status}. "
+                    f"Allowed values: {allowed}"
+                ) from None
 
         try:
             resolved_repo_root = self._workspace.resolve_repo_root(
@@ -600,9 +608,9 @@ class BehaveService:
                 if job is None:
                     continue
 
-            metadata_payload = results.read_metadata(job_id)
+            metadata_record = results.read_record(job_id)
             if not domain.job_matches_result_filters(
-                metadata_payload,
+                metadata_record,
                 job_id=job_id,
                 job_ids=job_ids_filter,
                 feature_file=normalized_feature_file,
@@ -613,14 +621,14 @@ class BehaveService:
                 continue
 
             summary = self._job_summary(job_id, job)
-            if status and summary.status != status:
+            if status_filter is not None and summary.status != status_filter:
                 continue
 
             matched_job_ids.append(job_id)
             job_counts.total += 1
-            if summary.status == "running":
+            if summary.status == RunStatus.RUNNING:
                 job_counts.running += 1
-            elif summary.status == "completed":
+            elif summary.status == RunStatus.COMPLETED:
                 if summary.ok:
                     job_counts.completed_passed += 1
                 else:
@@ -628,17 +636,15 @@ class BehaveService:
             else:
                 job_counts.unknown += 1
 
-            if summary.status != "completed":
+            if summary.status != RunStatus.COMPLETED:
                 continue
 
             report_data = results.read_report(job_id)
             if report_data is None:
                 continue
 
-            fallback_releases = metadata_payload.get("releases") or []
-            fallback_machine_types = (
-                metadata_payload.get("machine_types") or []
-            )
+            fallback_releases = metadata_record.releases
+            fallback_machine_types = metadata_record.machine_types
 
             job_by_release, job_by_machine_type = (
                 domain.grouped_counts_from_report(
@@ -673,10 +679,10 @@ class BehaveService:
 
     def _job_summary(self, job_id: str, job: Job) -> JobSummary:
         results = self._results.bind(job.log_dir)
-        metadata_payload = results.read_metadata(job_id)
+        record = results.read_record(job_id)
 
         if job.reserved:
-            status, ok, returncode = "running", None, None
+            status, ok, returncode = RunStatus.RUNNING, None, None
         else:
             handle = job.process_handle
             returncode = handle.poll() if handle is not None else None
@@ -690,14 +696,12 @@ class BehaveService:
             )
             report_ok = None if report is None else not report.failures
 
-            pid = (
-                job.pid if job.pid is not None else metadata_payload.get("pid")
-            )
+            pid = job.pid if job.pid is not None else record.pid
             pid_alive = False
             if handle is None and pid is not None:
                 pid_alive = self._launcher.is_pid_alive(pid)
 
-            classification = domain.classify_job_status(
+            classification = domain.classify_job_state(
                 has_live_handle=handle is not None,
                 returncode=returncode,
                 report_present=report is not None,
@@ -712,12 +716,12 @@ class BehaveService:
             status=status,
             ok=ok,
             returncode=returncode,
-            feature_file=metadata_payload.get("feature_file", ""),
-            scenario_name=metadata_payload.get("scenario_name", ""),
-            machine_types=metadata_payload.get("machine_types", []),
-            releases=metadata_payload.get("releases", []),
-            started_at=metadata_payload.get("started_at"),
-            completed_at=metadata_payload.get("completed_at"),
+            feature_file=record.feature_file,
+            scenario_name=record.scenario_name,
+            machine_types=record.machine_types,
+            releases=record.releases,
+            started_at=record.started_at,
+            completed_at=record.completed_at,
             artifacts=results.artifacts(job_id),
         )
 
@@ -762,7 +766,7 @@ class BehaveService:
         if handle is None and job.pid is not None:
             pid_alive = self._launcher.is_pid_alive(job.pid)
 
-        classification = domain.classify_job_status(
+        classification = domain.classify_job_state(
             has_live_handle=handle is not None,
             returncode=returncode,
             report_present=report is not None,
@@ -780,7 +784,7 @@ class BehaveService:
                 job.pid,
             )
 
-        if classification.status == "running":
+        if classification.status == RunStatus.RUNNING:
             return RunningResponse(
                 job_id=job_id,
                 recent_output=results.log_tail(
@@ -814,18 +818,14 @@ class BehaveService:
             )
 
         artifacts_dict = artifacts.model_dump(mode="json")
-        existing_metadata = results.read_metadata(job_id)
-        existing_metadata.update(
-            {
-                "job_id": job_id,
-                "status": "completed",
-                "completed_at": self._now_utc(),
-                "returncode": returncode,
-                "ok": ok_value,
-                "artifacts": artifacts_dict,
-            }
-        )
-        results.write_metadata(job_id, existing_metadata)
+        record = results.read_record(job_id)
+        record.job_id = job_id
+        record.status = JobStatus.COMPLETED
+        record.completed_at = self._now_utc()
+        record.returncode = returncode
+        record.ok = ok_value
+        record.artifacts = artifacts
+        results.write_record(job_id, record)
         results.append_event(
             {
                 "event": "completed",
@@ -863,13 +863,13 @@ class BehaveService:
             job_id,
             log_dir,
         )
-        metadata_payload = results.read_metadata(job_id)
+        metadata_record = results.read_record(job_id)
         job = Job(
             job_id=job_id,
             process_handle=None,
             log_dir=log_dir,
             reserved=False,
-            pid=metadata_payload.get("pid"),
+            pid=metadata_record.pid,
         )
         # Cache the recovery so later calls in this process hit the
         # registry instead of re-reading disk and re-logging every poll.

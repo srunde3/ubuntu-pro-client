@@ -1,10 +1,11 @@
 """Plain unit tests for pure domain logic."""
 
 from behave_mcp import domain
+from behave_mcp.messages import JobRecord
 
 
-def test_classify_job_status_live_handle_running():
-    result = domain.classify_job_status(
+def test_classify_job_state_live_handle_running():
+    result = domain.classify_job_state(
         has_live_handle=True,
         returncode=None,
         report_present=False,
@@ -17,8 +18,8 @@ def test_classify_job_status_live_handle_running():
     assert result.reason == "live_handle_running"
 
 
-def test_classify_job_status_live_handle_exited_ok():
-    result = domain.classify_job_status(
+def test_classify_job_state_live_handle_exited_ok():
+    result = domain.classify_job_state(
         has_live_handle=True,
         returncode=0,
         report_present=False,
@@ -31,8 +32,8 @@ def test_classify_job_status_live_handle_exited_ok():
     assert result.reason == "live_handle_exited"
 
 
-def test_classify_job_status_live_handle_exited_failed():
-    result = domain.classify_job_status(
+def test_classify_job_state_live_handle_exited_failed():
+    result = domain.classify_job_state(
         has_live_handle=True,
         returncode=1,
         report_present=False,
@@ -45,8 +46,8 @@ def test_classify_job_status_live_handle_exited_failed():
     assert result.reason == "live_handle_exited"
 
 
-def test_classify_job_status_recovered_report_present_ok():
-    result = domain.classify_job_status(
+def test_classify_job_state_recovered_report_present_ok():
+    result = domain.classify_job_state(
         has_live_handle=False,
         returncode=None,
         report_present=True,
@@ -59,8 +60,8 @@ def test_classify_job_status_recovered_report_present_ok():
     assert result.reason == "report_present"
 
 
-def test_classify_job_status_recovered_report_present_failed():
-    result = domain.classify_job_status(
+def test_classify_job_state_recovered_report_present_failed():
+    result = domain.classify_job_state(
         has_live_handle=False,
         returncode=None,
         report_present=True,
@@ -73,8 +74,8 @@ def test_classify_job_status_recovered_report_present_failed():
     assert result.reason == "report_present"
 
 
-def test_classify_job_status_recovered_pid_alive_no_report():
-    result = domain.classify_job_status(
+def test_classify_job_state_recovered_pid_alive_no_report():
+    result = domain.classify_job_state(
         has_live_handle=False,
         returncode=None,
         report_present=False,
@@ -87,8 +88,8 @@ def test_classify_job_status_recovered_pid_alive_no_report():
     assert result.reason == "pid_alive_no_report"
 
 
-def test_classify_job_status_recovered_pid_dead_no_report():
-    result = domain.classify_job_status(
+def test_classify_job_state_recovered_pid_dead_no_report():
+    result = domain.classify_job_state(
         has_live_handle=False,
         returncode=None,
         report_present=False,
@@ -101,8 +102,8 @@ def test_classify_job_status_recovered_pid_dead_no_report():
     assert result.reason == "pid_dead_no_report"
 
 
-def test_classify_job_status_recovered_pid_unknown_no_report():
-    result = domain.classify_job_status(
+def test_classify_job_state_recovered_pid_unknown_no_report():
+    result = domain.classify_job_state(
         has_live_handle=False,
         returncode=None,
         report_present=False,
@@ -120,7 +121,7 @@ def test_classify_job_status_recovered_pid_unknown_no_report():
 
 def test_job_matches_result_filters_no_filters_matches_everything():
     assert domain.job_matches_result_filters(
-        {},
+        JobRecord(),
         job_id="job1",
         job_ids=None,
         feature_file=None,
@@ -131,7 +132,7 @@ def test_job_matches_result_filters_no_filters_matches_everything():
 
 
 def test_job_matches_result_filters_by_job_ids():
-    metadata: dict = {}
+    metadata = JobRecord()
     assert domain.job_matches_result_filters(
         metadata,
         job_id="job1",
@@ -153,7 +154,7 @@ def test_job_matches_result_filters_by_job_ids():
 
 
 def test_job_matches_result_filters_by_feature_file():
-    metadata = {"feature_file": "features/cli/attach.feature"}
+    metadata = JobRecord(feature_file="features/cli/attach.feature")
     assert domain.job_matches_result_filters(
         metadata,
         job_id="job1",
@@ -175,7 +176,7 @@ def test_job_matches_result_filters_by_feature_file():
 
 
 def test_job_matches_result_filters_by_scenario_name_substring():
-    metadata = {"scenario_name": "Attach invalid token"}
+    metadata = JobRecord(scenario_name="Attach invalid token")
     assert domain.job_matches_result_filters(
         metadata,
         job_id="job1",
@@ -197,7 +198,7 @@ def test_job_matches_result_filters_by_scenario_name_substring():
 
 
 def test_job_matches_result_filters_by_release_and_machine_type():
-    metadata = {"releases": ["jammy"], "machine_types": ["lxd-container"]}
+    metadata = JobRecord(releases=["jammy"], machine_types=["lxd-container"])
     assert domain.job_matches_result_filters(
         metadata,
         job_id="job1",

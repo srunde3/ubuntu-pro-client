@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, NamedTuple, Protocol
 
-from behave_mcp.messages import Artifacts, ExistsFlags
+from behave_mcp.messages import Artifacts, ExistsFlags, JobRecord
 from behave_mcp.parser import FeatureDetail
 
 
@@ -149,12 +149,12 @@ class JobResultStore(Protocol):
         """Return the artifact locations to surface to the caller."""
         ...
 
-    def read_metadata(self, job_id: str) -> dict[str, Any]:
-        """Return parsed job metadata, or an empty dict if missing/invalid."""
+    def read_record(self, job_id: str) -> JobRecord:
+        """Return the job's record, or an empty one if missing/invalid."""
         ...
 
-    def write_metadata(self, job_id: str, payload: dict[str, Any]) -> None:
-        """Persist job metadata."""
+    def write_record(self, job_id: str, record: JobRecord) -> None:
+        """Persist the job's record."""
         ...
 
     def append_event(self, event: dict[str, Any]) -> None:

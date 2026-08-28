@@ -14,15 +14,36 @@ from behave_mcp.adapters import (
     LocalJobResultStoreFactory,
 )
 from behave_mcp.config import Settings
+from behave_mcp.messages import JobRecord
 from behave_mcp.ports import Job
 from behave_mcp.service import BehaveService
 
 
-def test_write_metadata_byte_shape(tmp_path):
+def test_write_record_byte_shape(tmp_path):
     store = LocalJobResultStoreFactory().bind(tmp_path)
-    store.write_metadata("jobshape", {"b": 1, "a": 2})
+    store.write_record(
+        "jobshape", JobRecord(job_id="jobshape", status="started")
+    )
     path = tmp_path / "jobshape_meta.json"
-    assert path.read_text(encoding="utf-8") == '{\n  "a": 2,\n  "b": 1\n}\n'
+    expected = (
+        "{\n"
+        '  "artifacts": null,\n'
+        '  "command": [],\n'
+        '  "completed_at": null,\n'
+        '  "feature_file": "",\n'
+        '  "job_id": "jobshape",\n'
+        '  "machine_types": [],\n'
+        '  "ok": null,\n'
+        '  "pid": null,\n'
+        '  "releases": [],\n'
+        '  "repo_root": "",\n'
+        '  "returncode": null,\n'
+        '  "scenario_name": "",\n'
+        '  "started_at": null,\n'
+        '  "status": "started"\n'
+        "}\n"
+    )
+    assert path.read_text(encoding="utf-8") == expected
 
 
 def test_append_index_event_byte_shape(tmp_path):
