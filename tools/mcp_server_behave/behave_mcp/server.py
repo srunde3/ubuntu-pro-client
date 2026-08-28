@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from typing import Annotated
 
 from mcp.server import FastMCP
-from mcp.server.fastmcp.server import Settings
+from mcp.server.fastmcp.server import Settings as FastMCPSettings
 from pydantic import Field
 from starlette.responses import JSONResponse
 
@@ -18,7 +18,7 @@ from behave_mcp.adapters import (
     LocalWorkspace,
     PopenLauncher,
 )
-from behave_mcp.config import ConfigError, load_settings
+from behave_mcp.config import ConfigError, Settings, load_settings
 from behave_mcp.messages import (
     ArtifactsResponse,
     DescribeFeatureResponse,
@@ -31,6 +31,7 @@ from behave_mcp.messages import (
     SummarizeScenarioResultsResponse,
     WaitForCompletionResult,
 )
+from behave_mcp.ports import JobRegistry
 from behave_mcp.service import BehaveService
 
 try:
@@ -44,7 +45,7 @@ except ConfigError as exc:
 # IncompleteFieldDefinitionWarning on FastMCP() construction below.
 # Workaround for an upstream mcp bug, pinned to mcp==1.28.1 in pyproject.toml;
 # safe to drop once upgrading mcp no longer triggers the warning.
-Settings.model_rebuild()
+FastMCPSettings.model_rebuild()
 
 mcp = FastMCP(
     "Ubuntu Pro Client Behave MCP",
@@ -100,23 +101,26 @@ def _utc_timestamp() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-_workspace = LocalWorkspace()
-_feature_reader = LocalFeatureFileReader()
-_results = LocalJobResultStoreFactory()
+def create_service(
+    settings: Settings, *, registry: JobRegistry
+) -> BehaveService:
+    """Wire the production adapters into a ``BehaveService``."""
+    return BehaveService(
+        workspace=LocalWorkspace(),
+        settings=settings,
+        feature_reader=LocalFeatureFileReader(),
+        results=LocalJobResultStoreFactory(),
+        registry=registry,
+        launcher=PopenLauncher(),
+        monotonic=time.monotonic,
+        sleep=time.sleep,
+        now_utc=_utc_timestamp,
+        new_job_id=lambda: uuid.uuid4().hex[:8],
+    )
+
+
 registry = InMemoryJobRegistry()
-_launcher = PopenLauncher()
-_service = BehaveService(
-    workspace=_workspace,
-    settings=_settings,
-    feature_reader=_feature_reader,
-    results=_results,
-    registry=registry,
-    launcher=_launcher,
-    monotonic=time.monotonic,
-    sleep=time.sleep,
-    now_utc=_utc_timestamp,
-    new_job_id=lambda: uuid.uuid4().hex[:8],
-)
+_service = create_service(_settings, registry=registry)
 
 
 @mcp.custom_route("/healthz", methods=["GET"])
