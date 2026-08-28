@@ -250,31 +250,75 @@ def job_artifact_paths(log_dir: Path, job_id: str) -> JobArtifactPaths:
     )
 
 
-_FAILING_STEP_STATUSES = frozenset({"failed", "error", "undefined"})
+class BehaveStepStatus(str, Enum):
+    """A step ``result.status`` value we recognize in a behave report."""
+
+    PASSED = "passed"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+    ERROR = "error"
+    UNDEFINED = "undefined"
+
+
+class BehaveScenarioStatus(str, Enum):
+    """A scenario ``status`` value we recognize in a behave report."""
+
+    PASSED = "passed"
+    FAILED = "failed"
+    ERROR = "error"
+    HOOK_ERROR = "hook_error"
+    CLEANUP_ERROR = "cleanup_error"
+    UNDEFINED = "undefined"
+    SKIPPED = "skipped"
+
+
+_FAILING_STEP_STATUSES = frozenset(
+    {
+        BehaveStepStatus.FAILED,
+        BehaveStepStatus.ERROR,
+        BehaveStepStatus.UNDEFINED,
+    }
+)
+
+_SCENARIO_STATUS_MAP = {
+    BehaveScenarioStatus.PASSED: ScenarioStatus.PASSED,
+    BehaveScenarioStatus.FAILED: ScenarioStatus.FAILED,
+    BehaveScenarioStatus.ERROR: ScenarioStatus.FAILED,
+    BehaveScenarioStatus.HOOK_ERROR: ScenarioStatus.FAILED,
+    BehaveScenarioStatus.CLEANUP_ERROR: ScenarioStatus.FAILED,
+    BehaveScenarioStatus.UNDEFINED: ScenarioStatus.FAILED,
+    BehaveScenarioStatus.SKIPPED: ScenarioStatus.SKIPPED,
+}
+
+
+def _behave_step_status(value: Any) -> BehaveStepStatus | None:
+    """Parse a raw step status into a recognized member, else None."""
+    try:
+        return BehaveStepStatus(value)
+    except ValueError:
+        return None
+
+
+def _behave_scenario_status(value: Any) -> BehaveScenarioStatus | None:
+    """Parse a raw scenario status into a recognized member, else None."""
+    try:
+        return BehaveScenarioStatus(value)
+    except ValueError:
+        return None
 
 
 def scenario_status_from_steps(steps: list[dict[str, Any]]) -> ScenarioStatus:
     statuses = {
-        str(step.get("result", {}).get("status", "unknown")) for step in steps
+        _behave_step_status(step.get("result", {}).get("status"))
+        for step in steps
     }
     if statuses & _FAILING_STEP_STATUSES:
         return ScenarioStatus.FAILED
-    if statuses == {"skipped"}:
+    if statuses == {BehaveStepStatus.SKIPPED}:
         return ScenarioStatus.SKIPPED
-    if "passed" in statuses:
+    if BehaveStepStatus.PASSED in statuses:
         return ScenarioStatus.PASSED
     return ScenarioStatus.UNKNOWN
-
-
-_SCENARIO_STATUS_MAP = {
-    "passed": ScenarioStatus.PASSED,
-    "failed": ScenarioStatus.FAILED,
-    "error": ScenarioStatus.FAILED,
-    "hook_error": ScenarioStatus.FAILED,
-    "cleanup_error": ScenarioStatus.FAILED,
-    "undefined": ScenarioStatus.FAILED,
-    "skipped": ScenarioStatus.SKIPPED,
-}
 
 
 def scenario_status_from_element(scenario: dict[str, Any]) -> ScenarioStatus:
@@ -289,12 +333,9 @@ def scenario_status_from_element(scenario: dict[str, Any]) -> ScenarioStatus:
     infer a status from, so step-based inference alone always mis-buckets
     it as "unknown" instead of "skipped".
     """
-    reported_status = scenario.get("status")
-    if (
-        isinstance(reported_status, str)
-        and reported_status in _SCENARIO_STATUS_MAP
-    ):
-        return _SCENARIO_STATUS_MAP[reported_status]
+    behave_status = _behave_scenario_status(scenario.get("status"))
+    if behave_status is not None:
+        return _SCENARIO_STATUS_MAP[behave_status]
 
     steps = scenario.get("steps", [])
     if not isinstance(steps, list):
@@ -362,7 +403,7 @@ def summarize_report(report_data: list[Any]) -> ReportSummary:
                     summary["steps"].get(step_status, 0) + 1
                 )
 
-                if step_status in _FAILING_STEP_STATUSES:
+                if _behave_step_status(step_status) in _FAILING_STEP_STATUSES:
                     error_message = str(
                         result.get("error_message", "")
                     ).strip()
@@ -531,7 +572,9 @@ def job_failures_from_report(
                 step_name = str(step.get("name", "unknown-step"))
                 result = step.get("result", {})
                 step_status = str(result.get("status", "unknown"))
-                if step_status not in _FAILING_STEP_STATUSES:
+                if _behave_step_status(step_status) not in (
+                    _FAILING_STEP_STATUSES
+                ):
                     continue
                 error_message = str(result.get("error_message", "")).strip()
                 failures.append(
