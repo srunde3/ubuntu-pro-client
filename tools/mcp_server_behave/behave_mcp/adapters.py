@@ -10,11 +10,13 @@ from pathlib import Path
 from typing import Any
 
 from behave_mcp import domain, parser
+from behave_mcp.messages import Artifacts, ExistsFlags
 from behave_mcp.ports import (
     Job,
     LogFileOpenError,
     ProcessStartError,
     ReservationResult,
+    WriteTargets,
 )
 
 logger = logging.getLogger(__name__)
@@ -160,10 +162,43 @@ class LocalFeatureFileReader:
         return parser.discover_feature_details(repo_root)
 
 
-class LocalArtifactStore:
-    """Filesystem-backed artifact persistence and log tailing."""
+class LocalJobResultStoreFactory:
+    """Creates filesystem-backed job result stores bound to a log dir."""
 
-    def read_metadata(self, path: Path) -> dict[str, Any]:
+    def bind(self, log_dir: Path) -> "LocalJobResultStore":
+        return LocalJobResultStore(log_dir)
+
+
+class LocalJobResultStore:
+    """Filesystem-backed job results rooted at one log directory.
+
+    The ``{job_id}_*`` file layout is private here; callers address results
+    by ``job_id`` only.
+    """
+
+    def __init__(self, log_dir: Path) -> None:
+        self._log_dir = log_dir
+
+    def _paths(self, job_id: str) -> domain.JobArtifactPaths:
+        return domain.job_artifact_paths(self._log_dir, job_id)
+
+    def write_targets(self, job_id: str) -> WriteTargets:
+        paths = self._paths(job_id)
+        return WriteTargets(
+            stdout_log=paths.stdout_log, json_report=paths.json_report
+        )
+
+    def artifacts(self, job_id: str) -> Artifacts:
+        paths = self._paths(job_id)
+        return Artifacts(
+            log_dir=str(self._log_dir),
+            stdout_log=str(paths.stdout_log),
+            json_report=str(paths.json_report),
+            metadata=str(paths.metadata),
+        )
+
+    def read_metadata(self, job_id: str) -> dict[str, Any]:
+        path = self._paths(job_id).metadata
         if not path.exists():
             return {}
         try:
@@ -172,7 +207,8 @@ class LocalArtifactStore:
             return {}
         return payload if isinstance(payload, dict) else {}
 
-    def write_metadata(self, path: Path, payload: dict[str, Any]) -> None:
+    def write_metadata(self, job_id: str, payload: dict[str, Any]) -> None:
+        path = self._paths(job_id).metadata
         try:
             path.write_text(
                 json.dumps(
@@ -185,8 +221,8 @@ class LocalArtifactStore:
             # Metadata write failures should not break job execution/status.
             return
 
-    def append_index_event(self, log_dir: Path, event: dict[str, Any]) -> None:
-        index_path = log_dir / domain.JOB_INDEX_FILE_NAME
+    def append_event(self, event: dict[str, Any]) -> None:
+        index_path = self._log_dir / domain.JOB_INDEX_FILE_NAME
         try:
             with index_path.open("a", encoding="utf-8") as index_stream:
                 index_stream.write(
@@ -196,7 +232,8 @@ class LocalArtifactStore:
             # Index write failures should not break job execution/status.
             return
 
-    def tail_file(self, path: Path, lines: int) -> str:
+    def log_tail(self, job_id: str, lines: int) -> str:
+        path = self._paths(job_id).stdout_log
         if not path.exists():
             return "Waiting for output..."
 
@@ -204,7 +241,8 @@ class LocalArtifactStore:
             tail = deque(stream, maxlen=lines)
         return "".join(tail).rstrip() if tail else "Waiting for output..."
 
-    def tail_lines(self, path: Path, lines: int) -> list[str]:
+    def log_tail_lines(self, job_id: str, lines: int) -> list[str]:
+        path = self._paths(job_id).stdout_log
         if not path.exists():
             return []
 
@@ -212,7 +250,8 @@ class LocalArtifactStore:
             tail = deque(stream, maxlen=lines)
         return [line.rstrip("\n") for line in tail]
 
-    def read_report_json(self, path: Path) -> list[Any] | None:
+    def read_report(self, job_id: str) -> list[Any] | None:
+        path = self._paths(job_id).json_report
         if not path.exists():
             return None
 
@@ -226,23 +265,21 @@ class LocalArtifactStore:
 
         return report_data
 
-    def read_text_lines(self, path: Path) -> list[str] | None:
-        if not path.exists():
-            return None
-        try:
-            return path.read_text(encoding="utf-8").splitlines()
-        except OSError:
-            return None
+    def exists(self, job_id: str) -> ExistsFlags:
+        paths = self._paths(job_id)
+        return ExistsFlags(
+            stdout_log=paths.stdout_log.exists(),
+            json_report=paths.json_report.exists(),
+            metadata=paths.metadata.exists(),
+        )
 
-    def exists(self, path: Path) -> bool:
-        return path.exists()
-
-    def list_job_ids(self, log_dir: Path) -> list[str]:
-        if not log_dir.exists():
+    def list_job_ids(self) -> list[str]:
+        if not self._log_dir.exists():
             return []
-        suffix = "_meta.json"
+        suffix = domain.METADATA_SUFFIX
         return sorted(
-            path.name[: -len(suffix)] for path in log_dir.glob(f"*{suffix}")
+            path.name[: -len(suffix)]
+            for path in self._log_dir.glob(f"*{suffix}")
         )
 
 

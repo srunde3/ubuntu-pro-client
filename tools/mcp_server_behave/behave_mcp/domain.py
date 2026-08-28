@@ -10,7 +10,6 @@ from typing import Any, NamedTuple
 
 from behave_mcp import parser
 from behave_mcp.messages import (
-    Artifacts,
     Combo,
     Dimensions,
     DimensionValue,
@@ -39,6 +38,9 @@ MAX_LOG_TAIL_LINES = 2000
 DEFAULT_WAIT_TIMEOUT_SECONDS = 1800
 DEFAULT_WAIT_POLL_INTERVAL_SECONDS = 5.0
 JOB_INDEX_FILE_NAME = "index.jsonl"
+STDOUT_LOG_SUFFIX = "_stdout.log"
+JSON_REPORT_SUFFIX = "_report.json"
+METADATA_SUFFIX = "_meta.json"
 DEFAULT_MAX_PARALLEL_JOBS = 1
 DEFAULT_JOB_LIST_LIMIT = 20
 MAX_JOB_LIST_LIMIT = 500
@@ -201,18 +203,20 @@ def build_command(
     return command
 
 
-def artifacts_payload(
-    *,
-    log_dir: Path,
-    stdout_log: Path,
-    json_report: Path,
-    metadata: Path,
-) -> Artifacts:
-    return Artifacts(
-        log_dir=str(log_dir),
-        stdout_log=str(stdout_log),
-        json_report=str(json_report),
-        metadata=str(metadata),
+class JobArtifactPaths(NamedTuple):
+    """The three on-disk artifact paths a job owns, derived from its id."""
+
+    stdout_log: Path
+    json_report: Path
+    metadata: Path
+
+
+def job_artifact_paths(log_dir: Path, job_id: str) -> JobArtifactPaths:
+    """Return a job's artifact paths -- the single naming-convention source."""
+    return JobArtifactPaths(
+        stdout_log=log_dir / f"{job_id}{STDOUT_LOG_SUFFIX}",
+        json_report=log_dir / f"{job_id}{JSON_REPORT_SUFFIX}",
+        metadata=log_dir / f"{job_id}{METADATA_SUFFIX}",
     )
 
 

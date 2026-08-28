@@ -1,7 +1,6 @@
 """Application service orchestrating behave jobs via injected ports."""
 
 import logging
-from pathlib import Path
 from typing import Any, Callable
 
 from behave_mcp import domain, parser
@@ -12,7 +11,6 @@ from behave_mcp.messages import (
     CapacityExceededResponse,
     CompletedResponse,
     DescribeFeatureResponse,
-    ExistsFlags,
     Failure,
     FindScenariosResponse,
     JobCounts,
@@ -30,10 +28,10 @@ from behave_mcp.messages import (
     WaitForCompletionResult,
 )
 from behave_mcp.ports import (
-    ArtifactStore,
     FeatureFileReader,
     Job,
     JobRegistry,
+    JobResultStoreFactory,
     LogFileOpenError,
     ProcessLauncher,
     ProcessStartError,
@@ -78,7 +76,7 @@ class BehaveService:
         workspace: Workspace,
         settings: Settings,
         feature_reader: FeatureFileReader,
-        artifact_store: ArtifactStore,
+        results: JobResultStoreFactory,
         registry: JobRegistry,
         launcher: ProcessLauncher,
         monotonic: Callable[[], float],
@@ -89,7 +87,7 @@ class BehaveService:
         self._workspace = workspace
         self._settings = settings
         self._feature_reader = feature_reader
-        self._artifact_store = artifact_store
+        self._results = results
         self._registry = registry
         self._launcher = launcher
         self._monotonic = monotonic
@@ -290,17 +288,14 @@ class BehaveService:
             raise BehaveServiceError(machine_type_error)
 
         log_dir = self._workspace.resolve_log_dir(resolved_repo_root)
+        results = self._results.bind(log_dir)
         job_id = self._new_job_id()
-        json_report_path = log_dir / f"{job_id}_report.json"
-        stdout_path = log_dir / f"{job_id}_stdout.log"
-        metadata_path = log_dir / f"{job_id}_meta.json"
+        write_targets = results.write_targets(job_id)
 
         reserved_job = Job(
             job_id=job_id,
             process_handle=None,
-            stdout_log=stdout_path,
-            json_report=json_report_path,
-            metadata=metadata_path,
+            log_dir=log_dir,
             reserved=True,
         )
         reservation = self._registry.try_reserve(
@@ -324,13 +319,16 @@ class BehaveService:
             machine_types,
             scenario_name,
             releases,
-            json_report_path,
+            write_targets.json_report,
         )
         env = self._workspace.subprocess_env()
 
         try:
             handle = self._launcher.launch(
-                command, str(resolved_repo_root), env, stdout_path
+                command,
+                str(resolved_repo_root),
+                env,
+                write_targets.stdout_log,
             )
         except LogFileOpenError as exc:
             self._registry.release(job_id)
@@ -348,23 +346,16 @@ class BehaveService:
             Job(
                 job_id=job_id,
                 process_handle=handle,
-                stdout_log=stdout_path,
-                json_report=json_report_path,
-                metadata=metadata_path,
+                log_dir=log_dir,
                 reserved=False,
                 pid=handle.pid,
             ),
         )
 
-        artifacts = domain.artifacts_payload(
-            log_dir=log_dir,
-            stdout_log=stdout_path,
-            json_report=json_report_path,
-            metadata=metadata_path,
-        )
+        artifacts = results.artifacts(job_id)
         artifacts_dict = artifacts.model_dump(mode="json")
-        self._artifact_store.write_metadata(
-            metadata_path,
+        results.write_metadata(
+            job_id,
             {
                 "job_id": job_id,
                 "status": "started",
@@ -379,8 +370,7 @@ class BehaveService:
                 "artifacts": artifacts_dict,
             },
         )
-        self._artifact_store.append_index_event(
-            log_dir,
+        results.append_event(
             {
                 "event": "started",
                 "timestamp": self._now_utc(),
@@ -457,11 +447,8 @@ class BehaveService:
             if job is None:
                 raise UnknownJobError(job_id)
 
-        stdout_log = job.stdout_log
-        json_report = job.json_report
-        metadata = job.metadata
-        log_dir = stdout_log.parent
-        if not self._artifact_store.exists(stdout_log):
+        results = self._results.bind(job.log_dir)
+        if not results.exists(job_id).stdout_log:
             raise BehaveServiceError(
                 f"No log file exists for job_id: {job_id}"
             )
@@ -470,14 +457,9 @@ class BehaveService:
             job_id=job_id,
             lines=lines,
             lines_clamped=lines_clamped,
-            output=self._artifact_store.tail_file(stdout_log, lines),
-            output_lines=self._artifact_store.tail_lines(stdout_log, lines),
-            artifacts=domain.artifacts_payload(
-                log_dir=log_dir,
-                stdout_log=stdout_log,
-                json_report=json_report,
-                metadata=metadata,
-            ),
+            output=results.log_tail(job_id, lines),
+            output_lines=results.log_tail_lines(job_id, lines),
+            artifacts=results.artifacts(job_id),
         )
 
     def get_artifacts(
@@ -492,25 +474,12 @@ class BehaveService:
             if job is None:
                 raise UnknownJobError(job_id)
 
-        stdout_log = job.stdout_log
-        json_report = job.json_report
-        metadata = job.metadata
-        log_dir = stdout_log.parent
-
+        results = self._results.bind(job.log_dir)
         return ArtifactsResponse(
             job_id=job_id,
-            artifacts=domain.artifacts_payload(
-                log_dir=log_dir,
-                stdout_log=stdout_log,
-                json_report=json_report,
-                metadata=metadata,
-            ),
-            metadata=self._artifact_store.read_metadata(metadata),
-            exists=ExistsFlags(
-                stdout_log=self._artifact_store.exists(stdout_log),
-                json_report=self._artifact_store.exists(json_report),
-                metadata=self._artifact_store.exists(metadata),
-            ),
+            artifacts=results.artifacts(job_id),
+            metadata=results.read_metadata(job_id),
+            exists=results.exists(job_id),
         )
 
     def list_jobs(
@@ -532,9 +501,10 @@ class BehaveService:
         limit_clamped = limit > domain.MAX_JOB_LIST_LIMIT
         limit = min(limit, domain.MAX_JOB_LIST_LIMIT)
         log_dir = self._workspace.resolve_log_dir(resolved_repo_root)
+        results = self._results.bind(log_dir)
 
         in_memory_jobs = {job.job_id: job for job in self._registry.snapshot()}
-        disk_job_ids = set(self._artifact_store.list_job_ids(log_dir))
+        disk_job_ids = set(results.list_job_ids())
         disk_only_ids = disk_job_ids - set(in_memory_jobs)
 
         summaries: list[JobSummary] = []
@@ -613,8 +583,9 @@ class BehaveService:
         limit = min(limit, domain.MAX_SUMMARIZE_FAILURES_LIMIT)
 
         log_dir = self._workspace.resolve_log_dir(resolved_repo_root)
+        results = self._results.bind(log_dir)
         in_memory_jobs = {job.job_id: job for job in self._registry.snapshot()}
-        disk_job_ids = set(self._artifact_store.list_job_ids(log_dir))
+        disk_job_ids = set(results.list_job_ids())
 
         job_counts = JobCounts()
         by_release: dict[str, dict[str, Any]] = {}
@@ -629,7 +600,7 @@ class BehaveService:
                 if job is None:
                     continue
 
-            metadata_payload = self._artifact_store.read_metadata(job.metadata)
+            metadata_payload = results.read_metadata(job_id)
             if not domain.job_matches_result_filters(
                 metadata_payload,
                 job_id=job_id,
@@ -660,9 +631,7 @@ class BehaveService:
             if summary.status != "completed":
                 continue
 
-            report_data = self._artifact_store.read_report_json(
-                job.json_report
-            )
+            report_data = results.read_report(job_id)
             if report_data is None:
                 continue
 
@@ -703,11 +672,8 @@ class BehaveService:
         )
 
     def _job_summary(self, job_id: str, job: Job) -> JobSummary:
-        stdout_log = job.stdout_log
-        json_report = job.json_report
-        metadata_path = job.metadata
-        log_dir = stdout_log.parent
-        metadata_payload = self._artifact_store.read_metadata(metadata_path)
+        results = self._results.bind(job.log_dir)
+        metadata_payload = results.read_metadata(job_id)
 
         if job.reserved:
             status, ok, returncode = "running", None, None
@@ -716,9 +682,7 @@ class BehaveService:
             returncode = handle.poll() if handle is not None else None
             report_data = None
             if handle is None or returncode is not None:
-                report_data = self._artifact_store.read_report_json(
-                    json_report
-                )
+                report_data = results.read_report(job_id)
             report = (
                 domain.summarize_report(report_data)
                 if report_data is not None
@@ -754,12 +718,7 @@ class BehaveService:
             releases=metadata_payload.get("releases", []),
             started_at=metadata_payload.get("started_at"),
             completed_at=metadata_payload.get("completed_at"),
-            artifacts=domain.artifacts_payload(
-                log_dir=log_dir,
-                stdout_log=stdout_log,
-                json_report=json_report,
-                metadata=metadata_path,
-            ),
+            artifacts=results.artifacts(job_id),
         )
 
     def _status_payload(
@@ -776,30 +735,22 @@ class BehaveService:
                 raise UnknownJobError(job_id)
 
         handle = job.process_handle
-        stdout_log = job.stdout_log
-        json_report = job.json_report
-        metadata = job.metadata
-        log_dir = stdout_log.parent
+        results = self._results.bind(job.log_dir)
 
         returncode = handle.poll() if handle is not None else None
         if handle is not None and returncode is None:
             return RunningResponse(
                 job_id=job_id,
-                recent_output=self._artifact_store.tail_file(
-                    stdout_log, domain.DEFAULT_RUNNING_TAIL_LINES
+                recent_output=results.log_tail(
+                    job_id, domain.DEFAULT_RUNNING_TAIL_LINES
                 ),
-                artifacts=domain.artifacts_payload(
-                    log_dir=log_dir,
-                    stdout_log=stdout_log,
-                    json_report=json_report,
-                    metadata=metadata,
-                ),
+                artifacts=results.artifacts(job_id),
             )
 
         if handle is not None:
             handle.close()
 
-        report_data = self._artifact_store.read_report_json(json_report)
+        report_data = results.read_report(job_id)
         report = (
             domain.summarize_report(report_data)
             if report_data is not None
@@ -832,24 +783,14 @@ class BehaveService:
         if classification.status == "running":
             return RunningResponse(
                 job_id=job_id,
-                recent_output=self._artifact_store.tail_file(
-                    stdout_log, domain.DEFAULT_RUNNING_TAIL_LINES
+                recent_output=results.log_tail(
+                    job_id, domain.DEFAULT_RUNNING_TAIL_LINES
                 ),
-                artifacts=domain.artifacts_payload(
-                    log_dir=log_dir,
-                    stdout_log=stdout_log,
-                    json_report=json_report,
-                    metadata=metadata,
-                ),
+                artifacts=results.artifacts(job_id),
             )
 
         ok_value = bool(classification.ok)
-        artifacts = domain.artifacts_payload(
-            log_dir=log_dir,
-            stdout_log=stdout_log,
-            json_report=json_report,
-            metadata=metadata,
-        )
+        artifacts = results.artifacts(job_id)
         if report is None:
             response = CompletedResponse(
                 ok=ok_value,
@@ -858,8 +799,8 @@ class BehaveService:
                 artifacts=artifacts,
                 summary=None,
                 failures=[],
-                recent_output=self._artifact_store.tail_file(
-                    stdout_log, domain.DEFAULT_RUNNING_TAIL_LINES
+                recent_output=results.log_tail(
+                    job_id, domain.DEFAULT_RUNNING_TAIL_LINES
                 ),
             )
         else:
@@ -873,7 +814,7 @@ class BehaveService:
             )
 
         artifacts_dict = artifacts.model_dump(mode="json")
-        existing_metadata = self._artifact_store.read_metadata(metadata)
+        existing_metadata = results.read_metadata(job_id)
         existing_metadata.update(
             {
                 "job_id": job_id,
@@ -884,9 +825,8 @@ class BehaveService:
                 "artifacts": artifacts_dict,
             }
         )
-        self._artifact_store.write_metadata(metadata, existing_metadata)
-        self._artifact_store.append_index_event(
-            log_dir,
+        results.write_metadata(job_id, existing_metadata)
+        results.append_event(
             {
                 "event": "completed",
                 "timestamp": self._now_utc(),
@@ -906,14 +846,9 @@ class BehaveService:
             repo_root_override
         )
         log_dir = self._workspace.resolve_log_dir(resolved_repo_root)
-        stdout_log = log_dir / f"{job_id}_stdout.log"
-        json_report = log_dir / f"{job_id}_report.json"
-        metadata = log_dir / f"{job_id}_meta.json"
-        if (
-            not self._artifact_store.exists(stdout_log)
-            and not self._artifact_store.exists(json_report)
-            and not self._artifact_store.exists(metadata)
-        ):
+        results = self._results.bind(log_dir)
+        exists = results.exists(job_id)
+        if not (exists.stdout_log or exists.json_report or exists.metadata):
             logger.warning(
                 "job %s not tracked in memory and no disk artifacts found "
                 "under %s",
@@ -928,23 +863,11 @@ class BehaveService:
             job_id,
             log_dir,
         )
-        metadata_payload = self._artifact_store.read_metadata(metadata)
-        if metadata_payload:
-            metadata_artifacts = metadata_payload.get("artifacts", {})
-            stdout_log = Path(
-                metadata_artifacts.get("stdout_log", str(stdout_log))
-            )
-            json_report = Path(
-                metadata_artifacts.get("json_report", str(json_report))
-            )
-            metadata = Path(metadata_artifacts.get("metadata", str(metadata)))
-
+        metadata_payload = results.read_metadata(job_id)
         job = Job(
             job_id=job_id,
             process_handle=None,
-            stdout_log=stdout_log,
-            json_report=json_report,
-            metadata=metadata,
+            log_dir=log_dir,
             reserved=False,
             pid=metadata_payload.get("pid"),
         )

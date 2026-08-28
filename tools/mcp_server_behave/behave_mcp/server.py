@@ -13,8 +13,8 @@ from starlette.responses import JSONResponse
 from behave_mcp import domain
 from behave_mcp.adapters import (
     InMemoryJobRegistry,
-    LocalArtifactStore,
     LocalFeatureFileReader,
+    LocalJobResultStoreFactory,
     LocalWorkspace,
     PopenLauncher,
 )
@@ -102,14 +102,14 @@ def _utc_timestamp() -> str:
 
 _workspace = LocalWorkspace()
 _feature_reader = LocalFeatureFileReader()
-_artifact_store = LocalArtifactStore()
+_results = LocalJobResultStoreFactory()
 registry = InMemoryJobRegistry()
 _launcher = PopenLauncher()
 _service = BehaveService(
     workspace=_workspace,
     settings=_settings,
     feature_reader=_feature_reader,
-    artifact_store=_artifact_store,
+    results=_results,
     registry=registry,
     launcher=_launcher,
     monotonic=time.monotonic,

@@ -12,8 +12,8 @@ from conftest import (
 from behave_mcp import domain
 from behave_mcp.adapters import (
     InMemoryJobRegistry,
-    LocalArtifactStore,
     LocalFeatureFileReader,
+    LocalJobResultStoreFactory,
 )
 from behave_mcp.config import Settings
 from behave_mcp.ports import Job, LogFileOpenError, ProcessStartError
@@ -49,7 +49,7 @@ def _make_service(
         workspace=workspace,
         settings=settings if settings is not None else _settings(),
         feature_reader=LocalFeatureFileReader(),
-        artifact_store=LocalArtifactStore(),
+        results=LocalJobResultStoreFactory(),
         registry=registry if registry is not None else InMemoryJobRegistry(),
         launcher=launcher if launcher is not None else FakeLauncher(),
         monotonic=monotonic if monotonic is not None else (lambda: 0.0),
@@ -473,7 +473,6 @@ def test_wait_for_completion_running_to_completed(tmp_path):
     job_id = "job12345"
     stdout_log = tmp_path / f"{job_id}_stdout.log"
     report = tmp_path / f"{job_id}_report.json"
-    metadata = tmp_path / f"{job_id}_meta.json"
     stdout_log.write_text("line1\nline2\n", encoding="utf-8")
     handle = FakeProcessHandle(returncode=None)
     registry.register(
@@ -481,9 +480,7 @@ def test_wait_for_completion_running_to_completed(tmp_path):
         Job(
             job_id=job_id,
             process_handle=handle,
-            stdout_log=stdout_log,
-            json_report=report,
-            metadata=metadata,
+            log_dir=tmp_path,
         ),
     )
 
@@ -541,9 +538,7 @@ def test_wait_for_completion_missing_report_fallback(tmp_path):
         Job(
             job_id=job_id,
             process_handle=handle,
-            stdout_log=stdout_log,
-            json_report=tmp_path / "missing.json",
-            metadata=tmp_path / f"{job_id}_meta.json",
+            log_dir=tmp_path,
         ),
     )
     service = _make_service(
@@ -569,9 +564,7 @@ def test_wait_for_completion_timeout(tmp_path):
         Job(
             job_id=job_id,
             process_handle=handle,
-            stdout_log=stdout_log,
-            json_report=tmp_path / "missing.json",
-            metadata=tmp_path / f"{job_id}_meta.json",
+            log_dir=tmp_path,
         ),
     )
     monotonic_values = iter([0.0, 0.1, 0.6, 1.1])
@@ -602,9 +595,7 @@ def test_completed_job_remains_in_registry_and_reemits_events(tmp_path):
         Job(
             job_id=job_id,
             process_handle=handle,
-            stdout_log=stdout_log,
-            json_report=tmp_path / f"{job_id}_report.json",
-            metadata=tmp_path / f"{job_id}_meta.json",
+            log_dir=tmp_path,
         ),
     )
     service = _make_service(
@@ -641,9 +632,7 @@ def test_get_logs_returns_tail(tmp_path):
         Job(
             job_id=job_id,
             process_handle=None,
-            stdout_log=stdout_log,
-            json_report=tmp_path / "none.json",
-            metadata=tmp_path / f"{job_id}_meta.json",
+            log_dir=tmp_path,
         ),
     )
     service = _make_service(
@@ -668,9 +657,7 @@ def test_get_logs_clamps_lines_above_max(tmp_path):
         Job(
             job_id=job_id,
             process_handle=None,
-            stdout_log=stdout_log,
-            json_report=tmp_path / "none.json",
-            metadata=tmp_path / f"{job_id}_meta.json",
+            log_dir=tmp_path,
         ),
     )
     service = _make_service(
@@ -729,9 +716,7 @@ def test_get_artifacts_returns_paths_and_metadata(tmp_path):
         Job(
             job_id=job_id,
             process_handle=None,
-            stdout_log=stdout_log,
-            json_report=json_report,
-            metadata=metadata,
+            log_dir=tmp_path,
         ),
     )
     service = _make_service(
@@ -901,9 +886,7 @@ def test_list_jobs_merges_in_memory_and_disk_only(tmp_path):
         Job(
             job_id=running_job_id,
             process_handle=FakeProcessHandle(returncode=None, pid=111),
-            stdout_log=stdout_running,
-            json_report=tmp_path / f"{running_job_id}_report.json",
-            metadata=tmp_path / f"{running_job_id}_meta.json",
+            log_dir=tmp_path,
             pid=111,
         ),
     )

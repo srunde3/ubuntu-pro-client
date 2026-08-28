@@ -10,8 +10,8 @@ from conftest import FakeLauncher, FakeProcessHandle, FakeWorkspace
 
 from behave_mcp.adapters import (
     InMemoryJobRegistry,
-    LocalArtifactStore,
     LocalFeatureFileReader,
+    LocalJobResultStoreFactory,
 )
 from behave_mcp.config import Settings
 from behave_mcp.ports import Job
@@ -19,16 +19,16 @@ from behave_mcp.service import BehaveService
 
 
 def test_write_metadata_byte_shape(tmp_path):
-    store = LocalArtifactStore()
-    path = tmp_path / "m.json"
-    store.write_metadata(path, {"b": 1, "a": 2})
+    store = LocalJobResultStoreFactory().bind(tmp_path)
+    store.write_metadata("jobshape", {"b": 1, "a": 2})
+    path = tmp_path / "jobshape_meta.json"
     assert path.read_text(encoding="utf-8") == '{\n  "a": 2,\n  "b": 1\n}\n'
 
 
 def test_append_index_event_byte_shape(tmp_path):
-    store = LocalArtifactStore()
-    store.append_index_event(tmp_path, {"b": 1, "a": 2})
-    store.append_index_event(tmp_path, {"event": "completed", "job_id": "x"})
+    store = LocalJobResultStoreFactory().bind(tmp_path)
+    store.append_event({"b": 1, "a": 2})
+    store.append_event({"event": "completed", "job_id": "x"})
     content = (tmp_path / "index.jsonl").read_text(encoding="utf-8")
     assert content == (
         '{"a": 2, "b": 1}\n' '{"event": "completed", "job_id": "x"}\n'
@@ -49,7 +49,7 @@ def _service(tmp_path, registry) -> BehaveService:
         workspace=FakeWorkspace(repo_root=tmp_path, log_dir=tmp_path),
         settings=_SETTINGS,
         feature_reader=LocalFeatureFileReader(),
-        artifact_store=LocalArtifactStore(),
+        results=LocalJobResultStoreFactory(),
         registry=registry,
         launcher=FakeLauncher(),
         monotonic=lambda: 0.0,
@@ -59,19 +59,13 @@ def _service(tmp_path, registry) -> BehaveService:
     )
 
 
-def _register(registry, tmp_path, job_id, handle, report=None):
+def _register(registry, tmp_path, job_id, handle):
     registry.register(
         job_id,
         Job(
             job_id=job_id,
             process_handle=handle,
-            stdout_log=tmp_path / f"{job_id}_stdout.log",
-            json_report=(
-                report
-                if report is not None
-                else tmp_path / f"{job_id}_report.json"
-            ),
-            metadata=tmp_path / f"{job_id}_meta.json",
+            log_dir=tmp_path,
         ),
     )
 
@@ -102,7 +96,7 @@ def test_completed_with_summary_key_order(tmp_path):
         ),
         encoding="utf-8",
     )
-    _register(registry, tmp_path, job_id, FakeProcessHandle(0), report=report)
+    _register(registry, tmp_path, job_id, FakeProcessHandle(0))
 
     payload = (
         _service(tmp_path, registry)
@@ -164,7 +158,7 @@ def test_timeout_key_order(tmp_path):
         workspace=FakeWorkspace(repo_root=tmp_path, log_dir=tmp_path),
         settings=_SETTINGS,
         feature_reader=LocalFeatureFileReader(),
-        artifact_store=LocalArtifactStore(),
+        results=LocalJobResultStoreFactory(),
         registry=registry,
         launcher=FakeLauncher(),
         monotonic=lambda: next(values),

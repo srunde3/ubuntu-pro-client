@@ -6,8 +6,9 @@ on. Concrete adapters live in ``behave_mcp.adapters``; tests may inject fakes.
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, NamedTuple, Protocol
 
+from behave_mcp.messages import Artifacts, ExistsFlags
 from behave_mcp.parser import FeatureDetail
 
 
@@ -72,9 +73,7 @@ class Job:
 
     job_id: str
     process_handle: ProcessHandle | None
-    stdout_log: Path
-    json_report: Path
-    metadata: Path
+    log_dir: Path
     reserved: bool = False
     pid: int | None = None
 
@@ -132,43 +131,62 @@ class FeatureFileReader(Protocol):
         ...
 
 
-class ArtifactStore(Protocol):
-    """Filesystem persistence for job logs, metadata, and reports."""
+class WriteTargets(NamedTuple):
+    """The two files the behave subprocess writes to for a job."""
 
-    def read_metadata(self, path: Path) -> dict[str, Any]:
-        """Return parsed metadata, or an empty dict if missing/invalid."""
+    stdout_log: Path
+    json_report: Path
+
+
+class JobResultStore(Protocol):
+    """A job's results, addressed by ``job_id``."""
+
+    def write_targets(self, job_id: str) -> WriteTargets:
+        """Return the files the subprocess writes stdout and the report to."""
         ...
 
-    def write_metadata(self, path: Path, payload: dict[str, Any]) -> None:
-        """Write metadata as sorted, indented JSON with a trailing newline."""
+    def artifacts(self, job_id: str) -> Artifacts:
+        """Return the artifact locations to surface to the caller."""
         ...
 
-    def append_index_event(self, log_dir: Path, event: dict[str, Any]) -> None:
-        """Append one sorted JSON line to the per-log-dir index file."""
+    def read_metadata(self, job_id: str) -> dict[str, Any]:
+        """Return parsed job metadata, or an empty dict if missing/invalid."""
         ...
 
-    def tail_file(self, path: Path, lines: int) -> str:
-        """Return the last ``lines`` lines of ``path`` as a single string."""
+    def write_metadata(self, job_id: str, payload: dict[str, Any]) -> None:
+        """Persist job metadata."""
         ...
 
-    def tail_lines(self, path: Path, lines: int) -> list[str]:
-        """Return the last ``lines`` lines of ``path`` as a list."""
+    def append_event(self, event: dict[str, Any]) -> None:
+        """Append one event to this location's job index."""
         ...
 
-    def read_report_json(self, path: Path) -> list[Any] | None:
+    def log_tail(self, job_id: str, lines: int) -> str:
+        """Return the last ``lines`` lines of the job's stdout as a string."""
+        ...
+
+    def log_tail_lines(self, job_id: str, lines: int) -> list[str]:
+        """Return the last ``lines`` lines of the job's stdout as a list."""
+        ...
+
+    def read_report(self, job_id: str) -> list[Any] | None:
         """Return the behave JSON report list, or None if missing/invalid."""
         ...
 
-    def read_text_lines(self, path: Path) -> list[str] | None:
-        """Return every line of a text file, or None if missing."""
+    def exists(self, job_id: str) -> ExistsFlags:
+        """Return which of the job's artifacts currently exist."""
         ...
 
-    def exists(self, path: Path) -> bool:
-        """Return whether ``path`` exists."""
+    def list_job_ids(self) -> list[str]:
+        """Return every job id discovered at this location."""
         ...
 
-    def list_job_ids(self, log_dir: Path) -> list[str]:
-        """Return job ids discovered from metadata files under ``log_dir``."""
+
+class JobResultStoreFactory(Protocol):
+    """Binds a ``JobResultStore`` to a resolved results location."""
+
+    def bind(self, log_dir: Path) -> JobResultStore:
+        """Return a store rooted at ``log_dir``."""
         ...
 
 

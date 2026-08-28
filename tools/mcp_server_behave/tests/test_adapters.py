@@ -6,8 +6,8 @@ from conftest import FakeProcessHandle, make_repo_with_feature
 import behave_mcp.adapters as adapters_module
 from behave_mcp.adapters import (
     InMemoryJobRegistry,
-    LocalArtifactStore,
     LocalFeatureFileReader,
+    LocalJobResultStoreFactory,
     LocalWorkspace,
     PopenLauncher,
 )
@@ -57,58 +57,82 @@ def test_discover_feature_details_delegates(tmp_path):
     assert details[0].title == "Sample feature"
 
 
-# ---- LocalArtifactStore ----
+# ---- LocalJobResultStore ----
+
+
+def _store(tmp_path):
+    return LocalJobResultStoreFactory().bind(tmp_path)
 
 
 def test_read_metadata_missing_or_invalid(tmp_path):
-    store = LocalArtifactStore()
-    assert store.read_metadata(tmp_path / "missing.json") == {}
+    store = _store(tmp_path)
+    assert store.read_metadata("missing") == {}
 
-    bad = tmp_path / "bad.json"
-    bad.write_text("not json", encoding="utf-8")
-    assert store.read_metadata(bad) == {}
+    (tmp_path / "bad_meta.json").write_text("not json", encoding="utf-8")
+    assert store.read_metadata("bad") == {}
 
-    non_dict = tmp_path / "list.json"
-    non_dict.write_text("[]", encoding="utf-8")
-    assert store.read_metadata(non_dict) == {}
+    (tmp_path / "list_meta.json").write_text("[]", encoding="utf-8")
+    assert store.read_metadata("list") == {}
 
 
 def test_write_and_read_metadata_roundtrip(tmp_path):
-    store = LocalArtifactStore()
-    path = tmp_path / "m.json"
-    store.write_metadata(path, {"job_id": "x", "status": "started"})
-    assert store.read_metadata(path) == {"job_id": "x", "status": "started"}
+    store = _store(tmp_path)
+    store.write_metadata("jobx", {"job_id": "x", "status": "started"})
+    assert store.read_metadata("jobx") == {"job_id": "x", "status": "started"}
 
 
-def test_tail_file_and_lines(tmp_path):
-    store = LocalArtifactStore()
-    log = tmp_path / "log.txt"
-    log.write_text("a\nb\nc\n", encoding="utf-8")
-    assert store.tail_file(log, 2) == "b\nc"
-    assert store.tail_lines(log, 2) == ["b", "c"]
+def test_log_tail_and_lines(tmp_path):
+    store = _store(tmp_path)
+    (tmp_path / "jobx_stdout.log").write_text("a\nb\nc\n", encoding="utf-8")
+    assert store.log_tail("jobx", 2) == "b\nc"
+    assert store.log_tail_lines("jobx", 2) == ["b", "c"]
 
 
-def test_tail_file_missing(tmp_path):
-    store = LocalArtifactStore()
-    assert store.tail_file(tmp_path / "nope.txt", 5) == "Waiting for output..."
-    assert store.tail_lines(tmp_path / "nope.txt", 5) == []
+def test_log_tail_missing(tmp_path):
+    store = _store(tmp_path)
+    assert store.log_tail("nope", 5) == "Waiting for output..."
+    assert store.log_tail_lines("nope", 5) == []
 
 
-def test_read_report_json(tmp_path):
-    store = LocalArtifactStore()
-    assert store.read_report_json(tmp_path / "missing.json") is None
+def test_read_report_missing_or_invalid(tmp_path):
+    store = _store(tmp_path)
+    assert store.read_report("missing") is None
 
-    bad = tmp_path / "bad.json"
-    bad.write_text("nope", encoding="utf-8")
-    assert store.read_report_json(bad) is None
+    (tmp_path / "bad_report.json").write_text("nope", encoding="utf-8")
+    assert store.read_report("bad") is None
 
-    obj = tmp_path / "obj.json"
-    obj.write_text("{}", encoding="utf-8")
-    assert store.read_report_json(obj) is None
+    (tmp_path / "obj_report.json").write_text("{}", encoding="utf-8")
+    assert store.read_report("obj") is None
 
-    good = tmp_path / "good.json"
-    good.write_text("[1, 2]", encoding="utf-8")
-    assert store.read_report_json(good) == [1, 2]
+    (tmp_path / "good_report.json").write_text("[1, 2]", encoding="utf-8")
+    assert store.read_report("good") == [1, 2]
+
+
+def test_exists_and_list_job_ids(tmp_path):
+    store = _store(tmp_path)
+    empty = store.exists("jobx")
+    assert not empty.stdout_log
+    assert not empty.json_report
+    assert not empty.metadata
+
+    (tmp_path / "jobx_meta.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "jobx_stdout.log").write_text("x", encoding="utf-8")
+    flags = store.exists("jobx")
+    assert flags.metadata is True
+    assert flags.stdout_log is True
+    assert flags.json_report is False
+    assert store.list_job_ids() == ["jobx"]
+
+
+def test_write_targets_and_artifacts_naming(tmp_path):
+    store = _store(tmp_path)
+    targets = store.write_targets("jobx")
+    assert targets.stdout_log == tmp_path / "jobx_stdout.log"
+    assert targets.json_report == tmp_path / "jobx_report.json"
+
+    artifacts = store.artifacts("jobx")
+    assert artifacts.log_dir == str(tmp_path)
+    assert artifacts.metadata == str(tmp_path / "jobx_meta.json")
 
 
 # ---- LocalWorkspace ----
@@ -261,9 +285,7 @@ def _job(job_id, tmp_path, handle=None, reserved=False) -> Job:
     return Job(
         job_id=job_id,
         process_handle=handle,
-        stdout_log=tmp_path / f"{job_id}.log",
-        json_report=tmp_path / f"{job_id}.json",
-        metadata=tmp_path / f"{job_id}_meta.json",
+        log_dir=tmp_path,
         reserved=reserved,
     )
 
@@ -326,18 +348,18 @@ def test_registry_snapshot_returns_all_tracked_jobs(tmp_path):
     assert {job.job_id for job in snapshot} == {"a", "b"}
 
 
-# ---- LocalArtifactStore.list_job_ids ----
+# ---- LocalJobResultStore.list_job_ids ----
 
 
 def test_list_job_ids_globs_meta_files(tmp_path):
-    store = LocalArtifactStore()
+    store = LocalJobResultStoreFactory().bind(tmp_path)
     (tmp_path / "job1_meta.json").write_text("{}", encoding="utf-8")
     (tmp_path / "job2_meta.json").write_text("{}", encoding="utf-8")
     (tmp_path / "job2_stdout.log").write_text("", encoding="utf-8")
 
-    assert store.list_job_ids(tmp_path) == ["job1", "job2"]
+    assert store.list_job_ids() == ["job1", "job2"]
 
 
 def test_list_job_ids_missing_dir(tmp_path):
-    store = LocalArtifactStore()
-    assert store.list_job_ids(tmp_path / "missing") == []
+    store = LocalJobResultStoreFactory().bind(tmp_path / "missing")
+    assert store.list_job_ids() == []
