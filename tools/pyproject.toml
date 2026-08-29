@@ -1,0 +1,24 @@
+[tool.uv.workspace]
+# Add each new modern tool's directory here as it's created. A tool
+# belongs here (as opposed to a flat script directly in tools/) once it
+# has real third-party dependencies and its own test suite.
+members = [
+  "test_catalog",
+]
+
+# This is a virtual workspace root (no [project] table): it isn't itself
+# an installable package, just a shared venv/lockfile container for the
+# member tools below.
+
+# The settings below apply, via black/isort's "nearest pyproject.toml"
+# discovery, to any flat script directly in tools/ (build.py, etc.) that
+# isn't inside one of the workspace members above -- kept identical to
+# the root /pyproject.toml so those scripts format the same either way.
+# Workspace members set their own overrides for modern (3.10+) syntax.
+[tool.black]
+line-length = 79
+target_version = ['py34', 'py35', 'py36', 'py37']
+
+[tool.isort]
+profile = "black"
+line_length = 79

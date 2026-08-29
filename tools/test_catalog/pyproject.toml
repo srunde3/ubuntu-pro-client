@@ -1,0 +1,53 @@
+[project]
+name = "behave-test-catalog"
+version = "0.1.0"
+description = "Standalone, read-optimized catalog of ubuntu-pro-client behave feature files"
+requires-python = ">=3.10"
+dependencies = [
+  "behave>=1.2.6",
+]
+
+[project.optional-dependencies]
+test = [
+  "pytest>=8.0",
+]
+# Versions matched to the repo-root tox envs (see /tox.ini) where pinned.
+lint = [
+  "black==24.3.0",
+  "isort==5.12.0",
+  "flake8",
+  "mypy",
+]
+
+[project.scripts]
+test-catalog = "behave_catalog.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Excluded by default -- opt in with `pytest -m integration` -- since it
+# parses the whole real features/*.feature corpus rather than the small
+# synthetic fixtures the rest of the suite uses, so it's slower and its
+# assertions are about this checkout's actual content.
+addopts = "-m 'not integration'"
+markers = [
+  "integration: exercises the real features/*.feature corpus instead of the synthetic fixtures",
+]
+
+# black/isort discover the *nearest* pyproject.toml to each file, so
+# without these this package would silently drift to black's 88-char
+# default instead of the repo-wide 79-char convention (see /pyproject.toml).
+[tool.black]
+line-length = 79
+
+[tool.isort]
+profile = "black"
+line_length = 79
+
+[[tool.mypy.overrides]]
+# Matches the root pyproject.toml override: behave ships no type stubs.
+module = ["behave.*"]
+ignore_missing_imports = "true"

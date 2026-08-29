@@ -3,6 +3,29 @@
 The 'tools' directory is reserved for test tools and scripts. Nothing
 in this directory will be shipped as part of the packaging
 
+## Modern tools (uv workspace)
+
+A tool with real third-party dependencies and its own test suite lives
+as a member of the `tools/` uv workspace (`pyproject.toml` in this
+directory) rather than as a flat script below -- one shared virtual
+environment and lockfile (`uv sync --all-extras` from here) across every
+such tool, so adding another one doesn't mean managing another venv.
+Simple, dependency-free scripts stay flat in this directory as before.
+
+- `test_catalog/`: read-optimized SQLite catalog of the `features/*.feature`
+  suite -- see `test_catalog/README.md`.
+
+When running a member's own tooling (pytest, black, mypy, ...) from
+`tools/` rather than from inside the member directory, use
+`uv run --directory <member> <command>`, not `--project`. `--project`
+only selects which member's dependencies/venv to use -- it does not
+change the working directory -- so pytest's own upward config search
+(cwd-based) would otherwise walk straight past that member's
+`pyproject.toml` and pick up the outer repo's `tox.ini` `[pytest]`
+section instead, silently ignoring that member's `addopts`/`markers`.
+`--directory` genuinely `cd`s first, so config resolution lands where
+you'd expect.
+
 ## Files
 
 - build.py: Build the package from the current directory
