@@ -54,20 +54,49 @@ def test_features_filtered_by_tag(catalog: TestCatalog) -> None:
     assert catalog.features(tag="does-not-exist") == []
 
 
+def test_feature_detail_returns_every_scenario_unfiltered(
+    catalog: TestCatalog,
+) -> None:
+    detail = catalog.feature_detail("features/apt.feature")
+    assert detail is not None
+    assert detail.title == "apt behavior"
+    assert detail.tags == ("uses.config.contract_token",)
+    assert detail.requires_config == ("contract_token",)
+    assert len(detail.scenarios) == 1
+
+    scenario = detail.scenarios[0]
+    assert scenario.name == "Install a package on <release> <machine_type>"
+    assert set(scenario.tags) == {"security", "slow"}
+    assert scenario.example_columns == ("release", "machine_type")
+    assert set(scenario.combos) == {
+        Combo("jammy", "lxd-container"),
+        Combo("jammy", "lxd-vm"),
+        Combo("focal", "lxd-container"),
+    }
+
+
+def test_feature_detail_returns_none_for_unknown_path(
+    catalog: TestCatalog,
+) -> None:
+    assert catalog.feature_detail("features/does_not_exist.feature") is None
+
+
 def test_query_requires_same_combo_row_for_release_and_machine_type(
     catalog: TestCatalog,
 ) -> None:
     """A scenario touching focal (via one combo) and lxd-vm (via a
     different combo) must not match a query for focal+lxd-vm together --
     only a scenario with a single combo satisfying both should."""
-    matches = catalog.query(releases=["focal"], machine_types=["lxd-vm"])
+    matches = catalog.query(
+        releases=["focal"], machine_types=["lxd-vm"]
+    ).matches
     assert [match.name for match in matches] == [
         "Enable FIPS on a fixed machine"
     ]
     assert matches[0].combos == (Combo("focal", "lxd-vm"),)
 
     # Sanity check: focal alone (independent of machine_type) matches both.
-    focal_only = catalog.query(releases=["focal"])
+    focal_only = catalog.query(releases=["focal"]).matches
     assert {match.name for match in focal_only} == {
         "Enable FIPS on a fixed machine",
         "Install a package on <release> <machine_type>",
@@ -75,28 +104,42 @@ def test_query_requires_same_combo_row_for_release_and_machine_type(
 
 
 def test_query_tags_any_and_tags_all(catalog: TestCatalog) -> None:
-    any_matches = catalog.query(tags_any=["security"])
+    any_matches = catalog.query(tags_any=["security"]).matches
     assert len(any_matches) == 1
 
-    all_matches = catalog.query(tags_all=["security", "slow"])
+    all_matches = catalog.query(tags_all=["security", "slow"]).matches
     assert len(all_matches) == 1
 
-    assert catalog.query(tags_all=["security", "does-not-exist"]) == []
+    assert catalog.query(tags_all=["security", "does-not-exist"]).matches == ()
+
+
+def test_query_total_count_and_truncated(catalog: TestCatalog) -> None:
+    """total_count reflects every match, independent of limit; truncated
+    is set exactly when limit cut the result short."""
+    unlimited = catalog.query(releases=["focal"])
+    assert unlimited.total_count == 2
+    assert len(unlimited.matches) == 2
+    assert unlimited.truncated is False
+
+    limited = catalog.query(releases=["focal"], limit=1)
+    assert limited.total_count == 2
+    assert len(limited.matches) == 1
+    assert limited.truncated is True
 
 
 def test_search_full_text(catalog: TestCatalog) -> None:
-    apt_matches = catalog.search("apt")
+    apt_matches = catalog.search("apt").matches
     assert [match.name for match in apt_matches] == [
         "Install a package on <release> <machine_type>"
     ]
 
-    fips_matches = catalog.search("fips")
+    fips_matches = catalog.search("fips").matches
     assert [match.name for match in fips_matches] == [
         "Enable FIPS on a fixed machine"
     ]
 
     # Punctuation/hyphens in free text must not blow up the FTS5 query.
-    assert catalog.search("apt-get; DROP TABLE scenarios --") == []
+    assert catalog.search("apt-get; DROP TABLE scenarios --").matches == ()
 
 
 def test_open_or_build_rebuilds_on_source_change(
@@ -201,16 +244,19 @@ def test_query_empty_list_filter_means_no_matches(
 ) -> None:
     """An explicit empty list ("filtered down to nothing") must return no
     matches -- not be silently treated the same as None ("unfiltered")."""
-    assert catalog.query(releases=[]) == []
-    assert catalog.query(machine_types=[]) == []
-    assert catalog.query(tags_any=[]) == []
-    assert catalog.query(tags_all=[]) == []
+    assert catalog.query(releases=[]).matches == ()
+    assert catalog.query(machine_types=[]).matches == ()
+    assert catalog.query(tags_any=[]).matches == ()
+    assert catalog.query(tags_all=[]).matches == ()
     # Mixing an empty list with an otherwise-valid filter still matches
     # nothing -- the impossible filter dominates.
-    assert catalog.query(releases=["focal"], machine_types=[]) == []
+    assert catalog.query(releases=["focal"], machine_types=[]).matches == ()
+    # total_count/truncated must reflect "no matches", not be left stale.
+    assert catalog.query(releases=[]).total_count == 0
+    assert catalog.query(releases=[]).truncated is False
 
     # Sanity check: omitting a filter (None) is genuinely unfiltered.
-    assert catalog.query(releases=None) != []
+    assert catalog.query(releases=None).matches != ()
 
 
 def test_search_orders_by_relevance(tmp_path: Path) -> None:
@@ -236,7 +282,7 @@ def test_search_orders_by_relevance(tmp_path: Path) -> None:
     )
 
     with TestCatalog.build(repo, tmp_path / "catalog.sqlite3") as ranked:
-        matches = ranked.search("apt")
+        matches = ranked.search("apt").matches
 
     assert [match.feature_path for match in matches] == [
         "features/strong.feature",

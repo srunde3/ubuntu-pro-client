@@ -44,7 +44,9 @@ def test_query_json_output(
     )
     assert exit_code == 0
     payload = json.loads(capsys.readouterr().out)
-    assert [match["name"] for match in payload] == [
+    assert payload["total_count"] == 1
+    assert payload["truncated"] is False
+    assert [match["name"] for match in payload["matches"]] == [
         "Enable FIPS on a fixed machine"
     ]
 
@@ -82,6 +84,54 @@ def test_dimensions_table_output(
     output = capsys.readouterr().out
     assert "releases:" in output
     assert "machine_types:" in output
+
+
+def test_describe_json_output(
+    repo_root: Path, tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    db_path = tmp_path / "catalog.sqlite3"
+    cli.main(["build", "--repo-root", str(repo_root), "--db", str(db_path)])
+    capsys.readouterr()
+
+    exit_code = cli.main(
+        [
+            "describe",
+            "features/apt.feature",
+            "--repo-root",
+            str(repo_root),
+            "--db",
+            str(db_path),
+            "--format",
+            "json",
+        ]
+    )
+    assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["path"] == "features/apt.feature"
+    assert payload["requires_config"] == ["contract_token"]
+    assert [s["name"] for s in payload["scenarios"]] == [
+        "Install a package on <release> <machine_type>"
+    ]
+    assert len(payload["scenarios"][0]["combos"]) == 3
+
+
+def test_describe_unknown_feature_exits_cleanly(
+    repo_root: Path, tmp_path: Path
+) -> None:
+    db_path = tmp_path / "catalog.sqlite3"
+    cli.main(["build", "--repo-root", str(repo_root), "--db", str(db_path)])
+
+    with pytest.raises(SystemExit, match="not found"):
+        cli.main(
+            [
+                "describe",
+                "features/does_not_exist.feature",
+                "--repo-root",
+                str(repo_root),
+                "--db",
+                str(db_path),
+            ]
+        )
 
 
 def test_features_json_output(

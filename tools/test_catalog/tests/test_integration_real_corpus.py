@@ -72,8 +72,10 @@ def test_build_succeeds_and_finds_a_realistic_number_of_features(
 
 
 def test_scenario_count_is_realistic(real_catalog: TestCatalog) -> None:
-    all_scenarios = real_catalog.query(limit=100_000)
-    assert len(all_scenarios) >= MIN_EXPECTED_SCENARIOS
+    # total_count reflects every match regardless of limit -- no need to
+    # actually fetch (and construct a ScenarioMatch for) all of them just
+    # to check the count.
+    assert real_catalog.query(limit=1).total_count >= MIN_EXPECTED_SCENARIOS
 
 
 def test_dimensions_cover_known_stable_releases(
@@ -92,7 +94,7 @@ def test_no_new_scenarios_silently_produce_zero_combos(
     exists to avoid. This doesn't demand zero today (three pre-existing,
     already-investigated cases exist -- see MAX_KNOWN_ZERO_COMBO_SCENARIOS),
     but it must never get worse without someone noticing here."""
-    all_scenarios = real_catalog.query(limit=100_000)
+    all_scenarios = real_catalog.query(limit=100_000).matches
     zero_combo = [match for match in all_scenarios if not match.combos]
     assert len(zero_combo) <= MAX_KNOWN_ZERO_COMBO_SCENARIOS, (
         "New scenario(s) with zero combos (invisible to every "

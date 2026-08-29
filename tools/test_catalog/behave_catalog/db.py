@@ -33,7 +33,33 @@ class ScenarioMatch:
     type: str
     tags: tuple[str, ...]
     requires_config: tuple[str, ...]
+    example_columns: tuple[str, ...]
     combos: tuple[Combo, ...]
+
+
+@dataclass(frozen=True)
+class FeatureDetail:
+    """Full detail for one feature: its own tags/requires_config, plus
+    every scenario it contains (unfiltered -- every combo each has)."""
+
+    path: str
+    title: str
+    tags: tuple[str, ...]
+    requires_config: tuple[str, ...]
+    scenarios: tuple[ScenarioMatch, ...]
+
+
+@dataclass(frozen=True)
+class QueryResult:
+    """A page of scenario matches, plus enough to know if it's a page.
+
+    ``total_count`` is how many scenarios matched before ``limit`` was
+    applied; ``truncated`` is ``total_count > len(matches)``.
+    """
+
+    matches: tuple[ScenarioMatch, ...]
+    total_count: int
+    truncated: bool
 
 
 @dataclass(frozen=True)
@@ -248,6 +274,38 @@ class TestCatalog:
             machine_types=tuple(sorted(machine_types)),
         )
 
+    def feature_detail(self, path: str) -> Optional[FeatureDetail]:
+        """Full detail for one feature, keyed by its exact catalog path.
+
+        Returns None if no feature matches that path -- callers (e.g. an
+        MCP describe_feature tool) turn that into a "not listed" error.
+        Every scenario in the feature is included, unfiltered, with every
+        combo it has (not narrowed to any release/machine_type).
+        """
+        feature_row = self._connection.execute(
+            "SELECT title, tags, requires_config FROM features "
+            "WHERE path = ?",
+            (path,),
+        ).fetchone()
+        if feature_row is None:
+            return None
+
+        scenario_rows = self._connection.execute(
+            "SELECT id FROM scenarios WHERE feature_path = ? ORDER BY id",
+            (path,),
+        ).fetchall()
+        scenarios = tuple(
+            self._scenario_match(row["id"], None, None)
+            for row in scenario_rows
+        )
+        return FeatureDetail(
+            path=path,
+            title=feature_row["title"],
+            tags=tuple(json.loads(feature_row["tags"])),
+            requires_config=tuple(json.loads(feature_row["requires_config"])),
+            scenarios=scenarios,
+        )
+
     def find_scenarios(
         self,
         *,
@@ -255,7 +313,7 @@ class TestCatalog:
         machine_type: Optional[str] = None,
         tag: Optional[str] = None,
         text: Optional[str] = None,
-    ) -> list[ScenarioMatch]:
+    ) -> QueryResult:
         """Point-query convenience over ``query`` (MCP's filter shape)."""
         return self.query(
             releases=[release] if release else None,
@@ -273,7 +331,7 @@ class TestCatalog:
         tags_all: Optional[Sequence[str]] = None,
         text: Optional[str] = None,
         limit: int = 200,
-    ) -> list[ScenarioMatch]:
+    ) -> QueryResult:
         """Composable scenario search: every filter given is AND-ed together.
 
         ``releases``/``machine_types`` require a *single* combo row to
@@ -289,13 +347,19 @@ class TestCatalog:
             tags_all=tags_all,
             text=text,
         )
-        scenario_ids = scenario_ids[:limit]
-        return [
+        total_count = len(scenario_ids)
+        limited_ids = scenario_ids[:limit]
+        matches = tuple(
             self._scenario_match(scenario_id, releases, machine_types)
-            for scenario_id in scenario_ids
-        ]
+            for scenario_id in limited_ids
+        )
+        return QueryResult(
+            matches=matches,
+            total_count=total_count,
+            truncated=total_count > len(matches),
+        )
 
-    def search(self, text: str, *, limit: int = 50) -> list[ScenarioMatch]:
+    def search(self, text: str, *, limit: int = 50) -> QueryResult:
         """Full-text keyword search over scenario name/tags/step bodies."""
         return self.query(text=text, limit=limit)
 
@@ -400,8 +464,8 @@ class TestCatalog:
         machine_types: Optional[Sequence[str]],
     ) -> ScenarioMatch:
         scenario_row = self._connection.execute(
-            "SELECT feature_path, name, type, tags, requires_config "
-            "FROM scenarios WHERE id = ?",
+            "SELECT feature_path, name, type, tags, requires_config, "
+            "example_columns FROM scenarios WHERE id = ?",
             (scenario_id,),
         ).fetchone()
         combo_rows = self._connection.execute(
@@ -426,5 +490,6 @@ class TestCatalog:
             type=scenario_row["type"],
             tags=tuple(json.loads(scenario_row["tags"])),
             requires_config=tuple(json.loads(scenario_row["requires_config"])),
+            example_columns=tuple(json.loads(scenario_row["example_columns"])),
             combos=tuple(combos),
         )

@@ -8,7 +8,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Sequence
 
-from behave_catalog.db import TestCatalog
+from behave_catalog.db import QueryResult, TestCatalog
 
 DEFAULT_DB_NAME = ".behave_test_catalog.sqlite3"
 
@@ -59,6 +59,21 @@ def _print_records(records: Sequence[Any], fmt: str) -> None:
         print(record)
 
 
+def _print_query_result(result: QueryResult, fmt: str) -> None:
+    if fmt == "json":
+        print(json.dumps(asdict(result), indent=2))
+        return
+    if not result.matches:
+        print("(no matches)")
+    for match in result.matches:
+        print(match)
+    if result.truncated:
+        print(
+            f"... truncated: showing {len(result.matches)} of "
+            f"{result.total_count} total matches"
+        )
+
+
 def _cmd_build(args: argparse.Namespace) -> int:
     repo_root, db_path = _resolve_paths(args)
     catalog = TestCatalog.build(repo_root, db_path)
@@ -99,22 +114,35 @@ def _cmd_dimensions(args: argparse.Namespace) -> int:
 def _cmd_query(args: argparse.Namespace) -> int:
     repo_root, db_path = _resolve_paths(args)
     with TestCatalog.open_or_build(repo_root, db_path) as catalog:
-        matches = catalog.query(
+        result = catalog.query(
             releases=args.release,
             machine_types=args.machine_type,
             tags_any=args.tag,
             text=args.text,
             limit=args.limit,
         )
-    _print_records(matches, args.format)
+    _print_query_result(result, args.format)
     return 0
 
 
 def _cmd_search(args: argparse.Namespace) -> int:
     repo_root, db_path = _resolve_paths(args)
     with TestCatalog.open_or_build(repo_root, db_path) as catalog:
-        matches = catalog.search(args.query, limit=args.limit)
-    _print_records(matches, args.format)
+        result = catalog.search(args.query, limit=args.limit)
+    _print_query_result(result, args.format)
+    return 0
+
+
+def _cmd_describe(args: argparse.Namespace) -> int:
+    repo_root, db_path = _resolve_paths(args)
+    with TestCatalog.open_or_build(repo_root, db_path) as catalog:
+        detail = catalog.feature_detail(args.feature_path)
+    if detail is None:
+        raise SystemExit(f"Feature not found in catalog: {args.feature_path}")
+    if args.format == "json":
+        print(json.dumps(asdict(detail), indent=2))
+        return 0
+    print(detail)
     return 0
 
 
@@ -156,6 +184,18 @@ def build_parser() -> argparse.ArgumentParser:
         "--format", choices=["table", "json"], default="table"
     )
     features_cmd.set_defaults(func=_cmd_features)
+
+    describe_cmd = subparsers.add_parser(
+        "describe", help="Full detail for one feature (every scenario)."
+    )
+    _add_common_args(describe_cmd)
+    describe_cmd.add_argument(
+        "feature_path", help="A path as returned by 'features'."
+    )
+    describe_cmd.add_argument(
+        "--format", choices=["table", "json"], default="table"
+    )
+    describe_cmd.set_defaults(func=_cmd_describe)
 
     dimensions_cmd = subparsers.add_parser(
         "dimensions", help="List distinct releases and machine_types."
