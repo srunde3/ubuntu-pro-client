@@ -67,3 +67,5 @@ debian/po/usr
 # Everything tools/pro-e2e writes: job artifacts, campaign
 # records, event logs, run locks.
 .pro-e2e/
+
+.workshop.lock
