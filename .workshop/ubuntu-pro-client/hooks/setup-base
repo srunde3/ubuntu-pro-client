@@ -1,2 +1,2 @@
 apt update
-apt install devscripts equivs
+apt install devscripts equivs python3-apt
