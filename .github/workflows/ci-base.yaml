@@ -41,6 +41,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo DEBIAN_FRONTEND=noninteractive apt-get -qy update
+          # tox test env inherits the distro python3-apt extension.
           sudo DEBIAN_FRONTEND=noninteractive apt-get -qy install tox libapt-pkg-dev python3-apt
       - name: Git checkout
         uses: actions/checkout@v3
