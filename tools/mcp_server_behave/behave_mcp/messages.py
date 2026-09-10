@@ -112,6 +112,7 @@ class JobRecord(BaseModel):
     scenario_name: str = ""
     machine_types: list[str] = []
     releases: list[str] = []
+    install_from: str = ""
     command: list[str] = []
     repo_root: str = ""
     pid: int | None = None

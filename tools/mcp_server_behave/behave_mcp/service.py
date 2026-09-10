@@ -267,6 +267,7 @@ class BehaveService:
         scenario_name: str = "",
         releases: list[str] | None = None,
         repo_root: str = "",
+        install_from: str = domain.DEFAULT_INSTALL_FROM,
     ) -> StartScenarioResult:
         try:
             resolved_repo_root = self._workspace.resolve_repo_root(
@@ -289,6 +290,10 @@ class BehaveService:
         )
         if machine_type_error:
             raise BehaveServiceError(machine_type_error)
+
+        install_from_error = domain.validate_install_from(install_from)
+        if install_from_error:
+            raise BehaveServiceError(install_from_error)
 
         log_dir = self._workspace.resolve_log_dir(resolved_repo_root)
         results = self._results.bind(log_dir)
@@ -325,6 +330,7 @@ class BehaveService:
             write_targets.json_report,
         )
         env = self._workspace.subprocess_env()
+        env[domain.INSTALL_FROM_ENV_VAR] = install_from
 
         try:
             handle = self._launcher.launch(
@@ -367,6 +373,7 @@ class BehaveService:
                 scenario_name=scenario_name,
                 machine_types=machine_types,
                 releases=releases or [],
+                install_from=install_from,
                 command=command,
                 repo_root=str(resolved_repo_root),
                 pid=handle.pid,
@@ -382,6 +389,7 @@ class BehaveService:
                 "scenario_name": scenario_name,
                 "machine_types": machine_types,
                 "releases": releases or [],
+                "install_from": install_from,
                 "artifacts": artifacts_dict,
             },
         )

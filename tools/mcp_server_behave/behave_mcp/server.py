@@ -95,6 +95,18 @@ TextFilter = Annotated[
         description="Only keep scenarios whose name contains this substring.",
     ),
 ]
+InstallFrom = Annotated[
+    domain.InstallFrom,
+    Field(
+        default=domain.InstallFrom.LOCAL,
+        description=(
+            "Where to install ubuntu-pro-client from before running the "
+            "scenario. Sets UACLIENT_BEHAVE_INSTALL_FROM for the behave "
+            "subprocess. Defaults to 'local' (install from this repo "
+            "checkout)."
+        ),
+    ),
+]
 
 
 def _utc_timestamp() -> str:
@@ -217,7 +229,10 @@ def find_scenarios(
         "lxd-vm; cloud machine types are blocked unless "
         "MCP_ALLOW_CLOUD_MACHINE_TYPES is set). scenario_name (substring) "
         "and releases are optional filters onto the feature's Examples "
-        "rows. Call wait_for_scenario_completion to wait for completion."
+        "rows. install_from controls where ubuntu-pro-client is installed "
+        "from (defaults to 'local'; set to 'proposed' to test the "
+        "-proposed pocket). Call wait_for_scenario_completion to wait for "
+        "completion."
     )
 )
 def start_scenario(
@@ -255,6 +270,7 @@ def start_scenario(
         ),
     ] = None,
     repo_root: RepoRoot = "",
+    install_from: InstallFrom = domain.InstallFrom.LOCAL,
 ) -> StartScenarioResult:
     return _service.start_scenario(
         feature_file,
@@ -262,6 +278,7 @@ def start_scenario(
         scenario_name,
         releases,
         repo_root,
+        install_from,
     )
 
 

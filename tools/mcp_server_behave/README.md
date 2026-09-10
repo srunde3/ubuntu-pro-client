@@ -18,6 +18,7 @@ The server exposes these MCP tools:
   - Returns matching `feature_file`, `scenario_name`, `type`, required config, and the combos satisfying the filters.
 - `start_scenario` -- starts a behave scenario in the background.
   - Returns a `job_id`.
+  - Optional `install_from` controls where `ubuntu-pro-client` is installed from before the scenario runs (sets `UACLIENT_BEHAVE_INSTALL_FROM` for the behave subprocess). Allowed values: `local` (default), `archive`, `daily`, `staging`, `stable`, `proposed`.
 - `list_scenario_jobs` -- lists active jobs plus a bounded window of recently completed ones.
   - No known `job_id` or access to system processes required.
   - Merges in-memory state with jobs recovered from disk, including jobs still running after a server restart.

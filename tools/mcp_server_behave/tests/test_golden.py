@@ -31,6 +31,7 @@ def test_write_record_byte_shape(tmp_path):
         '  "command": [],\n'
         '  "completed_at": null,\n'
         '  "feature_file": "",\n'
+        '  "install_from": "",\n'
         '  "job_id": "jobshape",\n'
         '  "machine_types": [],\n'
         '  "ok": null,\n'

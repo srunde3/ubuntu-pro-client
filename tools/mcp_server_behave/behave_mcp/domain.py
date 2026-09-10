@@ -36,6 +36,32 @@ CLOUD_MACHINE_TYPES = {
 }
 ALLOW_CLOUD_MACHINE_TYPES_ENV_VAR = "MCP_ALLOW_CLOUD_MACHINE_TYPES"
 MAX_PARALLEL_JOBS_ENV_VAR = "MCP_MAX_PARALLEL_JOBS"
+# features/environment.py reads this exact name (UAClientBehaveConfig's
+# UACLIENT_BEHAVE_ prefix + install_from) to pick where the behave
+# subprocess installs ubuntu-pro-client from; it defaults to 'local' when
+# unset, same as InstallFrom.LOCAL below, but we still set it explicitly so
+# non-default values (e.g. 'proposed') actually reach that subprocess.
+INSTALL_FROM_ENV_VAR = "UACLIENT_BEHAVE_INSTALL_FROM"
+
+
+class InstallFrom(str, Enum):
+    """Subset of features/util.py's InstallationSource exposed here.
+
+    Excludes CUSTOM and PREBUILT, which require extra config (custom_ppa,
+    debs_path) not exposed through this MCP interface.
+    """
+
+    LOCAL = "local"
+    ARCHIVE = "archive"
+    DAILY = "daily"
+    STAGING = "staging"
+    STABLE = "stable"
+    PROPOSED = "proposed"
+
+
+DEFAULT_INSTALL_FROM = (
+    InstallFrom.LOCAL.value
+)  # the pro client-defined default.
 DEFAULT_RUNNING_TAIL_LINES = 12
 DEFAULT_LOG_TAIL_LINES = 200
 MAX_LOG_TAIL_LINES = 2000
@@ -142,6 +168,18 @@ def validate_machine_types(
             f"{','.join(cloud_machine_types)}"
         )
 
+    return None
+
+
+def validate_install_from(install_from: str) -> str | None:
+    try:
+        InstallFrom(install_from)
+    except ValueError:
+        allowed = sorted(member.value for member in InstallFrom)
+        return (
+            f"Unsupported install_from: {install_from}. Allowed values: "
+            f"{','.join(allowed)}"
+        )
     return None
 
 

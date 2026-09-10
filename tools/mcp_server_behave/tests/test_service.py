@@ -302,6 +302,55 @@ def test_start_scenario_builds_command(tmp_path):
     assert call["env"]["UACLIENT_BEHAVE_CONTRACT_TOKEN"] == "token"
 
 
+def test_start_scenario_defaults_install_from_to_local(tmp_path):
+    repo_root = make_repo_with_feature(tmp_path, "features/cli/attach.feature")
+    launcher = FakeLauncher()
+    service = _make_service(
+        FakeWorkspace(repo_root=repo_root, log_dir=tmp_path),
+        launcher=launcher,
+    )
+
+    service.start_scenario(
+        "features/cli/attach.feature",
+        machine_types=["lxd-container"],
+    )
+
+    assert launcher.calls[0]["env"]["UACLIENT_BEHAVE_INSTALL_FROM"] == "local"
+
+
+def test_start_scenario_sets_install_from_env_var(tmp_path):
+    repo_root = make_repo_with_feature(tmp_path, "features/cli/attach.feature")
+    launcher = FakeLauncher()
+    service = _make_service(
+        FakeWorkspace(repo_root=repo_root, log_dir=tmp_path),
+        launcher=launcher,
+    )
+
+    service.start_scenario(
+        "features/cli/attach.feature",
+        machine_types=["lxd-container"],
+        install_from="proposed",
+    )
+
+    assert (
+        launcher.calls[0]["env"]["UACLIENT_BEHAVE_INSTALL_FROM"] == "proposed"
+    )
+
+
+def test_start_scenario_rejects_invalid_install_from(tmp_path):
+    repo_root = make_repo_with_feature(tmp_path, "features/cli/attach.feature")
+    service = _make_service(
+        FakeWorkspace(repo_root=repo_root, log_dir=tmp_path)
+    )
+
+    with pytest.raises(BehaveServiceError, match="Unsupported install_from"):
+        service.start_scenario(
+            "features/cli/attach.feature",
+            machine_types=["lxd-container"],
+            install_from="custom",
+        )
+
+
 def test_start_scenario_uses_repo_root_override(tmp_path):
     repo_root = make_repo_with_feature(tmp_path, "features/cli/sample.feature")
     launcher = FakeLauncher()
