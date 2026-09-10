@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from behave_mcp.messages import RepoState
 from behave_mcp.server import registry
 
 
@@ -100,11 +101,15 @@ class FakeWorkspace:
         log_dir: Path | None = None,
         env: dict[str, str] | None = None,
         repo_root_error: str | None = None,
+        repo_state: RepoState | None = None,
     ) -> None:
         self._repo_root = repo_root
         self._log_dir = log_dir
         self._env = env if env is not None else {}
         self._repo_root_error = repo_root_error
+        self._repo_state = (
+            repo_state if repo_state is not None else RepoState()
+        )
 
     def resolve_repo_root(self, override: str | None) -> Path:
         if self._repo_root_error is not None:
@@ -125,6 +130,9 @@ class FakeWorkspace:
 
     def subprocess_env(self) -> dict[str, str]:
         return dict(self._env)
+
+    def repo_state(self, repo_root: Path) -> RepoState:
+        return self._repo_state
 
 
 def result_json(result):

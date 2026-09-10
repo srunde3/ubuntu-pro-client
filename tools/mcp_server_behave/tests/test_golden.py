@@ -38,6 +38,7 @@ def test_write_record_byte_shape(tmp_path):
         '  "pid": null,\n'
         '  "releases": [],\n'
         '  "repo_root": "",\n'
+        '  "repo_state": null,\n'
         '  "returncode": null,\n'
         '  "scenario_name": "",\n'
         '  "started_at": null,\n'

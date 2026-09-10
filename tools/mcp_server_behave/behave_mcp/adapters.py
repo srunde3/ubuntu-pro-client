@@ -12,7 +12,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from behave_mcp import domain, parser
-from behave_mcp.messages import Artifacts, ExistsFlags, JobRecord
+from behave_mcp.messages import Artifacts, ExistsFlags, JobRecord, RepoState
 from behave_mcp.ports import (
     Job,
     LogFileOpenError,
@@ -334,6 +334,36 @@ class LocalWorkspace:
 
     def subprocess_env(self) -> dict[str, str]:
         return os.environ.copy()
+
+    def repo_state(self, repo_root: Path) -> RepoState:
+        commit = self._git(repo_root, "rev-parse", "HEAD")
+        if commit is None:
+            return RepoState()
+        branch = self._git(repo_root, "rev-parse", "--abbrev-ref", "HEAD")
+        status = self._git(repo_root, "status", "--porcelain")
+        return RepoState(
+            commit=commit,
+            branch=branch,
+            dirty=bool(status) if status is not None else None,
+        )
+
+    @staticmethod
+    def _git(repo_root: Path, *args: str) -> str | None:
+        try:
+            result = subprocess.run(
+                ["git", "-C", str(repo_root), *args],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+        except Exception:
+            # Best-effort by contract (see Workspace.repo_state): swallow
+            # anything, including e.g. a test's global Popen monkeypatch
+            # meant for the behave launcher, not this git shell-out.
+            return None
+        if result.returncode != 0:
+            return None
+        return result.stdout.strip()
 
     def _validated_repo_root(self, candidate: Path) -> Path:
         resolved = candidate.resolve()

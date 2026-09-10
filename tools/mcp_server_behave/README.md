@@ -19,6 +19,7 @@ The server exposes these MCP tools:
 - `start_scenario` -- starts a behave scenario in the background.
   - Returns a `job_id`.
   - Optional `install_from` controls where `ubuntu-pro-client` is installed from before the scenario runs (sets `UACLIENT_BEHAVE_INSTALL_FROM` for the behave subprocess). Allowed values: `local` (default), `archive`, `daily`, `staging`, `stable`, `proposed`.
+  - Returns `repo_state`: `repo_root`'s git `commit`, `branch`, and `dirty` flag at launch time (all `null` when `repo_root` isn't a git checkout), so results can be correlated back to the exact code tested. Also persisted on the job record.
 - `list_scenario_jobs` -- lists active jobs plus a bounded window of recently completed ones.
   - No known `job_id` or access to system processes required.
   - Merges in-memory state with jobs recovered from disk, including jobs still running after a server restart.

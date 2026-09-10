@@ -208,6 +208,58 @@ def test_subprocess_env_forwards_all(monkeypatch):
     assert env["MCP_TEST_PASSTHROUGH"] == "carried"
 
 
+def _init_git_repo(repo_root):
+    subprocess.run(["git", "init", "-q", str(repo_root)], check=True)
+    subprocess.run(
+        ["git", "-C", str(repo_root), "config", "user.email", "t@t.com"],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(repo_root), "config", "user.name", "t"],
+        check=True,
+    )
+    (repo_root / "committed.txt").write_text("x", encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo_root), "add", "-A"], check=True)
+    subprocess.run(
+        ["git", "-C", str(repo_root), "commit", "-q", "-m", "initial"],
+        check=True,
+    )
+
+
+def test_repo_state_reports_commit_branch_and_clean(tmp_path):
+    repo = make_repo_with_feature(tmp_path, rel=None)
+    _init_git_repo(repo)
+    workspace = LocalWorkspace()
+
+    state = workspace.repo_state(repo)
+
+    assert state.commit
+    assert state.branch
+    assert state.dirty is False
+
+
+def test_repo_state_detects_dirty_worktree(tmp_path):
+    repo = make_repo_with_feature(tmp_path, rel=None)
+    _init_git_repo(repo)
+    (repo / "committed.txt").write_text("changed", encoding="utf-8")
+    workspace = LocalWorkspace()
+
+    state = workspace.repo_state(repo)
+
+    assert state.dirty is True
+
+
+def test_repo_state_returns_all_none_outside_a_git_checkout(tmp_path):
+    not_a_repo = make_repo_with_feature(tmp_path, rel=None)
+    workspace = LocalWorkspace()
+
+    state = workspace.repo_state(not_a_repo)
+
+    assert state.commit is None
+    assert state.branch is None
+    assert state.dirty is None
+
+
 # ---- PopenLauncher ----
 
 

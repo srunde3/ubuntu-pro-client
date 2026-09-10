@@ -295,6 +295,8 @@ class BehaveService:
         if install_from_error:
             raise BehaveServiceError(install_from_error)
 
+        repo_state = self._workspace.repo_state(resolved_repo_root)
+
         log_dir = self._workspace.resolve_log_dir(resolved_repo_root)
         results = self._results.bind(log_dir)
         job_id = self._new_job_id()
@@ -376,6 +378,7 @@ class BehaveService:
                 install_from=install_from,
                 command=command,
                 repo_root=str(resolved_repo_root),
+                repo_state=repo_state,
                 pid=handle.pid,
                 artifacts=artifacts,
             ),
@@ -390,6 +393,7 @@ class BehaveService:
                 "machine_types": machine_types,
                 "releases": releases or [],
                 "install_from": install_from,
+                "repo_state": repo_state.model_dump(mode="json"),
                 "artifacts": artifacts_dict,
             },
         )
@@ -398,6 +402,7 @@ class BehaveService:
             job_id=job_id,
             message="Test started. Call wait_for_scenario_completion.",
             artifacts=artifacts,
+            repo_state=repo_state,
         )
 
     def wait_for_completion(

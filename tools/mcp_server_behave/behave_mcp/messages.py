@@ -77,6 +77,18 @@ class Artifacts(BaseModel):
     metadata: str
 
 
+class RepoState(BaseModel):
+    """Git state of repo_root when a job started, for test correlation.
+
+    ``commit``/``branch`` are None when repo_root isn't a git checkout (or
+    git isn't available); ``dirty`` is None whenever ``commit`` is None.
+    """
+
+    commit: str | None = None
+    branch: str | None = None
+    dirty: bool | None = None
+
+
 class JobStatus(str, Enum):
     """Persisted lifecycle status of a behave job."""
 
@@ -115,6 +127,7 @@ class JobRecord(BaseModel):
     install_from: str = ""
     command: list[str] = []
     repo_root: str = ""
+    repo_state: RepoState | None = None
     pid: int | None = None
     returncode: int | None = None
     ok: bool | None = None
@@ -195,6 +208,7 @@ class StartScenarioResponse(BaseModel):
     job_id: str = ""
     message: str = ""
     artifacts: Artifacts | None = None
+    repo_state: RepoState | None = None
 
 
 class CapacityExceededResponse(BaseModel):

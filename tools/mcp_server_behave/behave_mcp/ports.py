@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, NamedTuple, Protocol
 
-from behave_mcp.messages import Artifacts, ExistsFlags, JobRecord
+from behave_mcp.messages import Artifacts, ExistsFlags, JobRecord, RepoState
 from behave_mcp.parser import FeatureDetail
 
 
@@ -203,4 +203,12 @@ class Workspace(Protocol):
 
     def subprocess_env(self) -> dict[str, str]:
         """Return the environment to forward to the behave subprocess."""
+        ...
+
+    def repo_state(self, repo_root: Path) -> RepoState:
+        """Return repo_root's git commit/branch/dirty state, best-effort.
+
+        Returns an all-None RepoState when repo_root isn't a git checkout
+        or git isn't available -- never raises.
+        """
         ...

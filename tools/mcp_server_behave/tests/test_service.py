@@ -16,6 +16,7 @@ from behave_mcp.adapters import (
     LocalJobResultStoreFactory,
 )
 from behave_mcp.config import Settings
+from behave_mcp.messages import RepoState
 from behave_mcp.ports import Job, LogFileOpenError, ProcessStartError
 from behave_mcp.service import (
     BehaveService,
@@ -349,6 +350,38 @@ def test_start_scenario_rejects_invalid_install_from(tmp_path):
             machine_types=["lxd-container"],
             install_from="custom",
         )
+
+
+def test_start_scenario_includes_repo_state_in_response_and_record(tmp_path):
+    repo_root = make_repo_with_feature(tmp_path, "features/cli/attach.feature")
+    launcher = FakeLauncher()
+    service = _make_service(
+        FakeWorkspace(
+            repo_root=repo_root,
+            log_dir=tmp_path,
+            repo_state=RepoState(
+                commit="deadbeef", branch="main", dirty=False
+            ),
+        ),
+        launcher=launcher,
+    )
+
+    result = service.start_scenario(
+        "features/cli/attach.feature",
+        machine_types=["lxd-container"],
+    ).model_dump(mode="json")
+
+    assert result["repo_state"] == {
+        "commit": "deadbeef",
+        "branch": "main",
+        "dirty": False,
+    }
+
+    store = LocalJobResultStoreFactory().bind(tmp_path)
+    record = store.read_record(result["job_id"])
+    assert record.repo_state == RepoState(
+        commit="deadbeef", branch="main", dirty=False
+    )
 
 
 def test_start_scenario_uses_repo_root_override(tmp_path):
