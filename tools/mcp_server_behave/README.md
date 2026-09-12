@@ -35,7 +35,18 @@ The server exposes these MCP tools:
 
 Release and substrate values are derived by parsing each feature's Gherkin `Examples` tables with the `behave` library, so the catalog always reflects the current feature files (no hardcoded release/substrate lists).
 
-For each started job, the server writes artifacts under `.mcp_behave_logs`:
+Everything the server writes lives under one directory in the checkout,
+`.mcp_server_behave`, with a subdirectory per kind of artifact:
+
+```
+.mcp_server_behave/
+  jobs/        one set of artifacts per behave job, plus index.jsonl
+  campaigns/   one record, event log and run lock per campaign
+```
+
+`MCP_STATE_DIR` moves the whole thing; there is no separate variable per kind.
+
+For each started job, the server writes artifacts under `jobs/`:
 
 - `<job_id>_stdout.log`: combined stdout/stderr stream
 - `<job_id>_report.json`: behave JSON formatter output
@@ -185,17 +196,17 @@ Every tool also accepts a `repo_root` parameter:
 
 Campaign files are written under:
 
-- `MCP_CAMPAIGN_DIR`: directory holding campaign records, their event logs
-  and their run locks. Defaults to
-  `<repo_root>/.mcp_server_behave/campaigns`.
 - `MCP_CAMPAIGN_POLL_TIMEOUT`: longest wait `await_campaign_events` may be
   asked for, in seconds. Defaults to `60`, and must be between 1 and 120 --
   the real ceiling is the MCP client's own request timeout, which varies per
   host. A call asking for longer is rejected rather than quietly shortened.
 
-One more variable is read at the point a job starts, and can vary per-call:
+One more variable is read per call rather than at startup, because it follows
+`repo_root`:
 
-- `MCP_LOG_DIR`: overrides where job artifacts (`*_stdout.log`, `*_report.json`, etc.) are written. Defaults to `<repo_root>/.mcp_behave_logs`.
+- `MCP_STATE_DIR`: where the server writes everything -- job artifacts under
+  `jobs/`, campaign records under `campaigns/`. Defaults to
+  `<repo_root>/.mcp_server_behave`.
 
 ## Safety constraints
 
@@ -215,7 +226,6 @@ Known limitation: job liveness after a server restart is determined by checking 
 - Some sort of API config endpoint and tool - can expose to the agent any relevant and non-secret config values. For secret config values like the token and cloud creds, we can indicate if they're set so that the agent can at least correlate skipped tests with missing required config.
 - Take a second look at the response shapes on each endpoint. See if we can reduce the default response size and add flags for more verbose info. It would be great to have a clean integration between the MCP results and the test tracker inputs. Cutting down on response size also reduces token usage.
 - See if there are instructions or API changes that can fix the problem of an agent waiting around for *every* single test in the batch to finish (i.e., `wait_for_scenario_completion` finishes) before launching a new batch. It means the slowest item in the batch dictates the iteration interval. It might be as simple as requesting subagent execution for each item in the batch instead of main loop execution - this would be a skill change only.
-- Introduce and .gitignore a .`mcp_server_behave/` dir to store test campaigns, logs, artifacts, etc.
 
 ### Introduce test campaign APIs
 

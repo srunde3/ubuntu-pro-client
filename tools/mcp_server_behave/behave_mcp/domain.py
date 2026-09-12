@@ -36,14 +36,19 @@ CLOUD_MACHINE_TYPES = {
 }
 ALLOW_CLOUD_MACHINE_TYPES_ENV_VAR = "MCP_ALLOW_CLOUD_MACHINE_TYPES"
 MAX_PARALLEL_JOBS_ENV_VAR = "MCP_MAX_PARALLEL_JOBS"
-CAMPAIGN_DIR_ENV_VAR = "MCP_CAMPAIGN_DIR"
+# Everything the server writes lives under one directory, one subdirectory
+# per kind of artifact, so a checkout has a single place to look and a single
+# thing to ignore or delete.
+STATE_DIR_ENV_VAR = "MCP_STATE_DIR"
+DEFAULT_STATE_DIR_NAME = ".mcp_server_behave"
+JOBS_SUBDIR = "jobs"
+CAMPAIGNS_SUBDIR = "campaigns"
 CAMPAIGN_POLL_TIMEOUT_ENV_VAR = "MCP_CAMPAIGN_POLL_TIMEOUT"
 # How long await_campaign_events may hold a request open. The real ceiling
 # is the client's own request timeout, which varies per host and is not ours
 # to set, so this is configurable and capped conservatively.
 DEFAULT_CAMPAIGN_POLL_TIMEOUT = 60
 MAX_CAMPAIGN_POLL_TIMEOUT = 120
-DEFAULT_CAMPAIGN_DIR_NAME = ".mcp_server_behave/campaigns"
 # features/environment.py reads this exact name (UAClientBehaveConfig's
 # UACLIENT_BEHAVE_ prefix + install_from) to pick where the behave
 # subprocess installs ubuntu-pro-client from; it defaults to 'local' when

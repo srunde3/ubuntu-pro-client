@@ -185,20 +185,51 @@ def test_resolve_repo_root_raises_clear_error_when_undetectable(monkeypatch):
         workspace.resolve_repo_root(None)
 
 
-def test_resolve_log_dir_env_and_default(tmp_path, monkeypatch):
+def test_artifacts_default_to_one_directory_in_the_checkout(
+    tmp_path, monkeypatch
+):
+    monkeypatch.delenv("MCP_STATE_DIR", raising=False)
     workspace = LocalWorkspace()
-
-    custom = tmp_path / "logs"
-    monkeypatch.setenv("MCP_LOG_DIR", str(custom))
-    assert workspace.resolve_log_dir(tmp_path) == custom.resolve()
-    assert custom.exists()
-
-    monkeypatch.delenv("MCP_LOG_DIR", raising=False)
     repo = tmp_path / "repo"
     repo.mkdir()
-    default = workspace.resolve_log_dir(repo)
-    assert default == repo / ".mcp_behave_logs"
-    assert default.exists()
+
+    state = repo / ".mcp_server_behave"
+
+    assert workspace.resolve_state_dir(repo) == state
+    assert workspace.resolve_log_dir(repo) == state / "jobs"
+    assert workspace.resolve_campaign_dir(repo) == state / "campaigns"
+
+
+def test_each_kind_of_artifact_gets_its_own_subdirectory(
+    tmp_path, monkeypatch
+):
+    monkeypatch.delenv("MCP_STATE_DIR", raising=False)
+    workspace = LocalWorkspace()
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    jobs = workspace.resolve_log_dir(repo)
+    campaigns = workspace.resolve_campaign_dir(repo)
+
+    # Created on demand, and distinct, so job output cannot land among
+    # campaign records.
+    assert jobs.is_dir() and campaigns.is_dir()
+    assert jobs != campaigns
+    assert jobs.parent == campaigns.parent
+
+
+def test_the_state_directory_can_be_moved_wholesale(tmp_path, monkeypatch):
+    custom = tmp_path / "elsewhere"
+    monkeypatch.setenv("MCP_STATE_DIR", str(custom))
+    workspace = LocalWorkspace()
+
+    # One variable relocates every kind of artifact together.
+    assert workspace.resolve_state_dir(tmp_path) == custom.resolve()
+    assert workspace.resolve_log_dir(tmp_path) == custom.resolve() / "jobs"
+    assert (
+        workspace.resolve_campaign_dir(tmp_path)
+        == custom.resolve() / "campaigns"
+    )
 
 
 def test_subprocess_env_forwards_all(monkeypatch):

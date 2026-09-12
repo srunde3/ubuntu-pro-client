@@ -323,23 +323,27 @@ class LocalWorkspace:
                 return candidate.resolve()
         return None
 
-    def resolve_log_dir(self, repo_root: Path) -> Path:
-        env_path = os.environ.get("MCP_LOG_DIR")
+    def resolve_state_dir(self, repo_root: Path) -> Path:
+        """Where everything this server writes goes.
+
+        Read per call rather than once at startup, because repo_root varies
+        per call and the state directory follows it.
+        """
+        env_path = os.environ.get(domain.STATE_DIR_ENV_VAR)
         if env_path:
-            log_dir = Path(env_path).resolve()
-        else:
-            log_dir = repo_root / ".mcp_behave_logs"
-        log_dir.mkdir(parents=True, exist_ok=True)
-        return log_dir
+            return Path(env_path).resolve()
+        return repo_root / domain.DEFAULT_STATE_DIR_NAME
+
+    def resolve_log_dir(self, repo_root: Path) -> Path:
+        return self._subdir(repo_root, domain.JOBS_SUBDIR)
 
     def resolve_campaign_dir(self, repo_root: Path) -> Path:
-        env_path = os.environ.get(domain.CAMPAIGN_DIR_ENV_VAR)
-        if env_path:
-            campaign_dir = Path(env_path).resolve()
-        else:
-            campaign_dir = repo_root / domain.DEFAULT_CAMPAIGN_DIR_NAME
-        campaign_dir.mkdir(parents=True, exist_ok=True)
-        return campaign_dir
+        return self._subdir(repo_root, domain.CAMPAIGNS_SUBDIR)
+
+    def _subdir(self, repo_root: Path, name: str) -> Path:
+        path = self.resolve_state_dir(repo_root) / name
+        path.mkdir(parents=True, exist_ok=True)
+        return path
 
     def subprocess_env(self) -> dict[str, str]:
         return os.environ.copy()

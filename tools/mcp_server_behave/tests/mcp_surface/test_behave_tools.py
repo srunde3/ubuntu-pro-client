@@ -135,7 +135,7 @@ async def test_mcp_find_scenarios_matches_by_text(monkeypatch):
 @pytest.mark.asyncio
 async def test_mcp_start_wait_and_log_flow(monkeypatch, tmp_path):
     monkeypatch.setenv("UBUNTU_PRO_CLIENT_REPO", str(_REPO_ROOT))
-    monkeypatch.setenv("MCP_LOG_DIR", str(tmp_path))
+    monkeypatch.setenv("MCP_STATE_DIR", str(tmp_path))
 
     def fake_popen(command, cwd, env, stdout, stderr, text):
         report_path = Path(command[command.index("-o") + 1])

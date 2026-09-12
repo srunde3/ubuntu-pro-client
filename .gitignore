@@ -55,7 +55,6 @@ docs/build/
 tools/mcp_server_behave/build/
 tools/mcp_server_behave/.venv/
 tools/mcp_server_behave/.pytest_cache/
-.mcp_behave_logs/
 
 # compiled translations
 debian/po/usr
@@ -63,5 +62,6 @@ debian/po/usr
 # git worktrees
 .worktrees/
 
-# Campaign records, logs and artifacts written by tools/mcp_server_behave.
+# Everything tools/mcp_server_behave writes: job artifacts, campaign
+# records, event logs, run locks.
 .mcp_server_behave/

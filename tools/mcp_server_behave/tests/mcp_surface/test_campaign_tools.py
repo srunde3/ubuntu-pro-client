@@ -28,7 +28,7 @@ def repo(tmp_path, monkeypatch):
     (features / "example.feature").write_text(FEATURE)
     (repo_root / "tox.ini").write_text("[tox]\n")
     monkeypatch.setenv("UBUNTU_PRO_CLIENT_REPO", str(repo_root))
-    monkeypatch.setenv("MCP_CAMPAIGN_DIR", str(tmp_path / "campaigns"))
+    monkeypatch.setenv("MCP_STATE_DIR", str(tmp_path / "state"))
     return repo_root
 
 
@@ -262,9 +262,9 @@ def runner(repo, monkeypatch, tmp_path):
     ticker = StubTicker()
     # The same log the server's own service reads, so events the runner
     # emits are visible to await_campaign_events.
-    events = JsonlEventLog(tmp_path / "campaigns")
+    events = JsonlEventLog(tmp_path / "state" / "campaigns")
     replacement = CampaignRunner(
-        store=JsonlCampaignStore(tmp_path / "campaigns"),
+        store=JsonlCampaignStore(tmp_path / "state" / "campaigns"),
         lanes=lanes,
         lock=_FakeLock(),
         events=events,

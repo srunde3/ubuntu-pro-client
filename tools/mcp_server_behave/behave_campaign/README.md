@@ -162,7 +162,8 @@ attempt as `error` and keeps the reason, rather than stopping the campaign.
 
 The server exposes the campaign through three tools so far. They read and
 write the same files the CLI does, under the directory named by
-`MCP_CAMPAIGN_DIR` (default `<repo_root>/.mcp_server_behave/campaigns`).
+`MCP_STATE_DIR` (default `<repo_root>/.mcp_server_behave`), in its
+`campaigns/` subdirectory.
 
 - `create_campaign` -- plan a campaign and store it, starting nothing.
   Returns the unit count so scope can be confirmed first. `max_lanes` may

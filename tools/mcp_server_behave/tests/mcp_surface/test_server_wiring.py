@@ -17,7 +17,7 @@ def fresh_server(tmp_path, monkeypatch):
     """A server with no campaign collaborators built yet."""
     repo_root = make_repo_with_feature(tmp_path)
     monkeypatch.setenv("UBUNTU_PRO_CLIENT_REPO", str(repo_root))
-    monkeypatch.setenv("MCP_CAMPAIGN_DIR", str(tmp_path / "campaigns"))
+    monkeypatch.setenv("MCP_STATE_DIR", str(tmp_path / "state"))
     monkeypatch.setattr(server_module, "_runner", None)
     monkeypatch.setattr(server_module, "_events", None)
     return server_module

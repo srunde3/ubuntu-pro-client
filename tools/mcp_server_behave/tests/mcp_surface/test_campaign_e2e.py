@@ -58,9 +58,9 @@ TERMINAL_STATES = {"passed", "failed", "skipped", "error"}
 def test_a_campaign_runs_its_lanes_concurrently(monkeypatch, tmp_path):
     repo_root = Path(__file__).resolve().parents[4]
     monkeypatch.setenv("UBUNTU_PRO_CLIENT_REPO", str(repo_root))
-    monkeypatch.setenv("MCP_LOG_DIR", str(tmp_path / "logs"))
+    monkeypatch.setenv("MCP_STATE_DIR", str(tmp_path / "state"))
 
-    campaign_dir = tmp_path / "campaigns"
+    campaign_dir = tmp_path / "state" / "campaigns"
     store = JsonlCampaignStore(campaign_dir)
     events = JsonlEventLog(campaign_dir)
 
@@ -142,7 +142,12 @@ def test_a_campaign_runs_its_lanes_concurrently(monkeypatch, tmp_path):
     # Every recorded job left artifacts behind to inspect.
     for status in statuses:
         assert status.job_id
-        report = tmp_path / "logs" / "{}_report.json".format(status.job_id)
+        report = (
+            tmp_path
+            / "state"
+            / "jobs"
+            / "{}_report.json".format(status.job_id)
+        )
         assert report.is_file(), report
 
     # The stream a watching agent would have seen, from real jobs.
