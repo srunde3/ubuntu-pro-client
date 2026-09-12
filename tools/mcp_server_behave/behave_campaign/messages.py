@@ -79,13 +79,21 @@ class ListCampaignsResponse(BaseModel):
     campaigns: list[CampaignSummary] = []
 
 
+class RecordAttemptsResponse(BaseModel):
+    """Result of appending attempts: how many landed, and the state after."""
+
+    recorded: int = 0
+    campaign: CampaignSummary = CampaignSummary()
+    running: list[UnitView] = []
+    problems: list[UnitView] = []
+
+
 class CampaignStatusResponse(BaseModel):
     """Current state of one campaign.
 
     ``running`` and ``problems`` are always present because they are what a
-    caller acts on. ``units`` is populated only when ``include_units`` was
-    set, capped at the requested limit with ``truncated`` saying whether
-    anything was dropped.
+    caller acts on. ``units`` is None unless a ``units_limit`` was asked for,
+    and is capped at it, with ``truncated`` saying whether any were dropped.
     """
 
     campaign: CampaignSummary = CampaignSummary()

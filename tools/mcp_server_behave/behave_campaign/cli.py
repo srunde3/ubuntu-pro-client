@@ -22,9 +22,6 @@ from .messages import DEFAULT_UNITS_LIMIT
 from .repo import repo_state
 from .service import CampaignService
 
-# The CLI is pointed at one campaign file, so the id is implicit in the path.
-_IMPLICIT_ID = ""
-
 
 def _service(campaign_file: Path) -> CampaignService:
     return CampaignService(
@@ -32,9 +29,14 @@ def _service(campaign_file: Path) -> CampaignService:
         features=ParserFeatureReader(),
         now=system_now,
         repo_state=repo_state,
-        # No server is involved, so no lane cap applies here.
-        max_parallel_jobs=None,
+        # Nothing here runs tests, so no lane ceiling applies.
+        max_lane_ceiling=None,
     )
+
+
+def _campaign_id(args: argparse.Namespace) -> str:
+    """The campaign's id, which the CLI takes from its file name."""
+    return getattr(args, "campaign_id", None) or args.campaign_file.stem
 
 
 def _load_json(source: str) -> Any:
@@ -57,16 +59,16 @@ def _filters(args: argparse.Namespace) -> Filters:
 def _command_dimensions(args: argparse.Namespace) -> BaseModel:
     # dimensions reads feature files, not a campaign, so this command takes
     # no --campaign and the store it is given is never touched.
-    return _service(Path()).dimensions(args.repo_root)
+    return _service(Path()).dimensions(repo_root=args.repo_root)
 
 
 def _command_create(args: argparse.Namespace) -> BaseModel:
     return _service(args.campaign_file).create_campaign(
-        campaign_id=args.campaign_id or args.campaign_file.stem,
+        campaign_id=_campaign_id(args),
         repo_root=args.repo_root.resolve(),
         releases=args.release or (),
         machine_types=args.machine_type or (),
-        features=args.feature or (),
+        feature_files=args.feature or (),
         scenarios=args.scenario or (),
         install_from=args.install_from,
         max_lanes=args.max_lanes,
@@ -75,26 +77,24 @@ def _command_create(args: argparse.Namespace) -> BaseModel:
 
 def _command_record(args: argparse.Namespace) -> BaseModel:
     return _service(args.campaign_file).record_attempts(
-        campaign_id=_IMPLICIT_ID,
+        campaign_id=_campaign_id(args),
         payload=_load_json(args.input),
         install_from=args.install_from,
         from_mcp=args.from_mcp,
-        filters=_filters(args),
     )
 
 
 def _command_status(args: argparse.Namespace) -> BaseModel:
     return _service(args.campaign_file).campaign_status(
-        campaign_id=_IMPLICIT_ID,
+        campaign_id=_campaign_id(args),
         filters=_filters(args),
-        include_units=args.include_units,
-        limit=args.limit,
+        units_limit=args.units_limit,
     )
 
 
 def _command_next(args: argparse.Namespace) -> BaseModel:
     return _service(args.campaign_file).next_units(
-        campaign_id=_IMPLICIT_ID,
+        campaign_id=_campaign_id(args),
         filters=_filters(args),
         limit=args.limit,
     )
@@ -102,7 +102,7 @@ def _command_next(args: argparse.Namespace) -> BaseModel:
 
 def _command_history(args: argparse.Namespace) -> BaseModel:
     return _service(args.campaign_file).unit_history(
-        campaign_id=_IMPLICIT_ID,
+        campaign_id=_campaign_id(args),
         filters=_filters(args),
         limit=args.limit,
     )
@@ -213,12 +213,16 @@ def build_parser() -> argparse.ArgumentParser:
         subparsers, "status", "show current state per unit", _command_status
     )
     status.add_argument(
-        "--include-units",
-        action="store_true",
-        dest="include_units",
-        help="list every selected unit, not just counts and problems",
+        "--units",
+        type=int,
+        default=0,
+        dest="units_limit",
+        metavar="N",
+        help=(
+            "list up to N individual units as well as the counts. "
+            "Omit to report counts, in-flight units and problems only."
+        ),
     )
-    status.add_argument("--limit", type=int, default=DEFAULT_UNITS_LIMIT)
 
     following = _add_command(
         subparsers, "next", "show the units to run next", _command_next

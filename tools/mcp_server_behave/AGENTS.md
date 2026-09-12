@@ -74,3 +74,13 @@ Shared fixtures/test doubles live in `tests/conftest.py`
 `README.md` is the source of truth for the tool surface, env vars, and safety
 constraints. Update it alongside any change to tool signatures, config, or
 defaults.
+
+## Code conventions
+
+- DO NOT write long comments explaining behavior. Behavior should be obvious from the code. If behavior is not obvious, raise it to the user.
+- NEVER include historical decisions/narrative in code as comments or docstrings. Code should ONLY describe the current state.
+- ALWAYS make commit messages concise, and use conventional commit format.
+
+## Project status
+
+This project is currently WIP with no consumers. Breaking changes are OK, just flag them to the user. Breaking changes must be justified with an improvement in some aspect like maintainability, feature surface, duplication, etc.

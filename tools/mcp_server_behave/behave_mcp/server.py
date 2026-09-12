@@ -17,7 +17,6 @@ from behave_campaign.adapters import (
 )
 from behave_campaign.domain import Filters
 from behave_campaign.messages import (
-    DEFAULT_UNITS_LIMIT,
     CampaignStatusResponse,
     CreateCampaignResponse,
     ListCampaignsResponse,
@@ -163,7 +162,7 @@ def campaign_service(repo_root: str) -> CampaignService:
         features=ParserFeatureReader(),
         now=system_now,
         repo_state=read_repo_state,
-        max_parallel_jobs=_settings.max_parallel_jobs,
+        max_lane_ceiling=_settings.max_parallel_jobs,
     )
 
 
@@ -548,7 +547,7 @@ def create_campaign(
         repo_root=_workspace.resolve_repo_root(repo_root or None),
         releases=releases,
         machine_types=machine_types,
-        features=features,
+        feature_files=features,
         scenarios=scenarios,
         install_from=install_from.value,
         max_lanes=max_lanes,
@@ -570,11 +569,11 @@ def list_campaigns(repo_root: RepoRoot = "") -> ListCampaignsResponse:
     description=(
         "Report one campaign's current state: counts by unit state, the "
         "units in flight, and the units needing action (failed, skipped or "
-        "error). The full unit list is omitted by default because a full "
-        "campaign is over a thousand units -- set include_units to get it, "
-        "capped at limit with truncated saying whether any were dropped. "
-        "The release, machine_type, feature, scenario and state filters "
-        "narrow which units are counted and listed."
+        "error). Individual units are omitted by default because a full "
+        "campaign is over a thousand of them -- set units_limit to list up "
+        "to that many, with truncated saying whether any were dropped. The "
+        "release, machine_type, feature, scenario and state filters narrow "
+        "which units are counted and listed."
     )
 )
 def campaign_status(
@@ -598,17 +597,16 @@ def campaign_status(
             ),
         ),
     ] = [],
-    include_units: Annotated[
-        bool,
-        Field(default=False, description="Include the full unit list."),
-    ] = False,
-    limit: Annotated[
+    units_limit: Annotated[
         int,
         Field(
-            default=DEFAULT_UNITS_LIMIT,
-            description="Cap on units returned when include_units is set.",
+            default=0,
+            description=(
+                "List up to this many individual units alongside the "
+                "counts. Defaults to 0, which lists none."
+            ),
         ),
-    ] = DEFAULT_UNITS_LIMIT,
+    ] = 0,
     repo_root: RepoRoot = "",
 ) -> CampaignStatusResponse:
     return campaign_service(repo_root).campaign_status(
@@ -620,8 +618,7 @@ def campaign_status(
             machine_type=(machine_type,) if machine_type else (),
             state=tuple(state),
         ),
-        include_units=include_units,
-        limit=limit,
+        units_limit=units_limit,
     )
 
 

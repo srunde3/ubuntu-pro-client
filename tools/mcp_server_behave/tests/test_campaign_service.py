@@ -56,7 +56,7 @@ def service(tmp_path, features):
         features=features,
         now=lambda: AT,
         repo_state=lambda root: REPO,
-        max_parallel_jobs=8,
+        max_lane_ceiling=8,
     )
 
 
@@ -101,7 +101,7 @@ class TestCreateCampaign:
             service,
             releases=["jammy"],
             machine_types=["lxd-container"],
-            features=["features/a.feature"],
+            feature_files=["features/a.feature"],
             scenarios=["A"],
         )
 
@@ -195,12 +195,10 @@ class TestCampaignStatus:
 
         assert service.campaign_status(campaign_id="1234567").units is None
 
-    def test_include_units_returns_them(self, service):
+    def test_a_units_limit_returns_them(self, service):
         create(service)
 
-        status = service.campaign_status(
-            campaign_id="1234567", include_units=True
-        )
+        status = service.campaign_status(campaign_id="1234567", units_limit=10)
 
         assert len(status.units) == 3
         assert not status.truncated
@@ -208,9 +206,7 @@ class TestCampaignStatus:
     def test_the_unit_list_is_capped_and_says_so(self, service):
         create(service)
 
-        status = service.campaign_status(
-            campaign_id="1234567", include_units=True, limit=2
-        )
+        status = service.campaign_status(campaign_id="1234567", units_limit=2)
 
         assert len(status.units) == 2
         assert status.truncated
@@ -219,16 +215,24 @@ class TestCampaignStatus:
         create(service)
 
         status = service.campaign_status(
-            campaign_id="1234567", include_units=True, limit=10_000
+            campaign_id="1234567", units_limit=10_000
         )
 
         assert status.limit_clamped
 
-    def test_a_non_positive_limit_is_rejected(self, service):
+    def test_a_zero_units_limit_simply_lists_none(self, service):
+        create(service)
+
+        status = service.campaign_status(campaign_id="1234567", units_limit=0)
+
+        assert status.units is None
+        assert status.campaign.counts.unattempted == 3
+
+    def test_a_negative_units_limit_is_rejected(self, service):
         create(service)
 
         with pytest.raises(CampaignError):
-            service.campaign_status(campaign_id="1234567", limit=0)
+            service.campaign_status(campaign_id="1234567", units_limit=-1)
 
     def test_running_and_problem_units_are_always_reported(
         self, service, store
@@ -289,7 +293,7 @@ class TestCampaignStatus:
         status = service.campaign_status(
             campaign_id="1234567",
             filters=Filters(state=("passed",)),
-            include_units=True,
+            units_limit=10,
         )
 
         assert [u.state for u in status.units] == ["passed"]
@@ -306,7 +310,7 @@ class TestCampaignStatus:
 
 class TestDimensions:
     def test_it_reports_releases_and_machine_types(self, service):
-        result = service.dimensions("/repo")
+        result = service.dimensions(repo_root="/repo")
 
         assert [v.name for v in result.releases] == ["jammy", "noble"]
         assert result.releases[0].scenario_count == 2
@@ -341,6 +345,7 @@ class TestRecordAttempts:
 
         result = record(service, UNITS[0], "failed", "job1")
 
+        assert result.recorded == 1
         assert result.campaign.counts.failed == 1
         assert [u.job_id for u in result.problems] == ["job1"]
 

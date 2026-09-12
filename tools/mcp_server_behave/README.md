@@ -176,12 +176,18 @@ One more variable is read at the point a job starts, and can vary per-call:
 ## TODOs
 
 - Add way to kill jobs if they are known to be hanging
-- Add different "install from" options. Continue defaulting to 'local'. Include git commit or other unique identifier for build for each option, and surface it as a `summarize_scenario_results` filter/grouping dimension once it exists.
 - Improve the job recovery mechanism; it's a little verbose on logs.
 - Precise per-scenario release/machine_type attribution in `summarize_scenario_results` (currently every scenario in a job is attributed to all of that job's declared releases/machine_types) -- deferred to a future change.
 
 Known limitation: job liveness after a server restart is determined by checking whether the recorded PID is still alive (`os.kill(pid, 0)`). If that PID has since been reused by an unrelated process, a dead job can be misreported as still running. This is considered an acceptable tradeoff for a local dev tool.
 
-Investigate possible parallel execution issue:
+- Some sort of API config endpoint and tool - can expose to the agent any relevant and non-secret config values. For secret config values like the token and cloud creds, we can indicate if they're set so that the agent can at least correlate skipped tests with missing required config.
+- Take a second look at the response shapes on each endpoint. See if we can reduce the default response size and add flags for more verbose info. It would be great to have a clean integration between the MCP results and the test tracker inputs. Cutting down on response size also reduces token usage.
+- See if there are instructions or API changes that can fix the problem of an agent waiting around for *every* single test in the batch to finish (i.e., `wait_for_scenario_completion` finishes) before launching a new batch. It means the slowest item in the batch dictates the iteration interval. It might be as simple as requesting subagent execution for each item in the batch instead of main loop execution - this would be a skill change only.
+- Introduce and .gitignore a .`mcp_server_behave/` dir to store test campaigns, logs, artifacts, etc.
 
-> Stalled again on tox provisioning. The tox lock issue still exists when jobs run concurrently (even with different machine types / releases). Let me kill that job and check on the other one.
+### Introduce test campaign APIs
+
+Natively integrate the test campaign into the MCP - the MCP will allow the agent to create and launch test campaigns and can run them under concurrency. The agent consumes a stream of events that it might need to react to (especially failures). Results are automatically updated internally without the agent needing to do any translation.
+
+The agent becomes solely responsible for deciding if a campaign should continue, or if it's doomed due to infra instability, missing config, etc. The agent decides what to retry, and when.

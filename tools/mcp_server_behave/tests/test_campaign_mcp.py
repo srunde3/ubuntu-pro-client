@@ -140,12 +140,12 @@ async def test_campaign_status_omits_units_by_default(repo):
 
 
 @pytest.mark.asyncio
-async def test_campaign_status_returns_units_when_asked(repo):
+async def test_campaign_status_returns_units_when_a_limit_is_given(repo):
     async with create_connected_server_and_client_session(mcp) as client:
         await client.call_tool("create_campaign", {"campaign_id": "1234567"})
         result = await client.call_tool(
             "campaign_status",
-            {"campaign_id": "1234567", "include_units": True},
+            {"campaign_id": "1234567", "units_limit": 50},
         )
 
     units = result_json(result)["units"]
@@ -164,7 +164,7 @@ async def test_campaign_status_filters_by_release(repo):
             {
                 "campaign_id": "1234567",
                 "release": "noble",
-                "include_units": True,
+                "units_limit": 50,
             },
         )
 

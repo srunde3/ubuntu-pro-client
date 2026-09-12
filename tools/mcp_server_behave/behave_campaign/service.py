@@ -4,6 +4,9 @@
 ``behave_mcp.server`` and by ``behave_campaign.cli``. Neither the clock nor
 the filesystem is reached directly, so the whole service is exercisable with
 fakes.
+
+Every method takes keyword arguments only and addresses a campaign by its id,
+so a call reads the same wherever it comes from.
 """
 
 from __future__ import annotations
@@ -35,6 +38,7 @@ from behave_campaign.messages import (
     DimensionValue,
     ListCampaignsResponse,
     NextUnitsResponse,
+    RecordAttemptsResponse,
     StateCounts,
     UnitHistoryResponse,
     UnitHistoryView,
@@ -70,10 +74,6 @@ def _unit_history_view(status: UnitStatus) -> UnitHistoryView:
     )
 
 
-def _counts(statuses: Sequence[UnitStatus]) -> StateCounts:
-    return StateCounts(**domain.count_states(statuses))
-
-
 def _summary(
     campaign_id: str,
     header: CampaignHeader | None,
@@ -86,7 +86,7 @@ def _summary(
         install_from=header.install_from,
         max_lanes=header.max_lanes,
         total_units=len(statuses),
-        counts=_counts(statuses),
+        counts=StateCounts(**domain.count_states(statuses)),
         repo=CampaignRepo(**header.repo.as_dict()),
         scope=CampaignScope(**header.filters.scope_as_dict()),
     )
@@ -100,7 +100,7 @@ def _header_of(records: Sequence[Record]) -> CampaignHeader | None:
 
 
 class CampaignService:
-    """Create, list and report on campaigns."""
+    """Create campaigns, record what happened, and report on them."""
 
     def __init__(
         self,
@@ -109,13 +109,21 @@ class CampaignService:
         features: FeatureReader,
         now: Callable[[], str],
         repo_state: Callable[[Path], RepoState],
-        max_parallel_jobs: int | None = None,
+        max_lane_ceiling: int | None = None,
     ) -> None:
+        """``max_lane_ceiling`` caps a campaign's ``max_lanes``.
+
+        The MCP passes its concurrent-job limit. ``None`` means no ceiling
+        applies, which is the CLI's case: it runs nothing itself, so the
+        limit is enforced wherever a runner has to honour those lanes.
+        """
         self._store = store
         self._features = features
         self._now = now
         self._repo_state = repo_state
-        self._max_parallel_jobs = max_parallel_jobs
+        self._max_lane_ceiling = max_lane_ceiling
+
+    # -- creating ---------------------------------------------------------
 
     def create_campaign(
         self,
@@ -124,7 +132,7 @@ class CampaignService:
         repo_root: Path,
         releases: Sequence[str] = (),
         machine_types: Sequence[str] = (),
-        features: Sequence[str] = (),
+        feature_files: Sequence[str] = (),
         scenarios: Sequence[str] = (),
         install_from: str | None = None,
         max_lanes: int | None = None,
@@ -132,7 +140,7 @@ class CampaignService:
         """Plan a campaign and store it. Starts nothing.
 
         ``install_from`` and ``max_lanes`` are recorded only when given, so a
-        campaign created without them stays readable by anything that predates
+        campaign created without them stays readable by anything predating
         those fields.
         """
         domain.validate_campaign_id(campaign_id)
@@ -142,7 +150,7 @@ class CampaignService:
             self._validate_max_lanes(max_lanes)
 
         filters = Filters(
-            feature=tuple(features),
+            feature=tuple(feature_files),
             scenario=tuple(scenarios),
             release=tuple(releases),
             machine_type=tuple(machine_types),
@@ -163,76 +171,13 @@ class CampaignService:
         plans = [PlanRecord(unit=unit, at=at) for unit in units]
         self._store.create(campaign_id, header, plans)
 
-        statuses = domain.reduce_units([header, *plans])
         return CreateCampaignResponse(
-            campaign=_summary(campaign_id, header, statuses)
-        )
-
-    def list_campaigns(self) -> ListCampaignsResponse:
-        """Summarise every stored campaign."""
-        summaries = []
-        for campaign_id in self._store.list_ids():
-            records = self._store.replay(campaign_id)
-            summaries.append(
-                _summary(
-                    campaign_id,
-                    _header_of(records),
-                    domain.reduce_units(records),
-                )
+            campaign=_summary(
+                campaign_id, header, domain.reduce_units([header, *plans])
             )
-        return ListCampaignsResponse(
-            campaign_dir=str(self._store.root), campaigns=summaries
         )
 
-    def campaign_status(
-        self,
-        *,
-        campaign_id: str,
-        filters: Filters = Filters(),
-        include_units: bool = False,
-        limit: int = DEFAULT_UNITS_LIMIT,
-    ) -> CampaignStatusResponse:
-        """Report counts, the units in flight, and the units needing action.
-
-        ``filters`` narrows which units are counted and listed, so a caller
-        can ask about one release without reading the whole campaign.
-        """
-        records = self._store.replay(campaign_id)
-        statuses = [
-            status
-            for status in domain.reduce_units(records)
-            if filters.matches(status)
-        ]
-
-        capped, clamped = self._cap(limit)
-        units = None
-        truncated = False
-        if include_units:
-            units = [_unit_view(status) for status in statuses[:capped]]
-            truncated = len(statuses) > capped
-
-        return CampaignStatusResponse(
-            campaign=_summary(campaign_id, _header_of(records), statuses),
-            running=[
-                _unit_view(status) for status in domain.running(statuses)
-            ],
-            problems=[
-                _unit_view(status) for status in domain.problems(statuses)
-            ],
-            units=units,
-            truncated=truncated,
-            limit_clamped=clamped,
-        )
-
-    def dimensions(self, repo_root: Path) -> DimensionsResponse:
-        """Report the releases and machine types the feature files can run."""
-        raw = self._features.available_dimensions(repo_root)
-        return DimensionsResponse(
-            releases=[DimensionValue(**value) for value in raw["releases"]],
-            machine_types=[
-                DimensionValue(**value) for value in raw["machine_types"]
-            ],
-        )
+    # -- recording --------------------------------------------------------
 
     def record_attempts(
         self,
@@ -241,8 +186,7 @@ class CampaignService:
         payload: Any,
         install_from: str,
         from_mcp: bool = False,
-        filters: Filters = Filters(),
-    ) -> CampaignStatusResponse:
+    ) -> RecordAttemptsResponse:
         """Append attempts to a campaign and report the resulting state.
 
         ``payload`` is either a list of attempt objects or, with
@@ -272,6 +216,148 @@ class CampaignService:
         ]
 
         existing = self._store.replay(campaign_id)
+        self._reject_unplanned(existing, attempts)
+        self._store.append(campaign_id, attempts)
+
+        statuses = domain.reduce_units([*existing, *attempts])
+        return RecordAttemptsResponse(
+            recorded=len(attempts),
+            campaign=_summary(campaign_id, _header_of(existing), statuses),
+            running=[
+                _unit_view(status) for status in domain.running(statuses)
+            ],
+            problems=[
+                _unit_view(status) for status in domain.problems(statuses)
+            ],
+        )
+
+    # -- reporting --------------------------------------------------------
+
+    def list_campaigns(self) -> ListCampaignsResponse:
+        """Summarise every stored campaign."""
+        summaries = []
+        for campaign_id in self._store.list_ids():
+            records = self._store.replay(campaign_id)
+            summaries.append(
+                _summary(
+                    campaign_id,
+                    _header_of(records),
+                    domain.reduce_units(records),
+                )
+            )
+        return ListCampaignsResponse(
+            campaign_dir=str(self._store.root), campaigns=summaries
+        )
+
+    def campaign_status(
+        self,
+        *,
+        campaign_id: str,
+        filters: Filters = Filters(),
+        units_limit: int = 0,
+    ) -> CampaignStatusResponse:
+        """Report counts, the units in flight, and the units needing action.
+
+        ``filters`` narrows which units are counted and listed, so a caller
+        can ask about one release without reading the whole campaign.
+        ``units_limit`` is how many individual units to list: the default of
+        zero lists none, because a full campaign runs to thousands of units
+        and the counts are what a caller usually acts on.
+        """
+        records = self._store.replay(campaign_id)
+        statuses = [
+            status
+            for status in domain.reduce_units(records)
+            if filters.matches(status)
+        ]
+
+        units = None
+        truncated = False
+        clamped = False
+        if units_limit:
+            capped, clamped = self._cap(units_limit)
+            units = [_unit_view(status) for status in statuses[:capped]]
+            truncated = len(statuses) > capped
+
+        return CampaignStatusResponse(
+            campaign=_summary(campaign_id, _header_of(records), statuses),
+            running=[
+                _unit_view(status) for status in domain.running(statuses)
+            ],
+            problems=[
+                _unit_view(status) for status in domain.problems(statuses)
+            ],
+            units=units,
+            truncated=truncated,
+            limit_clamped=clamped,
+        )
+
+    def next_units(
+        self,
+        *,
+        campaign_id: str,
+        filters: Filters = Filters(),
+        limit: int = 1,
+    ) -> NextUnitsResponse:
+        """Report the units to attempt next.
+
+        Never-attempted units come first, then retryable problems. Units
+        that passed, or that are already running, are never returned.
+        """
+        return NextUnitsResponse(
+            units=[
+                _unit_view(status)
+                for status in domain.select_next(
+                    self._selected(campaign_id, filters), limit
+                )
+            ]
+        )
+
+    def unit_history(
+        self,
+        *,
+        campaign_id: str,
+        filters: Filters = Filters(),
+        limit: int = DEFAULT_UNITS_LIMIT,
+    ) -> UnitHistoryResponse:
+        """Report every selected unit with all of its attempts."""
+        statuses = self._selected(campaign_id, filters)
+        capped, clamped = self._cap(limit)
+        return UnitHistoryResponse(
+            units=[_unit_history_view(status) for status in statuses[:capped]],
+            truncated=len(statuses) > capped,
+            limit_clamped=clamped,
+        )
+
+    def dimensions(self, *, repo_root: Path) -> DimensionsResponse:
+        """Report the releases and machine types the feature files can run.
+
+        Reads feature files rather than any campaign, so it is what a caller
+        uses to pick a valid scope before creating one.
+        """
+        raw = self._features.available_dimensions(repo_root)
+        return DimensionsResponse(
+            releases=[DimensionValue(**value) for value in raw["releases"]],
+            machine_types=[
+                DimensionValue(**value) for value in raw["machine_types"]
+            ],
+        )
+
+    # -- internals --------------------------------------------------------
+
+    def _selected(
+        self, campaign_id: str, filters: Filters
+    ) -> list[UnitStatus]:
+        return [
+            status
+            for status in domain.reduce_units(self._store.replay(campaign_id))
+            if filters.matches(status)
+        ]
+
+    @staticmethod
+    def _reject_unplanned(
+        existing: Sequence[Record], attempts: Sequence[AttemptRecord]
+    ) -> None:
         planned = {
             record.unit
             for record in existing
@@ -287,80 +373,17 @@ class CampaignService:
                 )
             )
 
-        self._store.append(campaign_id, attempts)
-        statuses = [
-            status
-            for status in domain.reduce_units([*existing, *attempts])
-            if filters.matches(status)
-        ]
-        return CampaignStatusResponse(
-            campaign=_summary(campaign_id, _header_of(existing), statuses),
-            running=[
-                _unit_view(status) for status in domain.running(statuses)
-            ],
-            problems=[
-                _unit_view(status) for status in domain.problems(statuses)
-            ],
-        )
-
-    def next_units(
-        self,
-        *,
-        campaign_id: str,
-        filters: Filters = Filters(),
-        limit: int = 1,
-    ) -> NextUnitsResponse:
-        """Report the units to attempt next.
-
-        Never-attempted units come first, then retryable problems. Units
-        that passed, or that are already running, are never returned.
-        """
-        statuses = [
-            status
-            for status in domain.reduce_units(self._store.replay(campaign_id))
-            if filters.matches(status)
-        ]
-        return NextUnitsResponse(
-            units=[
-                _unit_view(status)
-                for status in domain.select_next(statuses, limit)
-            ]
-        )
-
-    def unit_history(
-        self,
-        *,
-        campaign_id: str,
-        filters: Filters = Filters(),
-        limit: int = DEFAULT_UNITS_LIMIT,
-    ) -> UnitHistoryResponse:
-        """Report every selected unit with all of its attempts."""
-        statuses = [
-            status
-            for status in domain.reduce_units(self._store.replay(campaign_id))
-            if filters.matches(status)
-        ]
-        capped, clamped = self._cap(limit)
-        return UnitHistoryResponse(
-            units=[_unit_history_view(status) for status in statuses[:capped]],
-            truncated=len(statuses) > capped,
-            limit_clamped=clamped,
-        )
-
     def _validate_max_lanes(self, max_lanes: int) -> None:
         if max_lanes < 1:
             raise CampaignError("max_lanes must be a positive integer")
-        # The CLI has no server to consult, so it sets no cap; the limit is
-        # enforced wherever a server actually has to honour the lanes.
-        if self._max_parallel_jobs is None:
+        if self._max_lane_ceiling is None:
             return
-        if max_lanes > self._max_parallel_jobs:
+        if max_lanes > self._max_lane_ceiling:
             raise CampaignError(
                 "max_lanes {} exceeds the server's concurrent job limit of "
                 "{}. Such a campaign would run serially and look like a "
-                "hang, so raise the server's limit or lower max_lanes.".format(
-                    max_lanes, self._max_parallel_jobs
-                )
+                "hang, so raise the server's limit or lower "
+                "max_lanes.".format(max_lanes, self._max_lane_ceiling)
             )
 
     @staticmethod
