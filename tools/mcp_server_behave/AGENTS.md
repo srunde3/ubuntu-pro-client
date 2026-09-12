@@ -67,8 +67,21 @@ this path only.
   `behave_mcp` but `behave_campaign` builds every campaign plan with it, so a
   parser change breaks both and its tests sit apart from either.
 - `tests/mcp_surface/` -- `server.py`'s tool wrappers over the real MCP
-  protocol, spanning both packages. `test_e2e.py` needs real LXD and a
-  contract token; the rest run in process.
+  protocol, spanning both packages. Two e2e tests there run real
+  subprocesses: `test_e2e.py` needs LXD and a contract token, while
+  `test_campaign_e2e.py` needs neither -- it drives a real campaign through
+  the real scheduler over `features/_version.feature`, whose scenarios skip
+  without `check_version` config, so it proves concurrency without
+  provisioning anything. The rest run in process.
+
+Run the campaign e2e when changing the scheduler, the lane runner, or
+anything about how jobs are started; it is the only test where behave
+subprocesses really run at once:
+
+```bash
+uv run pytest -q -m "e2e and long_running" \
+  tests/mcp_surface/test_campaign_e2e.py
+```
 
 Each directory is a package (`__init__.py`), so the two `test_domain.py` files
 coexist without a naming dance, and `tests` itself is one so nothing there can

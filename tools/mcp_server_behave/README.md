@@ -121,11 +121,18 @@ Run only fast tests (exclude end-to-end long-running test):
 uv run pytest -q -m "not e2e"
 ```
 
-Run only the long-running end-to-end MCP test:
+Run only the long-running end-to-end tests:
 
 ```bash
 uv run pytest -q -m "e2e and long_running"
 ```
+
+`tests/mcp_surface/test_campaign_e2e.py` is the one e2e test that needs no
+contract token and no LXD: it runs a real three-lane campaign over
+`features/_version.feature`, whose scenarios skip for want of
+`check_version` config, and asserts that all three behave subprocesses were
+in flight at once. It is what proves the scheduler's concurrency is real
+rather than faked, and it finishes in seconds.
 
 ## Linting and type checking
 
