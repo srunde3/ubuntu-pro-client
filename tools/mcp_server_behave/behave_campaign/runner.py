@@ -203,7 +203,7 @@ class CampaignRunner:
         plan = domain.plan_tick(
             records=records,
             lanes=lanes,
-            max_lanes=header.max_lanes or 1,
+            max_lanes=header.max_lanes,
             at=self._now(),
         )
 
@@ -295,7 +295,7 @@ class CampaignRunner:
         problems: list[str],
     ) -> list[AttemptRecord]:
         repo_root = Path(header.repo.root)
-        install_from = header.install_from or domain.DEFAULT_INSTALL_SOURCE
+        install_from = header.install_from
         started: list[AttemptRecord] = []
         for unit in units:
             try:
@@ -327,17 +327,14 @@ class CampaignRunner:
         for status in domain.reduce_units(records):
             if status.state != "running" or not status.job_id:
                 continue
-            current = status.attempts[-1] if status.attempts else None
             lanes.append(
                 Lane(
                     unit=status.unit,
                     job_id=status.job_id,
                     result=self._lanes.poll(status.job_id),
-                    install_from=(
-                        current.install_from
-                        if current is not None
-                        else domain.DEFAULT_INSTALL_SOURCE
-                    ),
+                    # What this job actually ran with, from the running
+                    # attempt the lane recorded when it opened.
+                    install_from=status.attempts[-1].install_from,
                 )
             )
         return lanes

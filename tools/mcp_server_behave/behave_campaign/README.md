@@ -17,9 +17,8 @@ records. The whole campaign replays from the file.
 The `campaign` header captures how the campaign was built, so it can be
 recreated and audited later: the campaign id, the filters used, the checkout it
 was built from (root, commit, branch, dirty), and when. The header also records the
-`install_from` every job runs with and the `max_lanes` a runner may fill.
-Every campaign this tool creates records both; a file written before those
-fields existed still replays without them. Every record carries a
+`install_from` every job runs with and the `max_lanes` a runner may fill; both
+are required, so a campaign always says how it is meant to be run. Every record carries a
 UTC timestamp, and every attempt records the install source the job ran with --
 the evidence an SRU verification actually rests on, which would otherwise only
 live in MCP job history that expires.

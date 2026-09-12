@@ -44,11 +44,14 @@ ATTEMPT_INPUT_FIELDS = (*UNIT_FIELDS, "state", "job_id")
 ATTEMPT_FIELDS = (*ATTEMPT_INPUT_FIELDS, "install_from", "at")
 PLAN_FIELDS = (*UNIT_FIELDS, "at")
 STATE_FIELDS = ("state", "at", "reason")
-CAMPAIGN_FIELDS = ("at", "campaign_id", "repo", "filters")
-# Written only when set, and tolerated when absent, so a campaign file
-# created before these existed still replays. The MCP sets both; the CLI
-# leaves them unset.
-CAMPAIGN_OPTIONAL_FIELDS = ("install_from", "max_lanes")
+CAMPAIGN_FIELDS = (
+    "at",
+    "campaign_id",
+    "repo",
+    "filters",
+    "install_from",
+    "max_lanes",
+)
 REPO_FIELDS = ("root", "commit", "branch", "dirty")
 SCOPE_FIELDS = ("feature", "scenario", "release", "machine_type")
 MCP_RUNNING_STATUSES = ("started", "timeout")
@@ -172,11 +175,10 @@ class CampaignHeader:
     repo: RepoState = RepoState()
     filters: Filters = Filters()
     # The install source every job runs with, and how many lanes a runner
-    # may fill. Every campaign this code creates records both; they are
-    # None only when replaying a file written before the fields existed.
-    # Each attempt still records the source its own job actually used.
-    install_from: str | None = None
-    max_lanes: int | None = None
+    # may fill. Each attempt still records the source its own job actually
+    # used, which is what a verification rests on.
+    install_from: str = DEFAULT_INSTALL_SOURCE
+    max_lanes: int = 1
 
 
 @dataclass(frozen=True)
@@ -196,15 +198,12 @@ Record = CampaignHeader | PlanRecord | AttemptRecord | StateRecord
 
 
 def _require_fields(
-    raw: Any,
-    expected: Sequence[str],
-    label: str,
-    optional: Sequence[str] = (),
+    raw: Any, expected: Sequence[str], label: str
 ) -> dict[str, Any]:
     if not isinstance(raw, dict):
         raise CampaignError("each {} must be a JSON object".format(label))
     missing = sorted(set(expected) - set(raw))
-    unknown = sorted(set(raw) - set(expected) - set(optional))
+    unknown = sorted(set(raw) - set(expected))
     if missing:
         raise CampaignError(
             "{} is missing fields: {}".format(label, ", ".join(missing))
@@ -301,9 +300,7 @@ def _parse_stored_attempt(body: dict[str, Any]) -> AttemptRecord:
 
 
 def _parse_campaign(body: dict[str, Any]) -> CampaignHeader:
-    _require_fields(
-        body, CAMPAIGN_FIELDS, "campaign", CAMPAIGN_OPTIONAL_FIELDS
-    )
+    _require_fields(body, CAMPAIGN_FIELDS, "campaign")
     repo = _require_fields(body["repo"], REPO_FIELDS, "campaign repo")
     scope = _require_fields(body["filters"], SCOPE_FIELDS, "campaign filters")
 
@@ -330,18 +327,18 @@ def _parse_campaign(body: dict[str, Any]) -> CampaignHeader:
             )
         values[field] = tuple(scope[field])
 
-    install_from = body.get("install_from")
-    if install_from is not None:
-        validate_install_source(install_from)
+    install_from = validate_install_source(
+        _text(body, "install_from", "campaign")
+    )
 
-    max_lanes = body.get("max_lanes")
-    if max_lanes is not None and (
+    max_lanes = body["max_lanes"]
+    if (
         isinstance(max_lanes, bool)
         or not isinstance(max_lanes, int)
         or max_lanes < 1
     ):
         raise CampaignError(
-            "campaign field 'max_lanes' must be a positive integer or absent"
+            "campaign field 'max_lanes' must be a positive integer"
         )
 
     return CampaignHeader(
@@ -398,20 +395,15 @@ def parse_record(raw: Any) -> Record:
 
 def encode_record(record: Record) -> dict[str, Any]:
     if isinstance(record, CampaignHeader):
-        header: dict[str, Any] = {
+        return {
             "type": CAMPAIGN,
             "at": record.at,
             "campaign_id": record.campaign_id,
             "repo": record.repo.as_dict(),
             "filters": record.filters.scope_as_dict(),
+            "install_from": record.install_from,
+            "max_lanes": record.max_lanes,
         }
-        # Omitted when unset so a CLI-created header stays byte-identical
-        # to one written before these fields existed.
-        if record.install_from is not None:
-            header["install_from"] = record.install_from
-        if record.max_lanes is not None:
-            header["max_lanes"] = record.max_lanes
-        return header
 
     if isinstance(record, StateRecord):
         return {

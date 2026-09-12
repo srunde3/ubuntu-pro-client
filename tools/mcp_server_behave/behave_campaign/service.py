@@ -142,8 +142,7 @@ class CampaignService:
         Every campaign records the install source its jobs run with and how
         many lanes a runner may fill, because a campaign that does not say
         is underspecified: one created from the CLI can still be handed to a
-        runner later. Replaying a file written before those fields existed
-        is a separate matter, and still works.
+        runner later.
         """
         domain.validate_campaign_id(campaign_id)
         domain.validate_install_source(install_from)

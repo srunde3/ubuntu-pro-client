@@ -58,8 +58,8 @@ class CampaignSummary(BaseModel):
 
     campaign_id: str = ""
     created_at: str = ""
-    install_from: str | None = None
-    max_lanes: int | None = None
+    install_from: str = ""
+    max_lanes: int = 0
     total_units: int = 0
     counts: StateCounts = StateCounts()
     repo: CampaignRepo = CampaignRepo()

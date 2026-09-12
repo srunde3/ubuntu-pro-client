@@ -38,6 +38,33 @@ def header(**overrides):
     return CampaignHeader(**fields)
 
 
+def _stored_header(drop=None, **overrides):
+    """A campaign header as it appears on disk, for malformed-input tests."""
+    stored = {
+        "type": "campaign",
+        "at": AT,
+        "campaign_id": "1234567",
+        "repo": {
+            "root": "/repo",
+            "commit": None,
+            "branch": None,
+            "dirty": None,
+        },
+        "filters": {
+            "feature": [],
+            "scenario": [],
+            "release": [],
+            "machine_type": [],
+        },
+        "install_from": "local",
+        "max_lanes": 1,
+    }
+    stored.update(overrides)
+    if drop is not None:
+        del stored[drop]
+    return stored
+
+
 def plans(*units):
     return [PlanRecord(unit=unit, at=AT) for unit in units]
 
@@ -142,48 +169,25 @@ class TestJsonlCampaignStore:
         store.create("1234567", header(), plans(UNIT_A))
         assert store.exists("1234567")
 
-    def test_a_header_without_the_optional_fields_still_replays(
-        self, tmp_path
-    ):
-        # The format campaign files were written in before install_from and
-        # max_lanes existed. Those files have to keep replaying.
-        legacy = {
-            "type": "campaign",
-            "at": AT,
-            "campaign_id": "1234567",
-            "repo": {
-                "root": "/repo",
-                "commit": None,
-                "branch": None,
-                "dirty": None,
-            },
-            "filters": {
-                "feature": [],
-                "scenario": [],
-                "release": [],
-                "machine_type": [],
-            },
-        }
+    def test_a_header_missing_install_from_is_rejected(self, tmp_path):
         path = tmp_path / "1234567.jsonl"
-        path.write_text(json.dumps(legacy) + "\n")
+        path.write_text(json.dumps(_stored_header(drop="install_from")) + "\n")
 
-        replayed = JsonlCampaignStore(tmp_path).replay("1234567")[0]
+        with pytest.raises(CampaignError) as error:
+            JsonlCampaignStore(tmp_path).replay("1234567")
 
-        assert replayed.install_from is None
-        assert replayed.max_lanes is None
+        assert "install_from" in str(error.value)
 
-    def test_the_optional_fields_are_omitted_when_unset(self, tmp_path):
-        store = JsonlCampaignStore(tmp_path)
-        store.create("1234567", header(), plans(UNIT_A))
+    def test_a_header_missing_max_lanes_is_rejected(self, tmp_path):
+        path = tmp_path / "1234567.jsonl"
+        path.write_text(json.dumps(_stored_header(drop="max_lanes")) + "\n")
 
-        stored = json.loads(
-            (tmp_path / "1234567.jsonl").read_text().splitlines()[0]
-        )
+        with pytest.raises(CampaignError) as error:
+            JsonlCampaignStore(tmp_path).replay("1234567")
 
-        assert "install_from" not in stored
-        assert "max_lanes" not in stored
+        assert "max_lanes" in str(error.value)
 
-    def test_the_optional_fields_round_trip_when_set(self, tmp_path):
+    def test_the_header_round_trips_both_fields(self, tmp_path):
         store = JsonlCampaignStore(tmp_path)
         store.create(
             "1234567",
@@ -196,27 +200,20 @@ class TestJsonlCampaignStore:
         assert replayed.install_from == "proposed"
         assert replayed.max_lanes == 8
 
+    def test_the_header_always_states_them_on_disk(self, tmp_path):
+        store = JsonlCampaignStore(tmp_path)
+        store.create("1234567", header(), plans(UNIT_A))
+
+        stored = json.loads(
+            (tmp_path / "1234567.jsonl").read_text().splitlines()[0]
+        )
+
+        assert stored["install_from"] == "local"
+        assert stored["max_lanes"] == 1
+
     def test_a_non_positive_max_lanes_on_disk_is_rejected(self, tmp_path):
         path = tmp_path / "1234567.jsonl"
-        stored = {
-            "type": "campaign",
-            "at": AT,
-            "campaign_id": "1234567",
-            "repo": {
-                "root": "/repo",
-                "commit": None,
-                "branch": None,
-                "dirty": None,
-            },
-            "filters": {
-                "feature": [],
-                "scenario": [],
-                "release": [],
-                "machine_type": [],
-            },
-            "max_lanes": 0,
-        }
-        path.write_text(json.dumps(stored) + "\n")
+        path.write_text(json.dumps(_stored_header(max_lanes=0)) + "\n")
 
         with pytest.raises(CampaignError) as error:
             JsonlCampaignStore(tmp_path).replay("1234567")
