@@ -182,3 +182,180 @@ async def test_campaign_status_on_an_unknown_campaign_is_an_error(repo):
         )
 
     assert "no campaign" in result_error_text(result)
+
+
+class StubLanes:
+    """Stands in for real behave jobs: starts them, finishes on first poll."""
+
+    def __init__(self):
+        self.started = []
+        self.done = set()
+
+    def start(self, unit, *, repo_root, install_from):
+        job_id = "job{}".format(len(self.started) + 1)
+        self.started.append(unit)
+        return job_id
+
+    def poll(self, job_id):
+        if job_id not in self.done:
+            self.done.add(job_id)
+            return None
+        return {
+            "status": "completed",
+            "ok": True,
+            "job_id": job_id,
+            "summary": {
+                "scenarios": {"passed": 1, "failed": 0, "skipped": 0},
+                "features": {},
+            },
+        }
+
+
+class StubTicker:
+    """Captures the tick callable so no thread runs during a test."""
+
+    def __init__(self):
+        self.tick = None
+
+    def start(self, tick):
+        self.tick = tick
+
+    def stop(self):
+        self.tick = None
+
+    def is_running(self):
+        return self.tick is not None
+
+
+@pytest.fixture
+def runner(repo, monkeypatch, tmp_path):
+    """Replace the server's runner with one that launches no real jobs."""
+    import behave_mcp.server as server_module
+    from behave_campaign.adapters import JsonlCampaignStore, system_now
+    from behave_campaign.runner import CampaignRunner
+
+    lanes = StubLanes()
+    ticker = StubTicker()
+    replacement = CampaignRunner(
+        store=JsonlCampaignStore(tmp_path / "campaigns"),
+        lanes=lanes,
+        lock=_FakeLock(),
+        now=system_now,
+        ticker=ticker,
+    )
+    monkeypatch.setattr(server_module, "_runner", replacement)
+    replacement.lanes = lanes
+    replacement.ticker = ticker
+    return replacement
+
+
+class _FakeLock:
+    def acquire(self, campaign_id):
+        pass
+
+    def release(self, campaign_id):
+        pass
+
+    def held_by_other(self, campaign_id):
+        return False
+
+
+@pytest.mark.asyncio
+async def test_start_campaign_marks_it_running(repo, runner):
+    async with create_connected_server_and_client_session(mcp) as client:
+        await client.call_tool("create_campaign", {"campaign_id": "1234567"})
+        result = await client.call_tool(
+            "start_campaign", {"campaign_id": "1234567"}
+        )
+
+    payload = result_json(result)
+
+    assert payload["lifecycle"] == "running"
+    assert payload["campaign_id"] == "1234567"
+
+
+@pytest.mark.asyncio
+async def test_starting_an_unknown_campaign_is_an_error(repo, runner):
+    async with create_connected_server_and_client_session(mcp) as client:
+        result = await client.call_tool(
+            "start_campaign", {"campaign_id": "absent"}
+        )
+
+    assert "no campaign" in result_error_text(result)
+
+
+@pytest.mark.asyncio
+async def test_only_one_campaign_runs_at_a_time(repo, runner):
+    async with create_connected_server_and_client_session(mcp) as client:
+        await client.call_tool("create_campaign", {"campaign_id": "111"})
+        await client.call_tool("create_campaign", {"campaign_id": "222"})
+        await client.call_tool("start_campaign", {"campaign_id": "111"})
+        result = await client.call_tool(
+            "start_campaign", {"campaign_id": "222"}
+        )
+
+    assert "only one campaign" in result_error_text(result)
+
+
+@pytest.mark.asyncio
+async def test_pause_then_resume_round_trips(repo, runner):
+    async with create_connected_server_and_client_session(mcp) as client:
+        await client.call_tool("create_campaign", {"campaign_id": "1234567"})
+        await client.call_tool("start_campaign", {"campaign_id": "1234567"})
+
+        paused = await client.call_tool(
+            "pause_campaign", {"campaign_id": "1234567"}
+        )
+        resumed = await client.call_tool(
+            "resume_campaign", {"campaign_id": "1234567"}
+        )
+
+    assert result_json(paused)["lifecycle"] == "paused"
+    assert result_json(resumed)["lifecycle"] == "running"
+
+
+@pytest.mark.asyncio
+async def test_pausing_a_campaign_that_never_started_is_an_error(repo, runner):
+    async with create_connected_server_and_client_session(mcp) as client:
+        await client.call_tool("create_campaign", {"campaign_id": "1234567"})
+        result = await client.call_tool(
+            "pause_campaign", {"campaign_id": "1234567"}
+        )
+
+    assert "created" in result_error_text(result)
+
+
+@pytest.mark.asyncio
+async def test_cancel_closes_the_campaign(repo, runner):
+    async with create_connected_server_and_client_session(mcp) as client:
+        await client.call_tool("create_campaign", {"campaign_id": "1234567"})
+        await client.call_tool("start_campaign", {"campaign_id": "1234567"})
+        cancelled = await client.call_tool(
+            "cancel_campaign", {"campaign_id": "1234567"}
+        )
+        restart = await client.call_tool(
+            "start_campaign", {"campaign_id": "1234567"}
+        )
+
+    assert result_json(cancelled)["lifecycle"] == "cancelled"
+    assert "cancelled" in result_error_text(restart)
+
+
+@pytest.mark.asyncio
+async def test_a_started_campaign_fills_lanes_on_its_tick(repo, runner):
+    async with create_connected_server_and_client_session(mcp) as client:
+        await client.call_tool(
+            "create_campaign", {"campaign_id": "1234567", "max_lanes": 1}
+        )
+        await client.call_tool("start_campaign", {"campaign_id": "1234567"})
+        # The ticker is a stub, so drive the tick the way the thread would.
+        runner.ticker.tick()
+        status = await client.call_tool(
+            "campaign_status", {"campaign_id": "1234567"}
+        )
+
+    payload = result_json(status)
+
+    assert len(runner.lanes.started) == 1
+    assert payload["campaign"]["counts"]["running"] == 1
+    assert len(payload["running"]) == 1

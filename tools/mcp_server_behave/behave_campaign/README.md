@@ -16,10 +16,10 @@ records. The whole campaign replays from the file.
 
 The `campaign` header captures how the campaign was built, so it can be
 recreated and audited later: the campaign id, the filters used, the checkout it
-was built from (root, commit, branch, dirty), and when. When the MCP created
-it, the header also records the `install_from` every job runs with and the
-`max_lanes` the scheduler may fill; both are omitted when unset, so a file
-written before they existed still replays. Every record carries a
+was built from (root, commit, branch, dirty), and when. The header also records the
+`install_from` every job runs with and the `max_lanes` a runner may fill.
+Every campaign this tool creates records both; a file written before those
+fields existed still replays without them. Every record carries a
 UTC timestamp, and every attempt records the install source the job ran with --
 the evidence an SRU verification actually rests on, which would otherwise only
 live in MCP job history that expires.
@@ -148,10 +148,35 @@ write the same files the CLI does, under the directory named by
   serially is rejected instead.
 - `list_campaigns` -- every stored campaign with its counts by state.
 - `campaign_status` -- one campaign's counts, the units in flight, and the
-  units needing action. The full unit list is opt-in via `include_units`
-  because a full campaign is over a thousand units.
+  units needing action. Individual units are opt-in via `units_limit`
+  because a full campaign is over a thousand of them.
+- `start_campaign` -- begin scheduling. The server then keeps up to
+  `max_lanes` jobs in flight and fills a lane as soon as one frees, with no
+  further calls needed to keep it moving.
+- `pause_campaign` / `resume_campaign` -- stop and restart lane opening.
+- `cancel_campaign` -- close a campaign to further scheduling, for good.
 
-Nothing runs tests yet: no tool starts a job, and no campaign schedules.
+## Lifecycle
+
+A campaign is `created` until it is started, then `running`, and `complete`
+once nothing is unattempted or in flight. `paused` and `cancelled` are asked
+for; `complete` is derived from the counts, so it can never disagree with the
+units.
+
+Both `pause` and `cancel` **drain**: they stop opening lanes, but jobs already
+in flight run to completion and their results are still recorded. `lanes_busy`
+in the response says how many are still draining. Nothing kills a job.
+
+The scheduler never retries. A unit that failed, was skipped, or errored stays
+that way until someone asks for another attempt, because judging a failure
+flaky-or-real is not something an unattended loop should decide.
+
+Lane state lives in the record, not in memory: a unit in flight is one whose
+latest attempt is `running`, written before the lane is released. That is what
+lets a tick pick up where the last one left off, and why a campaign left
+running by a server that went away can be recovered at all -- it comes back
+`paused`, with `server_restart` as the reason, so whoever is watching decides
+whether those jobs are still alive.
 
 ## Architecture
 
@@ -159,8 +184,9 @@ Same hexagonal layering as [behave_mcp](../behave_mcp), one module per layer:
 
 - `domain.py` -- pure campaign rules. Units, attempts, state reduction, and
   the order remaining work is taken up in. No I/O.
-- `ports.py` -- the Protocols the service depends on: `CampaignStore`,
-  `FeatureReader`, `CampaignRunLock`.
+- `ports.py` -- the Protocols the service and runner depend on:
+  `CampaignStore`, `FeatureReader`, `LaneRunner`, `Ticker`,
+  `CampaignRunLock`.
 - `adapters.py` -- concrete implementations. Two stores satisfy
   `CampaignStore` because the front-ends address campaigns differently: the
   MCP names one by id inside a campaign directory, the CLI is pointed at a
@@ -171,6 +197,12 @@ Same hexagonal layering as [behave_mcp](../behave_mcp), one module per layer:
 - `discovery.py` -- builds units from the feature files via
   `behave_mcp.parser`.
 - `repo.py` -- reads the checkout state a campaign was built from.
+- `runner.py` -- `CampaignRunner`, which opens lanes, records what finishes,
+  and holds the run lock for the one campaign that may be active. The only
+  module here that starts a thread, and it holds no scheduling decisions:
+  those are `domain.plan_tick`, so the scheduler is testable without one.
+  `ThreadTicker` is the `Ticker` port's real implementation; tests inject a
+  fake and call `tick` themselves.
 - `cli.py` -- the standalone front-end. Wrappers only: read arguments, call
   the service, print the response as JSON. Behaviour belongs in `service.py`
   so the CLI and the MCP tools cannot drift apart.

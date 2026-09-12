@@ -134,20 +134,20 @@ class CampaignService:
         machine_types: Sequence[str] = (),
         feature_files: Sequence[str] = (),
         scenarios: Sequence[str] = (),
-        install_from: str | None = None,
-        max_lanes: int | None = None,
+        install_from: str = domain.DEFAULT_INSTALL_SOURCE,
+        max_lanes: int = 1,
     ) -> CreateCampaignResponse:
         """Plan a campaign and store it. Starts nothing.
 
-        ``install_from`` and ``max_lanes`` are recorded only when given, so a
-        campaign created without them stays readable by anything predating
-        those fields.
+        Every campaign records the install source its jobs run with and how
+        many lanes a runner may fill, because a campaign that does not say
+        is underspecified: one created from the CLI can still be handed to a
+        runner later. Replaying a file written before those fields existed
+        is a separate matter, and still works.
         """
         domain.validate_campaign_id(campaign_id)
-        if install_from is not None:
-            domain.validate_install_source(install_from)
-        if max_lanes is not None:
-            self._validate_max_lanes(max_lanes)
+        domain.validate_install_source(install_from)
+        self._validate_max_lanes(max_lanes)
 
         filters = Filters(
             feature=tuple(feature_files),

@@ -30,6 +30,7 @@ from behave_campaign.ports import (
     CampaignExistsError,
     CampaignLockedError,
     CampaignNotFoundError,
+    LaneStartError,
 )
 
 CAMPAIGN_SUFFIX = ".jsonl"
@@ -210,6 +211,38 @@ class ParserFeatureReader:
 
     def available_dimensions(self, repo_root: Path) -> dict[str, Any]:
         return discovery.available_dimensions(repo_root)
+
+
+class ServiceLaneRunner:
+    """Opens lanes by starting behave jobs through ``BehaveService``.
+
+    One lane is one job is one unit: a single scenario, for one release, on
+    one machine type.
+    """
+
+    def __init__(self, service: Any) -> None:
+        self._service = service
+
+    def start(self, unit: Unit, *, repo_root: Path, install_from: str) -> str:
+        result = self._service.start_scenario(
+            feature_file=unit.feature,
+            machine_types=[unit.machine_type],
+            scenario_name=unit.scenario,
+            releases=[unit.release],
+            repo_root=str(repo_root),
+            install_from=install_from,
+        )
+        if getattr(result, "status", "") != "started":
+            raise LaneStartError(
+                getattr(result, "error", "") or "could not start a job"
+            )
+        return str(result.job_id)
+
+    def poll(self, job_id: str) -> Any | None:
+        status = self._service.job_status(job_id)
+        if getattr(status, "status", "") != "completed":
+            return None
+        return status.model_dump()
 
 
 class FileCampaignRunLock:

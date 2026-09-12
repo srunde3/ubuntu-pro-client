@@ -17,7 +17,7 @@ from typing import Any, Callable, Sequence
 from pydantic import BaseModel
 
 from .adapters import ParserFeatureReader, SingleFileCampaignStore, system_now
-from .domain import INSTALL_SOURCES, STATES, Filters
+from .domain import DEFAULT_INSTALL_SOURCE, INSTALL_SOURCES, STATES, Filters
 from .messages import DEFAULT_UNITS_LIMIT
 from .repo import repo_state
 from .service import CampaignService
@@ -176,17 +176,23 @@ def build_parser() -> argparse.ArgumentParser:
     )
     create.add_argument(
         "--install-from",
-        default=None,
+        default=DEFAULT_INSTALL_SOURCE,
         choices=INSTALL_SOURCES,
         dest="install_from",
-        help="install source every job in this campaign should use",
+        help=(
+            "install source every job in this campaign should use "
+            "(default: {})".format(DEFAULT_INSTALL_SOURCE)
+        ),
     )
     create.add_argument(
         "--max-lanes",
-        default=None,
+        default=1,
         type=int,
         dest="max_lanes",
-        help="how many jobs a runner may keep in flight for this campaign",
+        help=(
+            "how many jobs a runner may keep in flight for this campaign "
+            "(default: 1)"
+        ),
     )
 
     record = _add_command(

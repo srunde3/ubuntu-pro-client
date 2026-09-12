@@ -145,3 +145,34 @@ class UnitHistoryResponse(BaseModel):
     units: list[UnitHistoryView] = []
     truncated: bool = False
     limit_clamped: bool = False
+
+
+class CampaignControlResponse(BaseModel):
+    """State of a campaign after a control verb.
+
+    ``lanes_busy`` is what tells a caller whether a pause or cancel has
+    finished draining: both stop opening lanes, but jobs already in flight
+    run to completion and are still recorded.
+    """
+
+    campaign_id: str = ""
+    lifecycle: str = ""
+    reason: str = ""
+    lanes_busy: int = 0
+    counts: StateCounts = StateCounts()
+
+
+class TickReport(BaseModel):
+    """What one scheduler tick did.
+
+    ``problems`` carries anything that needed saying: a result that could
+    not be classified, or a lane that would not open.
+    """
+
+    campaign_id: str = ""
+    lifecycle: str = ""
+    recorded: int = 0
+    started: int = 0
+    lanes_busy: int = 0
+    problems: list[str] = []
+    finished: bool = False

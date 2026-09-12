@@ -1,8 +1,10 @@
 import os
 import sys
+import threading
 import time
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Annotated
 
 from mcp.server import FastMCP
@@ -11,17 +13,21 @@ from pydantic import Field
 from starlette.responses import JSONResponse
 
 from behave_campaign.adapters import (
+    FileCampaignRunLock,
     JsonlCampaignStore,
     ParserFeatureReader,
+    ServiceLaneRunner,
     system_now,
 )
 from behave_campaign.domain import Filters
 from behave_campaign.messages import (
+    CampaignControlResponse,
     CampaignStatusResponse,
     CreateCampaignResponse,
     ListCampaignsResponse,
 )
 from behave_campaign.repo import repo_state as read_repo_state
+from behave_campaign.runner import CampaignRunner
 from behave_campaign.service import CampaignService
 from behave_mcp import domain
 from behave_mcp.adapters import (
@@ -122,6 +128,11 @@ InstallFrom = Annotated[
 ]
 
 
+CampaignIdArg = Annotated[
+    str, Field(description="A campaign id from list_campaigns.")
+]
+
+
 def _utc_timestamp() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -147,6 +158,36 @@ def create_service(
 registry = InMemoryJobRegistry()
 _service = create_service(_settings, registry=registry)
 _workspace = LocalWorkspace()
+# The runner holds the run lock and the ticker for the active campaign, so
+# unlike the per-call service there is exactly one for the server's lifetime.
+_runner: CampaignRunner | None = None
+_runner_guard = threading.Lock()
+
+
+def _campaign_dir(repo_root: str) -> Path:
+    return _workspace.resolve_campaign_dir(
+        _workspace.resolve_repo_root(repo_root or None)
+    )
+
+
+def campaign_runner(repo_root: str) -> CampaignRunner:
+    """Return the one runner, bound to this call's campaign directory.
+
+    Unlike the service, the runner outlives a single call: it holds the run
+    lock and the ticker for whichever campaign is active. It is created once,
+    against the campaign directory the server started with.
+    """
+    global _runner
+    campaign_dir = _campaign_dir(repo_root)
+    with _runner_guard:
+        if _runner is None:
+            _runner = CampaignRunner(
+                store=JsonlCampaignStore(campaign_dir),
+                lanes=ServiceLaneRunner(_service),
+                lock=FileCampaignRunLock(campaign_dir),
+                now=system_now,
+            )
+        return _runner
 
 
 def campaign_service(repo_root: str) -> CampaignService:
@@ -620,6 +661,63 @@ def campaign_status(
         ),
         units_limit=units_limit,
     )
+
+
+@mcp.tool(
+    description=(
+        "Start scheduling a campaign. The server then keeps up to the "
+        "campaign's max_lanes behave jobs in flight, records every outcome, "
+        "and fills a lane as soon as one frees -- no further calls are "
+        "needed to keep it moving. Only one campaign runs at a time, and a "
+        "cancelled or finished one cannot be started again. Poll "
+        "campaign_status to follow progress."
+    )
+)
+def start_campaign(
+    campaign_id: CampaignIdArg, repo_root: RepoRoot = ""
+) -> CampaignControlResponse:
+    return campaign_runner(repo_root).start(campaign_id)
+
+
+@mcp.tool(
+    description=(
+        "Stop opening new lanes, and let the jobs already in flight run to "
+        "completion -- their results are still recorded. lanes_busy in the "
+        "response says how many are still draining. Use resume_campaign to "
+        "continue."
+    )
+)
+def pause_campaign(
+    campaign_id: CampaignIdArg, repo_root: RepoRoot = ""
+) -> CampaignControlResponse:
+    return campaign_runner(repo_root).pause(campaign_id)
+
+
+@mcp.tool(
+    description=(
+        "Resume a paused campaign, including one the server paused by "
+        "itself after a restart. Lanes begin filling again immediately."
+    )
+)
+def resume_campaign(
+    campaign_id: CampaignIdArg, repo_root: RepoRoot = ""
+) -> CampaignControlResponse:
+    return campaign_runner(repo_root).resume(campaign_id)
+
+
+@mcp.tool(
+    description=(
+        "Close a campaign to further scheduling. Like pause, jobs already "
+        "in flight run to completion and are recorded; unlike pause, this "
+        "cannot be reversed. The campaign's record stays readable. Use it "
+        "when a campaign is not worth continuing -- a broken checkout, or "
+        "infrastructure that is not going to recover."
+    )
+)
+def cancel_campaign(
+    campaign_id: CampaignIdArg, repo_root: RepoRoot = ""
+) -> CampaignControlResponse:
+    return campaign_runner(repo_root).cancel(campaign_id)
 
 
 def main() -> None:

@@ -9,7 +9,7 @@ callables rather than Protocols, matching ``behave_mcp.service``.
 """
 
 from pathlib import Path
-from typing import Any, Protocol, Sequence
+from typing import Any, Callable, Protocol, Sequence
 
 from behave_campaign.domain import (
     CampaignError,
@@ -93,6 +93,54 @@ class FeatureReader(Protocol):
 
     def available_dimensions(self, repo_root: Path) -> dict[str, Any]:
         """Return the releases and machine types the feature files can run."""
+        ...
+
+
+class LaneStartError(CampaignError):
+    """Raised when a lane could not be opened for a unit."""
+
+
+class LaneRunner(Protocol):
+    """Runs one test unit as a job, and reports when it has finished."""
+
+    def start(self, unit: Unit, *, repo_root: Path, install_from: str) -> str:
+        """Start a job for ``unit`` and return its job id.
+
+        Raises LaneStartError when no job could be started, including when
+        the runner is at capacity.
+        """
+        ...
+
+    def poll(self, job_id: str) -> Any | None:
+        """Return the job's result payload, or None while it is running.
+
+        The payload is whatever ``classify_result`` understands: the MCP's
+        own completion shape.
+        """
+        ...
+
+
+class Ticker(Protocol):
+    """Calls a function repeatedly until it reports it is done.
+
+    A port so the runner can be driven synchronously in tests: the thread is
+    an implementation of this, not a thing the runner owns.
+    """
+
+    def start(self, tick: Callable[[], bool]) -> None:
+        """Begin calling ``tick``. Calling it again while running is a no-op.
+
+        ``tick`` returning True means the work is finished and no further
+        calls should be made.
+        """
+        ...
+
+    def stop(self) -> None:
+        """Stop calling ``tick`` and wait for any call in flight."""
+        ...
+
+    def is_running(self) -> bool:
+        """Return whether ticks are still being delivered."""
         ...
 
 

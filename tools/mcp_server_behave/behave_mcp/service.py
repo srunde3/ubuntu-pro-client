@@ -405,6 +405,17 @@ class BehaveService:
             repo_state=repo_state,
         )
 
+    def job_status(
+        self, job_id: str, repo_root: str = ""
+    ) -> RunningResponse | CompletedResponse:
+        """Return a job's current state without waiting.
+
+        ``wait_for_completion`` requires a positive timeout, so this is what
+        a caller polls when it must not block -- a scheduler filling lanes,
+        for instance.
+        """
+        return self._status_payload(job_id, repo_root or None)
+
     def wait_for_completion(
         self,
         job_id: str,

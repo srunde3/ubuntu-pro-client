@@ -38,6 +38,7 @@ INSTALL_SOURCES = (
     "stable",
     "proposed",
 )
+DEFAULT_INSTALL_SOURCE = INSTALL_SOURCES[0]
 UNIT_FIELDS = ("feature", "scenario", "release", "machine_type")
 ATTEMPT_INPUT_FIELDS = (*UNIT_FIELDS, "state", "job_id")
 ATTEMPT_FIELDS = (*ATTEMPT_INPUT_FIELDS, "install_from", "at")
@@ -170,9 +171,10 @@ class CampaignHeader:
     campaign_id: str | None = None
     repo: RepoState = RepoState()
     filters: Filters = Filters()
-    # Set when the MCP created the campaign: the install source every job
-    # runs with, and how many lanes the scheduler may fill. Each attempt
-    # still records the source its own job actually used.
+    # The install source every job runs with, and how many lanes a runner
+    # may fill. Every campaign this code creates records both; they are
+    # None only when replaying a file written before the fields existed.
+    # Each attempt still records the source its own job actually used.
     install_from: str | None = None
     max_lanes: int | None = None
 
@@ -653,7 +655,12 @@ class Classification:
     problem: str = ""
 
 
-def classify_result(unit: Unit, result: Any, at: str = "") -> Classification:
+def classify_result(
+    unit: Unit,
+    result: Any,
+    at: str = "",
+    install_from: str = DEFAULT_INSTALL_SOURCE,
+) -> Classification:
     """Map an MCP job payload onto an attempt. Never raises."""
     try:
         attempt = attempt_from_mcp(unit, result)
@@ -664,7 +671,11 @@ def classify_result(unit: Unit, result: Any, at: str = "") -> Classification:
             job_id = raw_job_id if isinstance(raw_job_id, str) else ""
         return Classification(
             attempt=AttemptRecord(
-                unit=unit, state="error", job_id=job_id, at=at
+                unit=unit,
+                state="error",
+                job_id=job_id,
+                install_from=install_from,
+                at=at,
             ),
             problem=str(error),
         )
@@ -673,6 +684,7 @@ def classify_result(unit: Unit, result: Any, at: str = "") -> Classification:
             unit=attempt.unit,
             state=attempt.state,
             job_id=attempt.job_id,
+            install_from=install_from,
             at=at,
         )
     )
@@ -680,11 +692,17 @@ def classify_result(unit: Unit, result: Any, at: str = "") -> Classification:
 
 @dataclass(frozen=True)
 class Lane:
-    """One unit occupying a lane, and its job's result if it has finished."""
+    """One unit occupying a lane, and its job's result if it has finished.
+
+    ``install_from`` is carried from the running attempt this lane recorded
+    when it opened, so the completed attempt states what the job actually
+    ran with rather than what the campaign currently defaults to.
+    """
 
     unit: Unit
     job_id: str
     result: Any = None
+    install_from: str = DEFAULT_INSTALL_SOURCE
 
     @property
     def finished(self) -> bool:
@@ -724,7 +742,7 @@ def plan_tick(
     in-flight jobs are still recorded, and nothing new begins.
     """
     classified = tuple(
-        classify_result(lane.unit, lane.result, at)
+        classify_result(lane.unit, lane.result, at, lane.install_from)
         for lane in lanes
         if lane.finished
     )

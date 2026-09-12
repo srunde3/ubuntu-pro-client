@@ -51,11 +51,16 @@ units are in scope for a verification run, what has been attempted, and what to
 run next. The server's job history is a bounded window, so an SRU campaign that
 runs for days is recorded there instead.
 
-Three tools read and write campaigns: `create_campaign` plans one and stores
-it without starting anything, `list_campaigns` lists them with counts by unit
-state, and `campaign_status` reports one campaign's counts, in-flight units,
-and units needing action. Nothing schedules tests yet -- see
-[Introduce test campaign APIs](#introduce-test-campaign-apis) below.
+`create_campaign` plans one and stores it without starting anything;
+`list_campaigns` and `campaign_status` report on them. `start_campaign` then
+schedules it: the server keeps up to the campaign's `max_lanes` behave jobs in
+flight, records every outcome, and fills a lane as soon as one frees, with no
+further calls needed to keep it moving. `pause_campaign`, `resume_campaign`
+and `cancel_campaign` control it; pause and cancel both let in-flight jobs
+finish rather than killing them.
+
+Only one campaign schedules at a time, held by an advisory lock so a
+concurrent CLI fails cleanly instead of interleaving writes.
 
 The package is also usable on its own through the `behave-campaign` CLI, and
 shares this project's `pyproject.toml`, virtualenv, and CI job. See
@@ -159,8 +164,8 @@ Every tool also accepts a `repo_root` parameter:
 
 Campaign files are written under:
 
-- `MCP_CAMPAIGN_DIR`: directory holding campaign records. Defaults to
-  `<repo_root>/.mcp_server_behave/campaigns`.
+- `MCP_CAMPAIGN_DIR`: directory holding campaign records and their run
+  locks. Defaults to `<repo_root>/.mcp_server_behave/campaigns`.
 
 One more variable is read at the point a job starts, and can vary per-call:
 
