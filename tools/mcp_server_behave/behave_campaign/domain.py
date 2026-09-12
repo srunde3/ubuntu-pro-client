@@ -31,6 +31,10 @@ ATTEMPT_INPUT_FIELDS = (*UNIT_FIELDS, "state", "job_id")
 ATTEMPT_FIELDS = (*ATTEMPT_INPUT_FIELDS, "install_from", "at")
 PLAN_FIELDS = (*UNIT_FIELDS, "at")
 CAMPAIGN_FIELDS = ("at", "campaign_id", "repo", "filters")
+# Written only when set, and tolerated when absent, so a campaign file
+# created before these existed still replays. The MCP sets both; the CLI
+# leaves them unset.
+CAMPAIGN_OPTIONAL_FIELDS = ("install_from", "max_lanes")
 REPO_FIELDS = ("root", "commit", "branch", "dirty")
 SCOPE_FIELDS = ("feature", "scenario", "release", "machine_type")
 MCP_RUNNING_STATUSES = ("started", "timeout")
@@ -153,18 +157,26 @@ class CampaignHeader:
     campaign_id: str | None = None
     repo: RepoState = RepoState()
     filters: Filters = Filters()
+    # Set when the MCP created the campaign: the install source every job
+    # runs with, and how many lanes the scheduler may fill. Each attempt
+    # still records the source its own job actually used.
+    install_from: str | None = None
+    max_lanes: int | None = None
 
 
 Record = CampaignHeader | PlanRecord | AttemptRecord
 
 
 def _require_fields(
-    raw: Any, expected: Sequence[str], label: str
+    raw: Any,
+    expected: Sequence[str],
+    label: str,
+    optional: Sequence[str] = (),
 ) -> dict[str, Any]:
     if not isinstance(raw, dict):
         raise CampaignError("each {} must be a JSON object".format(label))
     missing = sorted(set(expected) - set(raw))
-    unknown = sorted(set(raw) - set(expected))
+    unknown = sorted(set(raw) - set(expected) - set(optional))
     if missing:
         raise CampaignError(
             "{} is missing fields: {}".format(label, ", ".join(missing))
@@ -214,6 +226,26 @@ def parse_attempt(raw: Any) -> AttemptRecord:
     )
 
 
+def validate_campaign_id(value: str) -> str:
+    """Return ``value`` if it is usable as a campaign id and a file name.
+
+    A campaign id names a file on disk, so it is kept to characters that
+    cannot escape the campaign directory or surprise a shell.
+    """
+    if not value or not value.strip():
+        raise CampaignError("campaign id must not be empty")
+    if not all(char.isalnum() or char in "._-" for char in value):
+        raise CampaignError(
+            "campaign id may only contain letters, digits, '.', '_' and "
+            "'-'; got {!r}".format(value)
+        )
+    if value.startswith(".") or value in (".", ".."):
+        raise CampaignError(
+            "campaign id must not start with '.'; got {!r}".format(value)
+        )
+    return value
+
+
 def validate_install_source(value: str) -> str:
     if value not in INSTALL_SOURCES:
         raise CampaignError(
@@ -241,7 +273,9 @@ def _parse_stored_attempt(body: dict[str, Any]) -> AttemptRecord:
 
 
 def _parse_campaign(body: dict[str, Any]) -> CampaignHeader:
-    _require_fields(body, CAMPAIGN_FIELDS, "campaign")
+    _require_fields(
+        body, CAMPAIGN_FIELDS, "campaign", CAMPAIGN_OPTIONAL_FIELDS
+    )
     repo = _require_fields(body["repo"], REPO_FIELDS, "campaign repo")
     scope = _require_fields(body["filters"], SCOPE_FIELDS, "campaign filters")
 
@@ -268,6 +302,20 @@ def _parse_campaign(body: dict[str, Any]) -> CampaignHeader:
             )
         values[field] = tuple(scope[field])
 
+    install_from = body.get("install_from")
+    if install_from is not None:
+        validate_install_source(install_from)
+
+    max_lanes = body.get("max_lanes")
+    if max_lanes is not None and (
+        isinstance(max_lanes, bool)
+        or not isinstance(max_lanes, int)
+        or max_lanes < 1
+    ):
+        raise CampaignError(
+            "campaign field 'max_lanes' must be a positive integer or absent"
+        )
+
     return CampaignHeader(
         at=_text(body, "at", "campaign"),
         campaign_id=campaign_id,
@@ -278,6 +326,8 @@ def _parse_campaign(body: dict[str, Any]) -> CampaignHeader:
             dirty=repo["dirty"],
         ),
         filters=Filters(**values),
+        install_from=install_from,
+        max_lanes=max_lanes,
     )
 
 
@@ -305,13 +355,20 @@ def parse_record(raw: Any) -> Record:
 
 def encode_record(record: Record) -> dict[str, Any]:
     if isinstance(record, CampaignHeader):
-        return {
+        header: dict[str, Any] = {
             "type": CAMPAIGN,
             "at": record.at,
             "campaign_id": record.campaign_id,
             "repo": record.repo.as_dict(),
             "filters": record.filters.scope_as_dict(),
         }
+        # Omitted when unset so a CLI-created header stays byte-identical
+        # to one written before these fields existed.
+        if record.install_from is not None:
+            header["install_from"] = record.install_from
+        if record.max_lanes is not None:
+            header["max_lanes"] = record.max_lanes
+        return header
 
     data: dict[str, Any] = record.unit.as_dict()
     data["at"] = record.at

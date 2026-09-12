@@ -34,7 +34,11 @@ async def test_mcp_lists_expected_tools():
     assert "wait_for_scenario_completion" in tools
     assert "get_scenario_logs" in tools
     assert "get_scenario_artifacts" in tools
+    assert "create_campaign" in tools
+    assert "list_campaigns" in tools
+    assert "campaign_status" in tools
     assert tools["start_scenario"].description
+    assert tools["create_campaign"].description
 
 
 @pytest.mark.asyncio

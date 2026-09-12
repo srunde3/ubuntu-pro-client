@@ -36,6 +36,8 @@ CLOUD_MACHINE_TYPES = {
 }
 ALLOW_CLOUD_MACHINE_TYPES_ENV_VAR = "MCP_ALLOW_CLOUD_MACHINE_TYPES"
 MAX_PARALLEL_JOBS_ENV_VAR = "MCP_MAX_PARALLEL_JOBS"
+CAMPAIGN_DIR_ENV_VAR = "MCP_CAMPAIGN_DIR"
+DEFAULT_CAMPAIGN_DIR_NAME = ".mcp_server_behave/campaigns"
 # features/environment.py reads this exact name (UAClientBehaveConfig's
 # UACLIENT_BEHAVE_ prefix + install_from) to pick where the behave
 # subprocess installs ubuntu-pro-client from; it defaults to 'local' when

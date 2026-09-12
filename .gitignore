@@ -62,3 +62,6 @@ debian/po/usr
 
 # git worktrees
 .worktrees/
+
+# Campaign records, logs and artifacts written by tools/mcp_server_behave.
+.mcp_server_behave/

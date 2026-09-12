@@ -3,15 +3,13 @@
 from __future__ import annotations
 
 import argparse
-import fcntl
 import json
-import os
 import sys
 from dataclasses import replace
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
+from .adapters import SingleFileCampaignStore, system_now
 from .discovery import available_dimensions, discover_units
 from .domain import (
     INSTALL_SOURCES,
@@ -28,56 +26,21 @@ from .domain import (
     describe_units,
     encode_record,
     parse_attempt,
-    parse_record,
     problems,
     reduce_units,
     running,
     select_next,
 )
+from .ports import CampaignExistsError
 from .repo import repo_state
 
 
-def _now() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+def _store(campaign_file: Path) -> SingleFileCampaignStore:
+    return SingleFileCampaignStore(campaign_file)
 
 
 def _read_records(campaign_file: Path) -> list[Record]:
-    if not campaign_file.exists():
-        return []
-
-    records: list[Record] = []
-    with campaign_file.open("r") as stream:
-        for number, line in enumerate(stream, 1):
-            if not line.strip():
-                continue
-            try:
-                records.append(parse_record(json.loads(line)))
-            except ValueError as error:
-                raise CampaignError(
-                    "invalid campaign record on line {}: {}".format(
-                        number, error
-                    )
-                ) from error
-    return records
-
-
-def _append_records(campaign_file: Path, records: Sequence[Record]) -> None:
-    campaign_file.parent.mkdir(parents=True, exist_ok=True)
-    payload = "".join(
-        json.dumps(
-            encode_record(record), sort_keys=True, separators=(",", ":")
-        )
-        + "\n"
-        for record in records
-    )
-    with campaign_file.open("a") as stream:
-        fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
-        try:
-            stream.write(payload)
-            stream.flush()
-            os.fsync(stream.fileno())
-        finally:
-            fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+    return _store(campaign_file).replay("")
 
 
 def _load_json(source: str) -> Any:
@@ -128,30 +91,25 @@ def _command_dimensions(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def _command_create(args: argparse.Namespace) -> dict[str, Any]:
-    existing = _read_records(args.campaign_file)
-    if existing:
-        raise CampaignError(
-            "this file already holds a campaign; create a new one instead"
-        )
-
     filters = _filters(args)
     repo_root = args.repo_root.resolve()
     units = discover_units(repo_root, filters)
     if not units:
         raise CampaignError("no test units matched the requested filters")
 
-    at = _now()
+    at = system_now()
     campaign = CampaignHeader(
         at=at,
         campaign_id=args.campaign_id,
         repo=repo_state(repo_root),
         filters=filters,
     )
-    records: list[Record] = [
-        campaign,
-        *(PlanRecord(unit=unit, at=at) for unit in units),
-    ]
-    _append_records(args.campaign_file, records)
+    plans = [PlanRecord(unit=unit, at=at) for unit in units]
+    try:
+        _store(args.campaign_file).create("", campaign, plans)
+    except CampaignExistsError as error:
+        raise CampaignError(str(error)) from error
+    records: list[Record] = [campaign, *plans]
     return _status_payload(reduce_units(records), campaign)
 
 
@@ -164,7 +122,7 @@ def _command_record(args: argparse.Namespace) -> dict[str, Any]:
             raise CampaignError("input must be a non-empty JSON array")
         parsed = [parse_attempt(raw) for raw in payload]
 
-    at = _now()
+    at = system_now()
     attempts: list[AttemptRecord] = [
         replace(attempt, install_from=args.install_from, at=at)
         for attempt in parsed
@@ -179,7 +137,7 @@ def _command_record(args: argparse.Namespace) -> dict[str, Any]:
             )
         )
 
-    _append_records(args.campaign_file, attempts)
+    _store(args.campaign_file).append("", attempts)
     statuses = reduce_units([*existing, *attempts])
     return _status_payload(_selected(statuses, _filters(args)))
 

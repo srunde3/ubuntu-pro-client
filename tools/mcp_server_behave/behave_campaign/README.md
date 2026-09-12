@@ -16,7 +16,10 @@ records. The whole campaign replays from the file.
 
 The `campaign` header captures how the campaign was built, so it can be
 recreated and audited later: the campaign id, the filters used, the checkout it
-was built from (root, commit, branch, dirty), and when. Every record carries a
+was built from (root, commit, branch, dirty), and when. When the MCP created
+it, the header also records the `install_from` every job runs with and the
+`max_lanes` the scheduler may fill; both are omitted when unset, so a file
+written before they existed still replays. Every record carries a
 UTC timestamp, and every attempt records the install source the job ran with --
 the evidence an SRU verification actually rests on, which would otherwise only
 live in MCP job history that expires.
@@ -114,16 +117,46 @@ Anything else -- mixed passes and skips, an `unknown` scenario status, or a
 pass contradicted by `ok: false` -- is rejected so it gets looked at rather
 than silently recorded. Pass an explicit attempt state if that ever happens.
 
+## MCP tools
+
+The server exposes the campaign through three tools so far. They read and
+write the same files the CLI does, under the directory named by
+`MCP_CAMPAIGN_DIR` (default `<repo_root>/.mcp_server_behave/campaigns`).
+
+- `create_campaign` -- plan a campaign and store it, starting nothing.
+  Returns the unit count so scope can be confirmed first. `max_lanes` may
+  not exceed `MCP_MAX_PARALLEL_JOBS`; a campaign that would silently run
+  serially is rejected instead.
+- `list_campaigns` -- every stored campaign with its counts by state.
+- `campaign_status` -- one campaign's counts, the units in flight, and the
+  units needing action. The full unit list is opt-in via `include_units`
+  because a full campaign is over a thousand units.
+
+Nothing runs tests yet: no tool starts a job, and no campaign schedules.
+
 ## Architecture
 
 Same hexagonal layering as [behave_mcp](../behave_mcp), one module per layer:
 
 - `domain.py` -- pure campaign rules. Units, attempts, state reduction, and
   the order remaining work is taken up in. No I/O.
+- `ports.py` -- the Protocols the service depends on: `CampaignStore`,
+  `FeatureReader`, `CampaignRunLock`.
+- `adapters.py` -- concrete implementations. Two stores satisfy
+  `CampaignStore` because the front-ends address campaigns differently: the
+  MCP names one by id inside a campaign directory, the CLI is pointed at a
+  file. Both share one serialisation path, so there is one on-disk format.
+- `service.py` -- `CampaignService`, driven by both the MCP tool wrappers and
+  the CLI. Where behaviour changes belong.
+- `messages.py` -- pydantic DTOs returned across the MCP boundary.
 - `discovery.py` -- builds units from the feature files via
   `behave_mcp.parser`.
 - `repo.py` -- reads the checkout state a campaign was built from.
 - `cli.py` -- the standalone front-end.
+
+The run lock is an advisory `flock` on `<campaign_id>.lock`, held for as long
+as a campaign is actively scheduling, so a concurrent CLI fails cleanly
+instead of interleaving writes. The kernel drops it if the holder dies.
 
 ## Build, test, lint
 

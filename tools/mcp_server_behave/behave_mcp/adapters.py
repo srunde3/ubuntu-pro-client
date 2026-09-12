@@ -332,6 +332,15 @@ class LocalWorkspace:
         log_dir.mkdir(parents=True, exist_ok=True)
         return log_dir
 
+    def resolve_campaign_dir(self, repo_root: Path) -> Path:
+        env_path = os.environ.get(domain.CAMPAIGN_DIR_ENV_VAR)
+        if env_path:
+            campaign_dir = Path(env_path).resolve()
+        else:
+            campaign_dir = repo_root / domain.DEFAULT_CAMPAIGN_DIR_NAME
+        campaign_dir.mkdir(parents=True, exist_ok=True)
+        return campaign_dir
+
     def subprocess_env(self) -> dict[str, str]:
         return os.environ.copy()
 

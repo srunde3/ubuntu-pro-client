@@ -102,9 +102,11 @@ class FakeWorkspace:
         env: dict[str, str] | None = None,
         repo_root_error: str | None = None,
         repo_state: RepoState | None = None,
+        campaign_dir: Path | None = None,
     ) -> None:
         self._repo_root = repo_root
         self._log_dir = log_dir
+        self._campaign_dir = campaign_dir
         self._env = env if env is not None else {}
         self._repo_root_error = repo_root_error
         self._repo_state = (
@@ -127,6 +129,11 @@ class FakeWorkspace:
         if self._log_dir is None:
             raise ValueError("FakeWorkspace has no log_dir configured")
         return self._log_dir
+
+    def resolve_campaign_dir(self, repo_root: Path) -> Path:
+        if self._campaign_dir is None:
+            raise ValueError("FakeWorkspace has no campaign_dir configured")
+        return self._campaign_dir
 
     def subprocess_env(self) -> dict[str, str]:
         return dict(self._env)

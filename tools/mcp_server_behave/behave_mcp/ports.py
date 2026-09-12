@@ -201,6 +201,10 @@ class Workspace(Protocol):
         """Resolve and create the directory for job artifacts."""
         ...
 
+    def resolve_campaign_dir(self, repo_root: Path) -> Path:
+        """Resolve and create the directory holding campaign files."""
+        ...
+
     def subprocess_env(self) -> dict[str, str]:
         """Return the environment to forward to the behave subprocess."""
         ...

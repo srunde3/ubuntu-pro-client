@@ -51,11 +51,16 @@ units are in scope for a verification run, what has been attempted, and what to
 run next. The server's job history is a bounded window, so an SRU campaign that
 runs for days is recorded there instead.
 
-It is usable on its own through the `behave-campaign` CLI, and shares this
-project's `pyproject.toml`, virtualenv, and CI job. See
-[behave_campaign/README.md](behave_campaign/README.md) for the record format, the CLI, and
-how MCP job results map onto attempts. No MCP tool drives a campaign yet -- see
+Three tools read and write campaigns: `create_campaign` plans one and stores
+it without starting anything, `list_campaigns` lists them with counts by unit
+state, and `campaign_status` reports one campaign's counts, in-flight units,
+and units needing action. Nothing schedules tests yet -- see
 [Introduce test campaign APIs](#introduce-test-campaign-apis) below.
+
+The package is also usable on its own through the `behave-campaign` CLI, and
+shares this project's `pyproject.toml`, virtualenv, and CI job. See
+[behave_campaign/README.md](behave_campaign/README.md) for the record format,
+the CLI, and how MCP job results map onto attempts.
 
 ## Local usage
 
@@ -151,6 +156,11 @@ The server also reads these variables at startup:
 Every tool also accepts a `repo_root` parameter:
 
 - `repo_root`: the repository to run behave against. If a call omits it, the server falls back to `UBUNTU_PRO_CLIENT_REPO`, then to auto-detection -- which only works when running from an editable/in-place install (`uv run` from inside the package directory), not via `uvx --from`. **When using `uvx --from` (the documented usage), set `UBUNTU_PRO_CLIENT_REPO` or always pass `repo_root` explicitly.**
+
+Campaign files are written under:
+
+- `MCP_CAMPAIGN_DIR`: directory holding campaign records. Defaults to
+  `<repo_root>/.mcp_server_behave/campaigns`.
 
 One more variable is read at the point a job starts, and can vary per-call:
 

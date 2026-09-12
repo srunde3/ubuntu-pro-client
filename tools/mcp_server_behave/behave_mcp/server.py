@@ -10,6 +10,20 @@ from mcp.server.fastmcp.server import Settings as FastMCPSettings
 from pydantic import Field
 from starlette.responses import JSONResponse
 
+from behave_campaign.adapters import (
+    JsonlCampaignStore,
+    ParserFeatureReader,
+    system_now,
+)
+from behave_campaign.domain import Filters
+from behave_campaign.messages import (
+    DEFAULT_UNITS_LIMIT,
+    CampaignStatusResponse,
+    CreateCampaignResponse,
+    ListCampaignsResponse,
+)
+from behave_campaign.repo import repo_state as read_repo_state
+from behave_campaign.service import CampaignService
 from behave_mcp import domain
 from behave_mcp.adapters import (
     InMemoryJobRegistry,
@@ -133,6 +147,24 @@ def create_service(
 
 registry = InMemoryJobRegistry()
 _service = create_service(_settings, registry=registry)
+_workspace = LocalWorkspace()
+
+
+def campaign_service(repo_root: str) -> CampaignService:
+    """Build a CampaignService bound to this call's campaign directory.
+
+    The directory follows repo_root, which varies per call, so the service
+    is assembled per call the same way job result stores are bound per job.
+    It holds no state of its own.
+    """
+    resolved = _workspace.resolve_repo_root(repo_root or None)
+    return CampaignService(
+        store=JsonlCampaignStore(_workspace.resolve_campaign_dir(resolved)),
+        features=ParserFeatureReader(),
+        now=system_now,
+        repo_state=read_repo_state,
+        max_parallel_jobs=_settings.max_parallel_jobs,
+    )
 
 
 @mcp.custom_route("/healthz", methods=["GET"])
@@ -451,6 +483,146 @@ def get_scenario_artifacts(
     job_id: JobId, repo_root: RepoRoot = ""
 ) -> ArtifactsResponse:
     return _service.get_artifacts(job_id, repo_root)
+
+
+@mcp.tool(
+    description=(
+        "Plan a test campaign and store it, without starting anything. A "
+        "campaign is the durable record of which test units -- one scenario "
+        "for one release on one machine_type -- are in scope, what has been "
+        "attempted, and what each attempt established. Units are built only "
+        "from the combinations each scenario actually supports, so the "
+        "campaign is never a Cartesian product. Omit every filter to cover "
+        "the whole suite. Use list_dimensions first to discover valid "
+        "release and machine_type values. Returns the unit count so the "
+        "scope can be confirmed before any test runs. max_lanes may not "
+        "exceed MCP_MAX_PARALLEL_JOBS."
+    )
+)
+def create_campaign(
+    campaign_id: Annotated[
+        str,
+        Field(
+            description=(
+                "Identifier for this campaign, also its file name. For SRU "
+                "work this is the Launchpad bug number. Letters, digits, "
+                "'.', '_' and '-' only."
+            )
+        ),
+    ],
+    releases: Annotated[
+        list[str],
+        Field(description="Releases in scope."),
+    ] = [],
+    machine_types: Annotated[
+        list[str],
+        Field(description="Machine types in scope."),
+    ] = [],
+    features: Annotated[
+        list[str],
+        Field(
+            description="Feature file paths in scope, from list_features.",
+        ),
+    ] = [],
+    scenarios: Annotated[
+        list[str],
+        Field(
+            description="Exact scenario names in scope.",
+        ),
+    ] = [],
+    install_from: InstallFrom = domain.InstallFrom.LOCAL,
+    max_lanes: Annotated[
+        int,
+        Field(
+            default=1,
+            description=(
+                "How many behave jobs the campaign may run at once. Must "
+                "not exceed MCP_MAX_PARALLEL_JOBS."
+            ),
+        ),
+    ] = 1,
+    repo_root: RepoRoot = "",
+) -> CreateCampaignResponse:
+    return campaign_service(repo_root).create_campaign(
+        campaign_id=campaign_id,
+        repo_root=_workspace.resolve_repo_root(repo_root or None),
+        releases=releases,
+        machine_types=machine_types,
+        features=features,
+        scenarios=scenarios,
+        install_from=install_from.value,
+        max_lanes=max_lanes,
+    )
+
+
+@mcp.tool(
+    description=(
+        "List every stored campaign with its current counts by unit state. "
+        "Use it to find a campaign id to inspect, or to see what work is "
+        "outstanding across campaigns."
+    )
+)
+def list_campaigns(repo_root: RepoRoot = "") -> ListCampaignsResponse:
+    return campaign_service(repo_root).list_campaigns()
+
+
+@mcp.tool(
+    description=(
+        "Report one campaign's current state: counts by unit state, the "
+        "units in flight, and the units needing action (failed, skipped or "
+        "error). The full unit list is omitted by default because a full "
+        "campaign is over a thousand units -- set include_units to get it, "
+        "capped at limit with truncated saying whether any were dropped. "
+        "The release, machine_type, feature, scenario and state filters "
+        "narrow which units are counted and listed."
+    )
+)
+def campaign_status(
+    campaign_id: Annotated[
+        str, Field(description="A campaign id from list_campaigns.")
+    ],
+    release: ReleaseFilter = "",
+    machine_type: MachineTypeFilter = "",
+    feature: Annotated[
+        str, Field(default="", description="Only this feature file path.")
+    ] = "",
+    scenario: Annotated[
+        str, Field(default="", description="Only this exact scenario name.")
+    ] = "",
+    state: Annotated[
+        list[str],
+        Field(
+            description=(
+                "Only units in these states: unattempted, running, passed, "
+                "failed, skipped, error."
+            ),
+        ),
+    ] = [],
+    include_units: Annotated[
+        bool,
+        Field(default=False, description="Include the full unit list."),
+    ] = False,
+    limit: Annotated[
+        int,
+        Field(
+            default=DEFAULT_UNITS_LIMIT,
+            description="Cap on units returned when include_units is set.",
+        ),
+    ] = DEFAULT_UNITS_LIMIT,
+    repo_root: RepoRoot = "",
+) -> CampaignStatusResponse:
+    return campaign_service(repo_root).campaign_status(
+        campaign_id=campaign_id,
+        filters=Filters(
+            feature=(feature,) if feature else (),
+            scenario=(scenario,) if scenario else (),
+            release=(release,) if release else (),
+            machine_type=(machine_type,) if machine_type else (),
+            state=tuple(state),
+        ),
+        include_units=include_units,
+        limit=limit,
+    )
 
 
 def main() -> None:
