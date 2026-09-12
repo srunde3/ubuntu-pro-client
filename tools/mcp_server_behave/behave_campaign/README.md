@@ -181,8 +181,7 @@ Run from `tools/mcp_server_behave`; this package shares that project's
 
 ```bash
 uv sync --extra test           # or --extra lint
-uv run pytest -q tests/test_campaign_domain.py \
-  tests/test_campaign_discovery.py tests/test_campaign_cli.py
+uv run pytest -q tests/behave_campaign
 uv run black --check behave_campaign
 uv run isort --check-only behave_campaign
 uv run flake8 behave_campaign

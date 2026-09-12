@@ -1,21 +1,21 @@
 from pathlib import Path
 
 import pytest
-from conftest import (
-    FakeProcess,
-    make_repo_with_feature,
-    result_error_text,
-    result_json,
-)
 from mcp.shared.memory import create_connected_server_and_client_session
 
 import behave_mcp.adapters as adapters_module
 import behave_mcp.server as server_module
 from behave_mcp.server import mcp
+from tests.conftest import (
+    FakeProcess,
+    make_repo_with_feature,
+    result_error_text,
+    result_json,
+)
 
 # The real ubuntu-pro-client repo this package lives in.
 # Used by tests that need to parse actual features/*.feature files.
-_REPO_ROOT = Path(__file__).resolve().parents[3]
+_REPO_ROOT = Path(__file__).resolve().parents[4]
 
 
 @pytest.mark.asyncio

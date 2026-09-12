@@ -57,7 +57,7 @@ line_length = 79
 # Both packages ship from this project. Without this, isort groups them by
 # whether they happen to be installed in the running environment, so the
 # same file passes in one checkout and fails in another.
-known_first_party = ["behave_mcp", "behave_campaign"]
+known_first_party = ["behave_mcp", "behave_campaign", "tests"]
 
 [tool.mypy]
 check_untyped_defs = true

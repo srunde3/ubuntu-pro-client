@@ -8,7 +8,7 @@ import pytest
 
 from behave_mcp import parser
 
-_REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
+_REPO_ROOT = pathlib.Path(__file__).resolve().parents[4]
 
 
 @pytest.mark.integration

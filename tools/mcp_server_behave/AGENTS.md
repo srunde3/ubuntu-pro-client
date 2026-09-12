@@ -54,20 +54,30 @@ this path only.
 
 ## Test conventions
 
-Shared fixtures/test doubles live in `tests/conftest.py`
-(`make_repo_with_feature`, `FakeWorkspace`, `FakeProcess`, `result_json`,
-`result_error_text`). Reuse them instead of adding another per-file copy.
+`tests/` is laid out so it is obvious what a failure implicates:
 
-- `test_domain.py`, `test_adapters.py` -- unit tests for those layers directly.
-- `test_service.py` -- exercises `BehaveService` directly (real adapters +
-  fakes for the launcher/workspace), not the MCP tool layer.
-- `test_mcp_integration.py`, `test_mcp_e2e.py` -- exercise `server.py`'s actual
-  tool wrappers over the real MCP protocol (in-process / real subprocess).
-- `test_golden.py` -- byte-shape tests for on-disk serialization; treat
-  failures here as a deliberate format change, not a bug to silence.
-- `test_campaign_*.py` -- unit tests for the `behave_campaign` package's layers. The
-  `campaign_` prefix is what keeps them from colliding with the `behave_mcp`
-  test module of the same layer name (`test_domain.py`).
+- `tests/behave_mcp/` -- unit tests for that package's layers, one file per
+  layer (`test_domain.py`, `test_adapters.py`, `test_service.py`, ...).
+  `test_service.py` exercises `BehaveService` directly (real adapters, fakes
+  for the launcher/workspace), not the MCP tool layer. `test_golden.py` holds
+  byte-shape tests for on-disk serialization; treat failures there as a
+  deliberate format change, not a bug to silence.
+- `tests/behave_campaign/` -- the same, for that package.
+- `tests/shared/` -- code both packages depend on. `parser.py` lives in
+  `behave_mcp` but `behave_campaign` builds every campaign plan with it, so a
+  parser change breaks both and its tests sit apart from either.
+- `tests/mcp_surface/` -- `server.py`'s tool wrappers over the real MCP
+  protocol, spanning both packages. `test_e2e.py` needs real LXD and a
+  contract token; the rest run in process.
+
+Each directory is a package (`__init__.py`), so the two `test_domain.py` files
+coexist without a naming dance, and `tests` itself is one so nothing there can
+shadow an installed module.
+
+Shared fixtures and test doubles live in `tests/conftest.py`
+(`make_repo_with_feature`, `FakeWorkspace`, `FakeProcess`, `result_json`,
+`result_error_text`), imported as `from tests.conftest import ...`. Reuse them
+instead of adding another per-file copy.
 
 ## Docs
 

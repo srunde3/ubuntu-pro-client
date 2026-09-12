@@ -5,10 +5,10 @@ import os
 from pathlib import Path
 
 import pytest
-from conftest import result_json
 from mcp.shared.memory import create_connected_server_and_client_session
 
 from behave_mcp.server import mcp, registry
+from tests.conftest import result_json
 
 
 @pytest.mark.e2e
@@ -21,7 +21,7 @@ async def test_mcp_e2e_long_running_attach_flow(monkeypatch):
             "UACLIENT_BEHAVE_CONTRACT_TOKEN is required for real attach e2e"
         )
 
-    repo_root = Path(__file__).resolve().parents[3]
+    repo_root = Path(__file__).resolve().parents[4]
     monkeypatch.setenv("UBUNTU_PRO_CLIENT_REPO", str(repo_root))
     monkeypatch.setenv("UACLIENT_BEHAVE_CONTRACT_TOKEN", contract_token)
 

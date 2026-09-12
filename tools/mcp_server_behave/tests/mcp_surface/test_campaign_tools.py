@@ -1,10 +1,10 @@
 """Campaign tools over the real MCP protocol, in process."""
 
 import pytest
-from conftest import result_error_text, result_json
 from mcp.shared.memory import create_connected_server_and_client_session
 
 from behave_mcp.server import mcp
+from tests.conftest import result_error_text, result_json
 
 FEATURE = """Feature: Example feature
 

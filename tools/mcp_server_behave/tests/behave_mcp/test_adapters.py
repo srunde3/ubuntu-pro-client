@@ -1,7 +1,6 @@
 import subprocess
 
 import pytest
-from conftest import FakeProcessHandle, make_repo_with_feature
 
 import behave_mcp.adapters as adapters_module
 from behave_mcp.adapters import (
@@ -13,6 +12,7 @@ from behave_mcp.adapters import (
 )
 from behave_mcp.messages import JobRecord
 from behave_mcp.ports import Job, LogFileOpenError, ProcessStartError
+from tests.conftest import FakeProcessHandle, make_repo_with_feature
 
 # ---- LocalFeatureFileReader ----
 

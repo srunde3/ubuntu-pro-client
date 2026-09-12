@@ -2,12 +2,6 @@ import json
 from pathlib import Path
 
 import pytest
-from conftest import (
-    FakeLauncher,
-    FakeProcessHandle,
-    FakeWorkspace,
-    make_repo_with_feature,
-)
 
 from behave_mcp import domain
 from behave_mcp.adapters import (
@@ -22,6 +16,12 @@ from behave_mcp.service import (
     BehaveService,
     BehaveServiceError,
     UnknownJobError,
+)
+from tests.conftest import (
+    FakeLauncher,
+    FakeProcessHandle,
+    FakeWorkspace,
+    make_repo_with_feature,
 )
 
 

@@ -6,8 +6,6 @@ per-log-dir index, plus the JSON key ordering of tool response payloads.
 
 import json
 
-from conftest import FakeLauncher, FakeProcessHandle, FakeWorkspace
-
 from behave_mcp.adapters import (
     InMemoryJobRegistry,
     LocalFeatureFileReader,
@@ -17,6 +15,7 @@ from behave_mcp.config import Settings
 from behave_mcp.messages import JobRecord
 from behave_mcp.ports import Job
 from behave_mcp.service import BehaveService
+from tests.conftest import FakeLauncher, FakeProcessHandle, FakeWorkspace
 
 
 def test_write_record_byte_shape(tmp_path):
