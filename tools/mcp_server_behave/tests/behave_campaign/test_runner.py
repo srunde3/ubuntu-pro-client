@@ -899,3 +899,176 @@ class TestEvents:
         )
 
         assert paused[0].data["reason"] == RESTART_REASON
+
+
+class TestRetryUnits:
+    """Nothing re-runs a failure on its own; this is the only way."""
+
+    def _finish(self, runner, lanes, job_id, **kwargs):
+        runner.tick("1234567")
+        lanes.finish(job_id, **kwargs)
+        runner.tick("1234567")
+
+    def test_a_failed_unit_becomes_schedulable_again(
+        self, runner, store, lanes
+    ):
+        create(store, units=[UNITS[0]], max_lanes=1)
+        runner.start("1234567")
+        self._finish(runner, lanes, "job1", passed=0, failed=1)
+        assert lifecycle(store.replay("1234567")) == COMPLETE
+
+        response = runner.retry_units("1234567")
+
+        assert response.requeued == 1
+        assert response.lifecycle == RUNNING_STATE
+        assert response.rescheduling
+
+    def test_the_retried_unit_actually_runs_again(self, runner, store, lanes):
+        create(store, units=[UNITS[0]], max_lanes=1)
+        runner.start("1234567")
+        self._finish(runner, lanes, "job1", passed=0, failed=1)
+        runner.retry_units("1234567")
+
+        report = runner.tick("1234567")
+
+        assert report.started == 1
+        assert lanes.started_units == [UNITS[0], UNITS[0]]
+
+    def test_a_retry_can_turn_a_failure_into_a_pass(
+        self, runner, store, lanes
+    ):
+        create(store, units=[UNITS[0]], max_lanes=1)
+        runner.start("1234567")
+        self._finish(runner, lanes, "job1", passed=0, failed=1)
+        runner.retry_units("1234567")
+        self._finish(runner, lanes, "job2")
+
+        statuses = reduce_units(store.replay("1234567"))
+
+        assert statuses[0].state == "passed"
+        assert not statuses[0].retry_pending
+
+    def test_the_request_is_recorded_with_its_reason(
+        self, runner, store, lanes
+    ):
+        create(store, units=[UNITS[0]], max_lanes=1)
+        runner.start("1234567")
+        self._finish(runner, lanes, "job1", passed=0, failed=1)
+
+        runner.retry_units("1234567", reason="looked flaky")
+
+        stored = store.replay("1234567")[-1]
+        assert stored.reason == "looked flaky"
+
+    def test_it_defaults_to_the_problem_states(self, runner, store, lanes):
+        create(store, max_lanes=3)
+        runner.start("1234567")
+        runner.tick("1234567")
+        lanes.finish("job1", passed=0, failed=1)
+        lanes.finish("job2")
+        lanes.finish("job3", passed=0, failed=1)
+        runner.tick("1234567")
+
+        response = runner.retry_units("1234567")
+
+        # The passing unit is left alone.
+        assert response.requeued == 2
+        assert all(u.state == "failed" for u in response.units)
+
+    def test_a_passing_unit_can_be_retried_when_named(
+        self, runner, store, lanes
+    ):
+        create(store, units=[UNITS[0]], max_lanes=1)
+        runner.start("1234567")
+        self._finish(runner, lanes, "job1")
+
+        response = runner.retry_units(
+            "1234567", filters=Filters(state=("passed",))
+        )
+
+        assert response.requeued == 1
+
+    def test_filters_narrow_the_selection(self, runner, store, lanes):
+        create(store, max_lanes=3)
+        runner.start("1234567")
+        runner.tick("1234567")
+        for job in ("job1", "job2", "job3"):
+            lanes.finish(job, passed=0, failed=1)
+        runner.tick("1234567")
+
+        response = runner.retry_units(
+            "1234567", filters=Filters(release=("jammy",))
+        )
+
+        assert {u.release for u in response.units} == {"jammy"}
+
+    def test_a_unit_in_flight_is_never_selected(self, runner, store, lanes):
+        create(store, units=[UNITS[0]], max_lanes=1)
+        runner.start("1234567")
+        runner.tick("1234567")
+
+        with pytest.raises(CampaignError):
+            runner.retry_units("1234567", filters=Filters(state=("running",)))
+
+    def test_matching_nothing_is_rejected(self, runner, store):
+        create(store)
+        runner.start("1234567")
+
+        with pytest.raises(CampaignError) as error:
+            runner.retry_units("1234567")
+
+        assert "nothing was re-queued" in str(error.value)
+
+    def test_a_cancelled_campaign_refuses_retries(self, runner, store, lanes):
+        create(store, units=[UNITS[0]], max_lanes=1)
+        runner.start("1234567")
+        self._finish(runner, lanes, "job1", passed=0, failed=1)
+        runner.cancel("1234567")
+
+        with pytest.raises(CampaignError) as error:
+            runner.retry_units("1234567")
+
+        assert "cancelled" in str(error.value)
+
+    def test_a_paused_campaign_accepts_retries_but_stays_paused(
+        self, runner, store, lanes
+    ):
+        # Two units, so the campaign is still running -- and so pausable --
+        # once the first one has failed.
+        create(store, units=[UNITS[0], UNITS[1]], max_lanes=1)
+        runner.start("1234567")
+        self._finish(runner, lanes, "job1", passed=0, failed=1)
+        runner.pause("1234567")
+
+        response = runner.retry_units("1234567")
+
+        assert response.requeued == 1
+        assert response.lifecycle == PAUSED
+        assert not response.rescheduling
+        assert runner.tick("1234567").started == 0
+
+    def test_cancelling_a_finished_campaign_closes_it_to_retries(
+        self, runner, store, lanes
+    ):
+        create(store, units=[UNITS[0]], max_lanes=1)
+        runner.start("1234567")
+        self._finish(runner, lanes, "job1", passed=0, failed=1)
+
+        runner.cancel("1234567")
+
+        with pytest.raises(CampaignError):
+            runner.retry_units("1234567")
+
+    def test_retrying_is_announced(self, runner, store, lanes, events):
+        create(store, units=[UNITS[0]], max_lanes=1)
+        runner.start("1234567")
+        self._finish(runner, lanes, "job1", passed=0, failed=1)
+
+        runner.retry_units("1234567", reason="flaky")
+
+        retried = events.read(
+            "1234567", since_seq=0, kinds=["unit.retried"], limit=10
+        )
+        assert len(retried) == 1
+        assert retried[0].data["previous_state"] == "failed"
+        assert retried[0].data["reason"] == "flaky"

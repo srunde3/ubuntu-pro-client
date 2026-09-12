@@ -22,16 +22,21 @@ from behave_campaign import domain
 from behave_campaign.domain import (
     AttemptRecord,
     CampaignError,
+    Filters,
     Lane,
     NewEvent,
     Record,
+    RetryRecord,
     StateRecord,
     Unit,
+    UnitStatus,
 )
 from behave_campaign.messages import (
     CampaignControlResponse,
+    RetryUnitsResponse,
     StateCounts,
     TickReport,
+    UnitView,
 )
 from behave_campaign.ports import (
     CampaignRunLock,
@@ -191,12 +196,92 @@ class CampaignRunner:
             return self._control_response(campaign_id)
 
     def cancel(self, campaign_id: str) -> CampaignControlResponse:
-        """Close the campaign to further scheduling. In-flight lanes drain."""
+        """Close the campaign to further scheduling. In-flight lanes drain.
+
+        Allowed on a campaign that has already finished, because that is how
+        one is closed against ``retry_units`` reopening it.
+        """
         return self._transition(
             campaign_id,
             domain.CANCELLED,
-            allowed=(domain.RUNNING_STATE, domain.PAUSED, domain.CREATED),
+            allowed=(
+                domain.RUNNING_STATE,
+                domain.PAUSED,
+                domain.CREATED,
+                domain.COMPLETE,
+            ),
         )
+
+    def retry_units(
+        self,
+        campaign_id: str,
+        *,
+        filters: Filters = Filters(),
+        reason: str = "",
+    ) -> RetryUnitsResponse:
+        """Ask for another attempt at units that already had one.
+
+        With no state filter this selects the problem states -- failed,
+        skipped and errored -- because those are what a rerun is usually
+        for. Name a state explicitly to retry something else, including a
+        unit that passed. Units in flight are never selected; they are
+        already being attempted.
+
+        Re-queueing a campaign that had finished starts it scheduling
+        again. A paused one accepts the request and stays paused.
+        """
+        with self._guard:
+            records = self._store.replay(campaign_id)
+            state = domain.lifecycle(records)
+            if state == domain.CANCELLED:
+                raise CampaignError(
+                    "campaign {!r} was cancelled; create a new one "
+                    "instead".format(campaign_id)
+                )
+
+            selected = self._select_for_retry(records, filters)
+            if not selected:
+                raise CampaignError("no units matched; nothing was re-queued")
+
+            at = self._now()
+            self._store.append(
+                campaign_id,
+                [
+                    RetryRecord(unit=status.unit, at=at, reason=reason)
+                    for status in selected
+                ],
+            )
+            self._events.append(
+                campaign_id,
+                [
+                    NewEvent(
+                        kind=domain.UNIT_RETRIED,
+                        at=at,
+                        data={
+                            **status.unit.as_dict(),
+                            "previous_state": status.state,
+                            "reason": reason,
+                        },
+                    )
+                    for status in selected
+                ],
+            )
+
+            lifecycle = domain.lifecycle(self._store.replay(campaign_id))
+            rescheduling = lifecycle == domain.RUNNING_STATE
+            if rescheduling:
+                # The ticker stops when a campaign finishes, so a retry on
+                # a completed campaign has to start it again.
+                self._active = campaign_id
+                self._start_ticker(campaign_id)
+
+            return RetryUnitsResponse(
+                campaign_id=campaign_id,
+                requeued=len(selected),
+                units=[_unit_view(status) for status in selected],
+                lifecycle=lifecycle,
+                rescheduling=rescheduling,
+            )
 
     # -- the tick ---------------------------------------------------------
 
@@ -371,6 +456,20 @@ class CampaignRunner:
             self._store.append(campaign_id, started)
         return started
 
+    @staticmethod
+    def _select_for_retry(
+        records: Sequence[Record], filters: Filters
+    ) -> list[UnitStatus]:
+        wanted = filters.state or domain.PROBLEM_STATES
+        return [
+            status
+            for status in domain.reduce_units(records)
+            # A unit in flight is already being attempted.
+            if status.state != "running"
+            and status.state in wanted
+            and filters.matches_unit(status.unit)
+        ]
+
     def _outcome_events(
         self,
         classified: Sequence[domain.Classification],
@@ -468,6 +567,15 @@ class CampaignRunner:
         self._lock.release(campaign_id)
         if self._active == campaign_id:
             self._active = None
+
+
+def _unit_view(status: UnitStatus) -> UnitView:
+    return UnitView(
+        **status.unit.as_dict(),
+        state=status.state,
+        job_id=status.job_id,
+        attempt_count=len(status.attempts),
+    )
 
 
 def _is_finished(lifecycle: str, lanes_busy: int) -> bool:

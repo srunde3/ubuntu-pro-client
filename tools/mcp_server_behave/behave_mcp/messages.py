@@ -345,3 +345,16 @@ class SummarizeScenarioResultsResponse(BaseModel):
     truncated: bool = False
     limit_clamped: bool = False
     matched_job_ids: list[str] = []
+
+
+class KillJobResponse(BaseModel):
+    """Outcome of terminating a job.
+
+    ``killed`` is False when there was nothing to stop -- the job had
+    already finished, or this server has no live handle on it, which is the
+    case for one recovered from disk after a restart.
+    """
+
+    job_id: str = ""
+    killed: bool = False
+    message: str = ""

@@ -28,6 +28,7 @@ from behave_campaign.messages import (
     CampaignStatusResponse,
     CreateCampaignResponse,
     ListCampaignsResponse,
+    RetryUnitsResponse,
 )
 from behave_campaign.repo import repo_state as read_repo_state
 from behave_campaign.runner import CampaignRunner
@@ -45,6 +46,7 @@ from behave_mcp.messages import (
     ArtifactsResponse,
     DescribeFeatureResponse,
     FindScenariosResponse,
+    KillJobResponse,
     ListDimensionsResponse,
     ListFeaturesResponse,
     ListScenarioJobsResponse,
@@ -812,6 +814,74 @@ def await_campaign_events(
         limit=limit,
         timeout=float(max(timeout_seconds, 0)),
     )
+
+
+@mcp.tool(
+    description=(
+        "Ask for another attempt at units that already had one. Nothing "
+        "re-runs a non-passing unit on its own, so this is the only way a "
+        "failure gets retried. With no state filter it selects the problem "
+        "states -- failed, skipped and errored; name a state to retry "
+        "something else, including one that passed. Units in flight are "
+        "never selected. Re-queueing a campaign that had finished starts it "
+        "scheduling again; a paused one accepts the request and stays "
+        "paused, which the response's rescheduling field reports."
+    )
+)
+def retry_units(
+    campaign_id: CampaignIdArg,
+    release: ReleaseFilter = "",
+    machine_type: MachineTypeFilter = "",
+    feature: Annotated[
+        str, Field(default="", description="Only this feature file path.")
+    ] = "",
+    scenario: Annotated[
+        str, Field(default="", description="Only this exact scenario name.")
+    ] = "",
+    state: Annotated[
+        list[str],
+        Field(
+            description=(
+                "Only units in these states. Defaults to failed, skipped "
+                "and errored."
+            ),
+        ),
+    ] = [],
+    reason: Annotated[
+        str,
+        Field(
+            default="",
+            description=(
+                "Why these are being re-run, recorded with the request."
+            ),
+        ),
+    ] = "",
+    repo_root: RepoRoot = "",
+) -> RetryUnitsResponse:
+    return campaign_runner(repo_root).retry_units(
+        campaign_id,
+        filters=Filters(
+            feature=(feature,) if feature else (),
+            scenario=(scenario,) if scenario else (),
+            release=(release,) if release else (),
+            machine_type=(machine_type,) if machine_type else (),
+            state=tuple(state),
+        ),
+        reason=reason,
+    )
+
+
+@mcp.tool(
+    description=(
+        "Terminate a running behave job. Use it for a job that has hung: a "
+        "campaign's next tick then sees it finish and records the unit as "
+        "errored, rather than holding the lane open. killed is false when "
+        "there was nothing to stop, which includes a job started before a "
+        "server restart, since no handle on it survives."
+    )
+)
+def kill_job(job_id: JobId, repo_root: RepoRoot = "") -> KillJobResponse:
+    return _service.kill_job(job_id, repo_root)
 
 
 def main() -> None:

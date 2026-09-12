@@ -15,6 +15,7 @@ PLAN = "plan"
 ATTEMPT = "attempt"
 CAMPAIGN = "campaign"
 STATE = "state"
+RETRY = "retry"
 
 # Lifecycle. Only RUNNING, PAUSED and CANCELLED are ever written: CREATED is
 # the absence of any state record, and COMPLETE is derived from the counts,
@@ -44,6 +45,7 @@ ATTEMPT_INPUT_FIELDS = (*UNIT_FIELDS, "state", "job_id")
 ATTEMPT_FIELDS = (*ATTEMPT_INPUT_FIELDS, "install_from", "at")
 PLAN_FIELDS = (*UNIT_FIELDS, "at")
 STATE_FIELDS = ("state", "at", "reason")
+RETRY_FIELDS = (*UNIT_FIELDS, "at", "reason")
 CAMPAIGN_FIELDS = (
     "at",
     "campaign_id",
@@ -119,11 +121,16 @@ class UnitStatus:
     state: str
     job_id: str | None
     attempts: tuple[AttemptRecord, ...]
+    # Someone asked for another go at this unit since its last attempt. The
+    # state still reports what actually happened; this is only about what
+    # the scheduler may pick up.
+    retry_pending: bool = False
 
     def as_dict(self, include_attempts: bool = False) -> dict[str, Any]:
         data: dict[str, Any] = self.unit.as_dict()
         data["state"] = self.state
         data["job_id"] = self.job_id
+        data["retry_pending"] = self.retry_pending
         if include_attempts:
             data["attempts"] = [
                 {"state": attempt.state, "job_id": attempt.job_id}
@@ -182,6 +189,19 @@ class CampaignHeader:
 
 
 @dataclass(frozen=True)
+class RetryRecord:
+    """A request for another attempt at a unit that already had one.
+
+    Written rather than inferred, so the file says who wanted the rerun and
+    when -- the scheduler never decides this for itself.
+    """
+
+    unit: Unit
+    at: str = ""
+    reason: str = ""
+
+
+@dataclass(frozen=True)
 class StateRecord:
     """A lifecycle transition someone asked for.
 
@@ -194,7 +214,9 @@ class StateRecord:
     reason: str = ""
 
 
-Record = CampaignHeader | PlanRecord | AttemptRecord | StateRecord
+Record = (
+    CampaignHeader | PlanRecord | AttemptRecord | StateRecord | RetryRecord
+)
 
 
 def _require_fields(
@@ -371,6 +393,16 @@ def parse_record(raw: Any) -> Record:
         return _parse_stored_attempt(body)
     if kind == CAMPAIGN:
         return _parse_campaign(body)
+    if kind == RETRY:
+        _require_fields(body, RETRY_FIELDS, "retry")
+        reason = body["reason"]
+        if not isinstance(reason, str):
+            raise CampaignError("retry field 'reason' must be a string")
+        return RetryRecord(
+            unit=parse_unit({f: body[f] for f in UNIT_FIELDS}),
+            at=_text(body, "at", "retry"),
+            reason=reason,
+        )
     if kind == STATE:
         _require_fields(body, STATE_FIELDS, "state")
         state = body["state"]
@@ -387,8 +419,8 @@ def parse_record(raw: Any) -> Record:
             state=state, at=_text(body, "at", "state"), reason=reason
         )
     raise CampaignError(
-        "record type must be one of: {}, {}, {}, {}".format(
-            CAMPAIGN, PLAN, ATTEMPT, STATE
+        "record type must be one of: {}, {}, {}, {}, {}".format(
+            CAMPAIGN, PLAN, ATTEMPT, STATE, RETRY
         )
     )
 
@@ -412,6 +444,13 @@ def encode_record(record: Record) -> dict[str, Any]:
             "at": record.at,
             "reason": record.reason,
         }
+
+    if isinstance(record, RetryRecord):
+        retry: dict[str, Any] = record.unit.as_dict()
+        retry["type"] = RETRY
+        retry["at"] = record.at
+        retry["reason"] = record.reason
+        return retry
 
     data: dict[str, Any] = record.unit.as_dict()
     data["at"] = record.at
@@ -439,6 +478,9 @@ def reduce_units(records: Iterable[Record]) -> list[UnitStatus]:
     planned: list[Unit] = []
     seen: set[Unit] = set()
     attempts: dict[Unit, list[AttemptRecord]] = {}
+    # A retry asks for another go; the next attempt answers it. Reading the
+    # records in order is what decides which of the two came last.
+    pending: dict[Unit, bool] = {}
     for record in records:
         if isinstance(record, (CampaignHeader, StateRecord)):
             continue
@@ -446,8 +488,11 @@ def reduce_units(records: Iterable[Record]) -> list[UnitStatus]:
             if record.unit not in seen:
                 seen.add(record.unit)
                 planned.append(record.unit)
+        elif isinstance(record, RetryRecord):
+            pending[record.unit] = True
         else:
             attempts.setdefault(record.unit, []).append(record)
+            pending[record.unit] = False
 
     statuses = []
     for unit in sorted(planned):
@@ -459,6 +504,7 @@ def reduce_units(records: Iterable[Record]) -> list[UnitStatus]:
                 state=current.state if current else UNATTEMPTED,
                 job_id=current.job_id if current else None,
                 attempts=unit_attempts,
+                retry_pending=pending.get(unit, False),
             )
         )
     return statuses
@@ -475,19 +521,28 @@ def select_next(
     return (unattempted + retryable)[:limit]
 
 
-def select_unattempted(
+def is_schedulable(status: UnitStatus) -> bool:
+    """Whether a scheduler may open a lane for this unit.
+
+    Either it has never been attempted, or someone has asked for another go
+    since its last attempt. A failed unit is not schedulable on its own:
+    the scheduler runs unattended, and judging a failure flaky-or-real is
+    for whoever is watching, not for the tick loop.
+    """
+    if status.state == "running":
+        return False
+    return status.state == UNATTEMPTED or status.retry_pending
+
+
+def select_schedulable(
     statuses: Sequence[UnitStatus], limit: int
 ) -> list[UnitStatus]:
-    """Units never yet attempted, for a scheduler to open lanes for.
-
-    Unlike ``select_next``, this never returns a failed, skipped or errored
-    unit. The scheduler runs unattended, and re-running a non-passing unit
-    is a judgement call -- flaky or real, worth the machine time or not --
-    that belongs to whoever is watching, not to the tick loop.
-    """
+    """The units a scheduler may open lanes for, untouched ones first."""
     if limit < 1:
         raise CampaignError("limit must be positive")
-    return [s for s in statuses if s.state == UNATTEMPTED][:limit]
+    ready = [s for s in statuses if is_schedulable(s)]
+    ready.sort(key=lambda s: s.state != UNATTEMPTED)
+    return ready[:limit]
 
 
 def count_states(statuses: Iterable[UnitStatus]) -> dict[str, int]:
@@ -620,7 +675,7 @@ def lifecycle(records: Sequence[Record]) -> str:
     outstanding = [
         status
         for status in statuses
-        if status.state in (UNATTEMPTED, "running")
+        if status.state in (UNATTEMPTED, "running") or status.retry_pending
     ]
     return RUNNING_STATE if outstanding else COMPLETE
 
@@ -749,15 +804,15 @@ def plan_tick(
     if not free:
         return TickPlan(record=classified, lifecycle=state)
 
-    # Only unattempted units: a scheduler never retries a problem unit on
-    # its own. select_unattempted also skips units already running, and
-    # every busy lane recorded a running attempt when it opened, so a unit
-    # cannot enter two lanes.
+    # Only units that are untouched or have an explicit retry pending: a
+    # scheduler never re-runs a problem unit on its own. Running units are
+    # excluded too, and every busy lane recorded a running attempt when it
+    # opened, so a unit cannot enter two lanes.
     return TickPlan(
         record=classified,
         start=tuple(
             status.unit
-            for status in select_unattempted(reduce_units(after), free)
+            for status in select_schedulable(reduce_units(after), free)
         ),
         lifecycle=state,
     )
@@ -779,6 +834,7 @@ UNIT_FAILED = "unit.failed"
 UNIT_SKIPPED = "unit.skipped"
 UNIT_ERRORED = "unit.errored"
 UNIT_UNCLASSIFIABLE = "unit.unclassifiable"
+UNIT_RETRIED = "unit.retried"
 
 EVENT_KINDS = (
     CAMPAIGN_CREATED,
@@ -794,6 +850,7 @@ EVENT_KINDS = (
     UNIT_SKIPPED,
     UNIT_ERRORED,
     UNIT_UNCLASSIFIABLE,
+    UNIT_RETRIED,
 )
 EVENT_FAMILIES = ("campaign", "lane", "unit")
 

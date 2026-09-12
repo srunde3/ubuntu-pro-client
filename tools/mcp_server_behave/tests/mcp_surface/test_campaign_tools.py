@@ -473,3 +473,77 @@ async def test_a_timeout_beyond_the_server_limit_is_refused(repo, runner):
         )
 
     assert "exceeds this server's limit" in result_error_text(result)
+
+
+@pytest.mark.asyncio
+async def test_retry_units_requeues_a_failure(repo, runner, monkeypatch):
+    def failing(job_id):
+        if job_id not in runner.lanes.done:
+            runner.lanes.done.add(job_id)
+            return None
+        return {
+            "status": "completed",
+            "ok": False,
+            "job_id": job_id,
+            "summary": {
+                "scenarios": {"passed": 0, "failed": 1, "skipped": 0},
+                "features": {},
+            },
+            "failures": [
+                {
+                    "step": "Then it works",
+                    "status": "failed",
+                    "error_message": "it did not",
+                }
+            ],
+        }
+
+    monkeypatch.setattr(runner.lanes, "poll", failing)
+
+    async with create_connected_server_and_client_session(mcp) as client:
+        # max_lanes stays at 1: MCP_MAX_PARALLEL_JOBS defaults to 1, and a
+        # campaign asking for more than the server allows is refused.
+        await client.call_tool("create_campaign", {"campaign_id": "1234567"})
+        await client.call_tool("start_campaign", {"campaign_id": "1234567"})
+        # Two units through one lane: open, poll, finish-and-open, poll,
+        # finish.
+        for _ in range(5):
+            runner.ticker.tick()
+
+        status = result_json(
+            await client.call_tool(
+                "campaign_status", {"campaign_id": "1234567"}
+            )
+        )
+        assert status["campaign"]["counts"]["failed"] == 2
+
+        retried = result_json(
+            await client.call_tool(
+                "retry_units",
+                {"campaign_id": "1234567", "reason": "maybe flaky"},
+            )
+        )
+
+    assert retried["requeued"] == 2
+    assert retried["rescheduling"] is True
+    assert retried["lifecycle"] == "running"
+
+
+@pytest.mark.asyncio
+async def test_retry_units_with_nothing_to_retry_is_an_error(repo, runner):
+    async with create_connected_server_and_client_session(mcp) as client:
+        await client.call_tool("create_campaign", {"campaign_id": "1234567"})
+        await client.call_tool("start_campaign", {"campaign_id": "1234567"})
+        result = await client.call_tool(
+            "retry_units", {"campaign_id": "1234567"}
+        )
+
+    assert "nothing was re-queued" in result_error_text(result)
+
+
+@pytest.mark.asyncio
+async def test_killing_an_unknown_job_is_an_error(repo, runner):
+    async with create_connected_server_and_client_session(mcp) as client:
+        result = await client.call_tool("kill_job", {"job_id": "nope"})
+
+    assert result.isError

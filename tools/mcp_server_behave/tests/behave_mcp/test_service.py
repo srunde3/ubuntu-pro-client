@@ -1349,3 +1349,60 @@ def test_summarize_scenario_results_truncates_failures(tmp_path):
 
     assert len(result["failures"]) == 2
     assert result["truncated"] is True
+
+
+class TestKillJob:
+    """Stopping a job that has hung, so its lane does not stay open."""
+
+    @staticmethod
+    def _service_with_job(tmp_path, handle):
+        registry = InMemoryJobRegistry()
+        registry.register(
+            "job12345",
+            Job(job_id="job12345", process_handle=handle, log_dir=tmp_path),
+        )
+        service = _make_service(
+            FakeWorkspace(repo_root=tmp_path, log_dir=tmp_path),
+            registry=registry,
+        )
+        return service
+
+    def test_a_running_job_is_terminated(self, tmp_path):
+        handle = FakeProcessHandle(returncode=None)
+        service = self._service_with_job(tmp_path, handle)
+
+        result = service.kill_job("job12345")
+
+        assert result.killed is True
+        assert handle.terminated is True
+        assert result.job_id == "job12345"
+
+    def test_a_finished_job_is_left_alone(self, tmp_path):
+        handle = FakeProcessHandle(returncode=0)
+        service = self._service_with_job(tmp_path, handle)
+
+        result = service.kill_job("job12345")
+
+        assert result.killed is False
+        assert handle.terminated is False
+        assert "already finished" in result.message
+
+    def test_a_job_without_a_live_handle_reports_rather_than_raises(
+        self, tmp_path
+    ):
+        # What a job recovered from disk after a restart looks like: the
+        # record is there, but no handle in this process.
+        service = self._service_with_job(tmp_path, None)
+
+        result = service.kill_job("job12345")
+
+        assert result.killed is False
+        assert "No live handle" in result.message
+
+    def test_an_unknown_job_is_rejected(self, tmp_path):
+        service = _make_service(
+            FakeWorkspace(repo_root=tmp_path, log_dir=tmp_path)
+        )
+
+        with pytest.raises(UnknownJobError):
+            service.kill_job("nope")

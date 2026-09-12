@@ -205,3 +205,17 @@ class AwaitEventsResponse(BaseModel):
     lanes_busy: int = 0
     lifecycle: str = ""
     timed_out: bool = False
+
+
+class RetryUnitsResponse(BaseModel):
+    """Which units were re-queued, and what the campaign is doing now.
+
+    ``rescheduling`` says whether lanes will actually start filling: a
+    paused campaign accepts retries but stays paused until it is resumed.
+    """
+
+    campaign_id: str = ""
+    requeued: int = 0
+    units: list[UnitView] = []
+    lifecycle: str = ""
+    rescheduling: bool = False

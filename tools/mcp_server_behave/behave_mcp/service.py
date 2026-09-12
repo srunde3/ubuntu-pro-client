@@ -17,6 +17,7 @@ from behave_mcp.messages import (
     JobRecord,
     JobStatus,
     JobSummary,
+    KillJobResponse,
     ListDimensionsResponse,
     ListFeaturesResponse,
     ListScenarioJobsResponse,
@@ -403,6 +404,45 @@ class BehaveService:
             message="Test started. Call wait_for_scenario_completion.",
             artifacts=artifacts,
             repo_state=repo_state,
+        )
+
+    def kill_job(self, job_id: str, repo_root: str = "") -> KillJobResponse:
+        """Terminate a running job.
+
+        For a lane that has hung: the campaign's next tick sees the job
+        finish and records the unit, rather than waiting on it forever.
+        A job recovered from disk has no handle in this process, so there
+        is nothing here to signal -- that is reported, not raised.
+        """
+        job = self._registry.get(job_id)
+        if job is None:
+            try:
+                job = self._recover_job(job_id, repo_root or None)
+            except ValueError as exc:
+                raise BehaveServiceError(str(exc)) from exc
+            if job is None:
+                raise UnknownJobError(job_id)
+
+        handle = job.process_handle
+        if handle is None:
+            return KillJobResponse(
+                job_id=job_id,
+                killed=False,
+                message=(
+                    "No live handle for this job in this server process; "
+                    "it was started before a restart, or has finished."
+                ),
+            )
+        if handle.poll() is not None:
+            return KillJobResponse(
+                job_id=job_id,
+                killed=False,
+                message="Job had already finished.",
+            )
+
+        handle.terminate()
+        return KillJobResponse(
+            job_id=job_id, killed=True, message="Termination signalled."
         )
 
     def job_status(
