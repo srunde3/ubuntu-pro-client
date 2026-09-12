@@ -304,3 +304,26 @@ class TestNullEventLog:
             log.wait("c1", since_seq=0, kinds=[], limit=10, timeout=0.01) == []
         )
         assert log.latest_seq("c1") == 0
+
+
+class TestEventKindEnum:
+    def test_every_kind_belongs_to_a_known_family(self):
+        from behave_campaign.domain import EventFamily, EventKind
+
+        for kind in EventKind:
+            assert kind.family in EventFamily
+            assert kind.value.startswith(kind.family.value + ".")
+
+    def test_a_kind_reads_as_its_value(self):
+        from behave_campaign.domain import EventKind
+
+        # Messages and JSON say "unit.failed", not the member name.
+        assert str(EventKind.UNIT_FAILED) == "unit.failed"
+        assert "{}".format(EventKind.UNIT_FAILED) == "unit.failed"
+        assert json.dumps(EventKind.UNIT_FAILED) == '"unit.failed"'
+
+    def test_a_kind_compares_equal_to_its_string(self):
+        from behave_campaign.domain import EventKind
+
+        assert EventKind.UNIT_FAILED == "unit.failed"
+        assert event_matches(EventKind.UNIT_FAILED, ["unit.*"])

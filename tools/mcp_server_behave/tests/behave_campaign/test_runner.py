@@ -11,14 +11,10 @@ import pytest
 
 from behave_campaign.adapters import JsonlCampaignStore, JsonlEventLog
 from behave_campaign.domain import (
-    CANCELLED,
-    COMPLETE,
-    CREATED,
-    PAUSED,
-    RUNNING_STATE,
     CampaignError,
     CampaignHeader,
     Filters,
+    Lifecycle,
     PlanRecord,
     RepoState,
     Unit,
@@ -192,7 +188,7 @@ class TestStart:
 
         response = runner.start("1234567")
 
-        assert response.lifecycle == RUNNING_STATE
+        assert response.lifecycle == Lifecycle.RUNNING
         assert lock.acquired == ["1234567"]
 
     def test_a_second_campaign_cannot_run_at_the_same_time(
@@ -222,7 +218,7 @@ class TestStart:
         runner.tick("1234567")
         lanes.finish("job1")
         runner.tick("1234567")
-        assert lifecycle(store.replay("1234567")) == COMPLETE
+        assert lifecycle(store.replay("1234567")) == Lifecycle.COMPLETE
 
         with pytest.raises(CampaignError) as error:
             runner.start("1234567")
@@ -244,7 +240,7 @@ class TestStart:
             runner.start("1234567")
 
         # Nothing was recorded, so the campaign is untouched.
-        assert lifecycle(store.replay("1234567")) == CREATED
+        assert lifecycle(store.replay("1234567")) == Lifecycle.CREATED
 
 
 class TestTick:
@@ -254,7 +250,7 @@ class TestTick:
         report = runner.tick("1234567")
 
         assert lanes.started == []
-        assert report.lifecycle == CREATED
+        assert report.lifecycle == Lifecycle.CREATED
 
     def test_a_running_campaign_fills_its_lanes(self, runner, store, lanes):
         create(store, max_lanes=2)
@@ -342,7 +338,7 @@ class TestTick:
 
         assert lanes.started_units == [UNITS[0]]
         assert report.started == 0
-        assert report.lifecycle == COMPLETE
+        assert report.lifecycle == Lifecycle.COMPLETE
 
     def test_an_unclassifiable_result_is_reported_as_a_problem(
         self, runner, store, lanes
@@ -399,7 +395,7 @@ class TestTick:
 
         report = runner.tick("1234567")
 
-        assert report.lifecycle == COMPLETE
+        assert report.lifecycle == Lifecycle.COMPLETE
         assert report.finished
         assert report.lanes_busy == 0
 
@@ -422,7 +418,7 @@ class TestPauseAndResume:
 
         response = runner.pause("1234567")
 
-        assert response.lifecycle == PAUSED
+        assert response.lifecycle == Lifecycle.PAUSED
         assert response.lanes_busy == 1
 
     def test_a_paused_campaign_drains_rather_than_abandoning_work(
@@ -479,7 +475,7 @@ class TestCancel:
         response = runner.cancel("1234567")
         report = runner.tick("1234567")
 
-        assert response.lifecycle == CANCELLED
+        assert response.lifecycle == Lifecycle.CANCELLED
         assert report.started == 0
         assert lanes.started == []
 
@@ -536,7 +532,7 @@ class TestRecover:
 
         assert paused == ["1234567"]
         records = store.replay("1234567")
-        assert lifecycle(records) == PAUSED
+        assert lifecycle(records) == Lifecycle.PAUSED
 
     def test_the_pause_says_why(self, runner, store):
         from behave_campaign.domain import last_state_reason
@@ -590,7 +586,7 @@ class TestRecover:
         fresh.resume("1234567")
         report = fresh.tick("1234567")
 
-        assert report.lifecycle == RUNNING_STATE
+        assert report.lifecycle == Lifecycle.RUNNING
         assert report.started == 1
 
 
@@ -702,7 +698,7 @@ class TestTheWholeLoop:
         records = store.replay("1234567")
         statuses = reduce_units(records)
 
-        assert lifecycle(records) == COMPLETE
+        assert lifecycle(records) == Lifecycle.COMPLETE
         assert len(lanes.started) == 12
         assert all(s.state == "passed" for s in statuses)
         assert runner.active_campaign() is None
@@ -729,7 +725,7 @@ class TestTheWholeLoop:
 
         started = lanes.started_units
 
-        assert lifecycle(store.replay("1234567")) == COMPLETE
+        assert lifecycle(store.replay("1234567")) == Lifecycle.COMPLETE
         assert len(started) == len(set(started)) == 20
 
     def test_pausing_a_live_campaign_stops_it_opening_lanes(self, store):
@@ -755,7 +751,7 @@ class TestTheWholeLoop:
         settled = len(lanes.started)
         time.sleep(0.1)
 
-        assert response.lifecycle == PAUSED
+        assert response.lifecycle == Lifecycle.PAUSED
         assert len(lanes.started) == settled
         assert settled < 40
 
@@ -915,12 +911,12 @@ class TestRetryUnits:
         create(store, units=[UNITS[0]], max_lanes=1)
         runner.start("1234567")
         self._finish(runner, lanes, "job1", passed=0, failed=1)
-        assert lifecycle(store.replay("1234567")) == COMPLETE
+        assert lifecycle(store.replay("1234567")) == Lifecycle.COMPLETE
 
         response = runner.retry_units("1234567")
 
         assert response.requeued == 1
-        assert response.lifecycle == RUNNING_STATE
+        assert response.lifecycle == Lifecycle.RUNNING
         assert response.rescheduling
 
     def test_the_retried_unit_actually_runs_again(self, runner, store, lanes):
@@ -1043,7 +1039,7 @@ class TestRetryUnits:
         response = runner.retry_units("1234567")
 
         assert response.requeued == 1
-        assert response.lifecycle == PAUSED
+        assert response.lifecycle == Lifecycle.PAUSED
         assert not response.rescheduling
         assert runner.tick("1234567").started == 0
 

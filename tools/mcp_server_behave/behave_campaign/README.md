@@ -247,6 +247,26 @@ running by a server that went away can be recovered at all -- it comes back
 `paused`, with `server_restart` as the reason, so whoever is watching decides
 whether those jobs are still alive.
 
+## Types
+
+Every set of related-but-mutually-exclusive values is an enum in `domain.py`,
+so an exhaustive check is possible and a typo is a failure rather than a value
+that silently matches nothing:
+
+| enum | values |
+| --- | --- |
+| `RecordType` | the six record types above |
+| `Outcome` | `passed`, `failed`, `skipped`, `error` |
+| `UnitState` | those four, plus `unattempted` and `running` |
+| `Lifecycle` | `created`, `running`, `paused`, `cancelled`, `complete` |
+| `EventKind` | every event, with a `family` property |
+| `EventFamily` | `campaign`, `lane`, `unit`, `anomaly` |
+
+They all subclass a small `_StringEnum`, so a member reads and serialises as
+its value -- `"paused"`, not `"Lifecycle.PAUSED"` -- and compares equal to the
+plain string a caller sent. Plain-string tuples are derived from each
+(`OUTCOMES`, `STATES`, ...) for argparse choices and error messages.
+
 ## Architecture
 
 Same hexagonal layering as [behave_mcp](../behave_mcp), one module per layer:

@@ -10,38 +10,94 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
+from enum import Enum
 from typing import Any, Iterable, Sequence
 
-PLAN = "plan"
-CAMPAIGN = "campaign"
-RETRY = "retry"
-LIFECYCLE = "lifecycle"
-# One try at a unit is one job, written as two records: a job starts, and
-# later it finishes. Both are needed -- the opening record is what holds the
-# lane, including across a restart -- but neither is an attempt on its own.
-STARTED = "started"
-FINISHED = "finished"
-RECORD_TYPES = (CAMPAIGN, PLAN, STARTED, FINISHED, LIFECYCLE, RETRY)
 
-# Lifecycle. Only RUNNING, PAUSED and CANCELLED are ever written: CREATED is
-# the absence of any state record, and COMPLETE is derived from the counts,
-# so it cannot disagree with the units.
-CREATED = "created"
-RUNNING_STATE = "running"
-PAUSED = "paused"
-CANCELLED = "cancelled"
-COMPLETE = "complete"
-WRITABLE_LIFECYCLE = (RUNNING_STATE, PAUSED, CANCELLED)
-LIFECYCLE_STATES = (CREATED, *WRITABLE_LIFECYCLE, COMPLETE)
-UNATTEMPTED = "unattempted"
-RUNNING = "running"
-# What a finished job established. "running" is not among them: a unit is
-# running when its latest attempt has no finish yet, which is a fact about
-# the attempt rather than a result it reported.
-OUTCOMES = ("passed", "failed", "skipped", "error")
-PROBLEM_OUTCOMES = ("failed", "skipped", "error")
-# A unit's derived condition, which is what callers filter and count on.
-STATES = (UNATTEMPTED, RUNNING, *OUTCOMES)
+class _StringEnum(str, Enum):
+    """A string enum that reads as its value.
+
+    ``Enum`` renders a member as ``Class.MEMBER``, which would put
+    "Lifecycle.PAUSED" into error messages a person reads and JSON a caller
+    parses. ``enum.StrEnum`` would do this for us but needs Python 3.11, and
+    this package supports 3.10.
+    """
+
+    def __str__(self) -> str:
+        return str(self.value)
+
+    def __format__(self, spec: str) -> str:
+        return format(str(self.value), spec)
+
+
+class RecordType(_StringEnum):
+    """The kinds of record an append-only campaign file holds."""
+
+    CAMPAIGN = "campaign"
+    PLAN = "plan"
+    # One try at a unit is one job, written as two records: a job starts,
+    # and later it finishes. Both are needed -- the opening record is what
+    # holds the lane, including across a restart -- but neither is an
+    # attempt on its own. Attempt pairs them on job_id.
+    STARTED = "started"
+    FINISHED = "finished"
+    LIFECYCLE = "lifecycle"
+    RETRY = "retry"
+
+
+class Outcome(_StringEnum):
+    """What a finished job established.
+
+    "running" is not among them: a unit is running when its latest attempt
+    has no finish yet, which is a fact about the attempt rather than a
+    result the job reported.
+    """
+
+    PASSED = "passed"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+    ERROR = "error"
+
+
+class UnitState(_StringEnum):
+    """A unit's condition, derived from its attempts rather than stored."""
+
+    UNATTEMPTED = "unattempted"
+    RUNNING = "running"
+    PASSED = "passed"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+    ERROR = "error"
+
+
+class Lifecycle(_StringEnum):
+    """Where a campaign is in its life.
+
+    CREATED is the absence of any lifecycle record and COMPLETE is derived
+    from the counts, so neither is ever written; the other three are.
+    """
+
+    CREATED = "created"
+    RUNNING = "running"
+    PAUSED = "paused"
+    CANCELLED = "cancelled"
+    COMPLETE = "complete"
+
+
+# The states a caller can ask for, as opposed to the two that are derived.
+WRITABLE_LIFECYCLE = (
+    Lifecycle.RUNNING,
+    Lifecycle.PAUSED,
+    Lifecycle.CANCELLED,
+)
+# Outcomes worth another look. A unit in one of these is only ever re-run
+# when someone asks.
+PROBLEM_OUTCOMES = (Outcome.FAILED, Outcome.SKIPPED, Outcome.ERROR)
+# Tuples of plain strings, for argparse choices and error messages.
+RECORD_TYPES = tuple(kind.value for kind in RecordType)
+OUTCOMES = tuple(outcome.value for outcome in Outcome)
+STATES = tuple(state.value for state in UnitState)
+LIFECYCLE_STATES = tuple(state.value for state in Lifecycle)
 INSTALL_SOURCES = (
     "local",
     "archive",
@@ -135,7 +191,7 @@ class AttemptFinished:
 
     unit: Unit
     job_id: str
-    outcome: str
+    outcome: Outcome
     at: str = ""
 
 
@@ -259,7 +315,7 @@ class LifecycleRecord:
     pausing after a restart, and is empty for ones a caller asked for.
     """
 
-    state: str
+    state: Lifecycle
     at: str = ""
     reason: str = ""
 
@@ -314,12 +370,13 @@ def parse_unit(raw: Any) -> Unit:
     return _unit_from(_require_fields(raw, UNIT_FIELDS, "unit"), "unit")
 
 
-def validate_outcome(value: Any) -> str:
-    if value not in OUTCOMES:
+def validate_outcome(value: Any) -> Outcome:
+    try:
+        return Outcome(value)
+    except ValueError:
         raise CampaignError(
             "outcome must be one of: {}".format(", ".join(OUTCOMES))
-        )
-    return str(value)
+        ) from None
 
 
 def parse_finished(raw: Any) -> AttemptFinished:
@@ -446,19 +503,19 @@ def parse_record(raw: Any) -> Record:
         raise CampaignError("each record must be a JSON object")
     kind = raw.get("type")
     body = {key: value for key, value in raw.items() if key != "type"}
-    if kind == PLAN:
+    if kind == RecordType.PLAN:
         _require_fields(body, PLAN_FIELDS, "plan")
         return PlanRecord(
             unit=parse_unit({f: body[f] for f in UNIT_FIELDS}),
             at=_text(body, "at", "plan"),
         )
-    if kind == STARTED:
+    if kind == RecordType.STARTED:
         return _parse_started(body)
-    if kind == FINISHED:
+    if kind == RecordType.FINISHED:
         return _parse_finished(body)
-    if kind == CAMPAIGN:
+    if kind == RecordType.CAMPAIGN:
         return _parse_campaign(body)
-    if kind == RETRY:
+    if kind == RecordType.RETRY:
         _require_fields(body, RETRY_FIELDS, "retry")
         reason = body["reason"]
         if not isinstance(reason, str):
@@ -468,7 +525,7 @@ def parse_record(raw: Any) -> Record:
             at=_text(body, "at", "retry"),
             reason=reason,
         )
-    if kind == LIFECYCLE:
+    if kind == RecordType.LIFECYCLE:
         _require_fields(body, LIFECYCLE_FIELDS, "lifecycle")
         state = body["state"]
         if state not in WRITABLE_LIFECYCLE:
@@ -481,7 +538,9 @@ def parse_record(raw: Any) -> Record:
         if not isinstance(reason, str):
             raise CampaignError("lifecycle field 'reason' must be a string")
         return LifecycleRecord(
-            state=state, at=_text(body, "at", "lifecycle"), reason=reason
+            state=Lifecycle(state),
+            at=_text(body, "at", "lifecycle"),
+            reason=reason,
         )
     raise CampaignError(
         "record type must be one of: {}".format(", ".join(RECORD_TYPES))
@@ -491,7 +550,7 @@ def parse_record(raw: Any) -> Record:
 def encode_record(record: Record) -> dict[str, Any]:
     if isinstance(record, CampaignHeader):
         return {
-            "type": CAMPAIGN,
+            "type": RecordType.CAMPAIGN,
             "at": record.at,
             "campaign_id": record.campaign_id,
             "repo": record.repo.as_dict(),
@@ -502,7 +561,7 @@ def encode_record(record: Record) -> dict[str, Any]:
 
     if isinstance(record, LifecycleRecord):
         return {
-            "type": LIFECYCLE,
+            "type": RecordType.LIFECYCLE,
             "state": record.state,
             "at": record.at,
             "reason": record.reason,
@@ -510,7 +569,7 @@ def encode_record(record: Record) -> dict[str, Any]:
 
     if isinstance(record, RetryRecord):
         retry: dict[str, Any] = record.unit.as_dict()
-        retry["type"] = RETRY
+        retry["type"] = RecordType.RETRY
         retry["at"] = record.at
         retry["reason"] = record.reason
         return retry
@@ -518,16 +577,16 @@ def encode_record(record: Record) -> dict[str, Any]:
     data: dict[str, Any] = record.unit.as_dict()
     data["at"] = record.at
     if isinstance(record, AttemptStarted):
-        data["type"] = STARTED
+        data["type"] = RecordType.STARTED
         data["job_id"] = record.job_id
         data["install_from"] = record.install_from
         return data
     if isinstance(record, AttemptFinished):
-        data["type"] = FINISHED
+        data["type"] = RecordType.FINISHED
         data["job_id"] = record.job_id
         data["outcome"] = record.outcome
         return data
-    data["type"] = PLAN
+    data["type"] = RecordType.PLAN
     return data
 
 
@@ -538,15 +597,19 @@ def _current_attempt(attempts: Sequence[Attempt]) -> Attempt | None:
     passed is passed. Otherwise the latest try is what counts.
     """
     for attempt in attempts:
-        if attempt.outcome == "passed":
+        if attempt.outcome == Outcome.PASSED:
             return attempt
     return attempts[-1] if attempts else None
 
 
 def _unit_state(attempt: Attempt | None) -> str:
     if attempt is None:
-        return UNATTEMPTED
-    return RUNNING if attempt.running else str(attempt.outcome)
+        return UnitState.UNATTEMPTED
+    return (
+        UnitState(attempt.outcome)
+        if not attempt.running
+        else (UnitState.RUNNING)
+    )
 
 
 def reduce_units(records: Iterable[Record]) -> list[UnitStatus]:
@@ -630,7 +693,7 @@ def select_next(
     """Never-attempted units first, then retryable problems."""
     if limit < 1:
         raise CampaignError("limit must be positive")
-    unattempted = [s for s in statuses if s.state == UNATTEMPTED]
+    unattempted = [s for s in statuses if s.state == UnitState.UNATTEMPTED]
     retryable = [s for s in statuses if s.state in PROBLEM_OUTCOMES]
     return (unattempted + retryable)[:limit]
 
@@ -643,9 +706,9 @@ def is_schedulable(status: UnitStatus) -> bool:
     the scheduler runs unattended, and judging a failure flaky-or-real is
     for whoever is watching, not for the tick loop.
     """
-    if status.state == "running":
+    if status.state == UnitState.RUNNING:
         return False
-    return status.state == UNATTEMPTED or status.retry_pending
+    return status.state == UnitState.UNATTEMPTED or status.retry_pending
 
 
 def select_schedulable(
@@ -655,7 +718,7 @@ def select_schedulable(
     if limit < 1:
         raise CampaignError("limit must be positive")
     ready = [s for s in statuses if is_schedulable(s)]
-    ready.sort(key=lambda s: s.state != UNATTEMPTED)
+    ready.sort(key=lambda s: s.state != UnitState.UNATTEMPTED)
     return ready[:limit]
 
 
@@ -674,10 +737,10 @@ def running(statuses: Iterable[UnitStatus]) -> list[UnitStatus]:
     return [s for s in statuses if s.state == "running"]
 
 
-def _completed_outcome(result: dict[str, Any]) -> str:
+def _completed_outcome(result: dict[str, Any]) -> Outcome:
     summary = result.get("summary")
     if summary is None:
-        return "error"
+        return Outcome.ERROR
     if not isinstance(summary, dict):
         raise CampaignError("MCP result 'summary' must be an object or null")
 
@@ -704,15 +767,15 @@ def _completed_outcome(result: dict[str, Any]) -> str:
 
     if not other:
         if failed:
-            return "failed"
+            return Outcome.FAILED
         if passed:
             if result.get("ok") is False:
                 raise CampaignError(
                     "MCP reports ok=false but every scenario passed"
                 )
-            return "passed"
+            return Outcome.PASSED
         if skipped and not passed:
-            return "skipped"
+            return Outcome.SKIPPED
 
     raise CampaignError(
         "cannot classify scenario counts {}; record an explicit "
@@ -782,21 +845,22 @@ def lifecycle(records: Sequence[Record]) -> str:
     not anyone noticed. Problem units do not count as remaining work,
     because a non-passing unit is only ever retried when asked for.
     """
-    current = CREATED
+    current = Lifecycle.CREATED
     for record in records:
         if isinstance(record, LifecycleRecord):
             current = record.state
 
-    if current != RUNNING_STATE:
+    if current != Lifecycle.RUNNING:
         return current
 
     statuses = reduce_units(records)
     outstanding = [
         status
         for status in statuses
-        if status.state in (UNATTEMPTED, "running") or status.retry_pending
+        if status.state in (UnitState.UNATTEMPTED, UnitState.RUNNING)
+        or status.retry_pending
     ]
-    return RUNNING_STATE if outstanding else COMPLETE
+    return Lifecycle.RUNNING if outstanding else Lifecycle.COMPLETE
 
 
 def last_state_reason(records: Sequence[Record]) -> str:
@@ -832,7 +896,10 @@ def classify_result(unit: Unit, result: Any, at: str = "") -> Classification:
             job_id = raw_job_id if isinstance(raw_job_id, str) else ""
         return Classification(
             finished=AttemptFinished(
-                unit=unit, job_id=job_id, outcome="error", at=at
+                unit=unit,
+                job_id=job_id,
+                outcome=Outcome.ERROR,
+                at=at,
             ),
             problem=str(error),
         )
@@ -878,7 +945,7 @@ class TickPlan:
 
     record: tuple[Classification, ...] = ()
     start: tuple[Unit, ...] = ()
-    lifecycle: str = CREATED
+    lifecycle: str = Lifecycle.CREATED
 
     @property
     def idle(self) -> bool:
@@ -907,7 +974,7 @@ def plan_tick(
 
     after = [*records, *(item.finished for item in classified)]
     state = lifecycle(after)
-    if state != RUNNING_STATE:
+    if state != Lifecycle.RUNNING:
         return TickPlan(record=classified, lifecycle=state)
 
     busy = sum(1 for lane in lanes if not lane.finished)
@@ -929,56 +996,55 @@ def plan_tick(
     )
 
 
-# Event kinds, grouped into families so a subscriber can ask for "unit.*"
-# rather than enumerating outcomes. New kinds are additive: a client that
-# does not recognise one ignores it.
-CAMPAIGN_CREATED = "campaign.created"
-CAMPAIGN_STARTED = "campaign.started"
-CAMPAIGN_PAUSED = "campaign.paused"
-CAMPAIGN_RESUMED = "campaign.resumed"
-CAMPAIGN_CANCELLED = "campaign.cancelled"
-CAMPAIGN_COMPLETE = "campaign.complete"
-LANE_STARTED = "lane.started"
-LANE_RELEASED = "lane.released"
-UNIT_PASSED = "unit.passed"
-UNIT_FAILED = "unit.failed"
-UNIT_SKIPPED = "unit.skipped"
-UNIT_ERRORED = "unit.errored"
-UNIT_UNCLASSIFIABLE = "unit.unclassifiable"
-UNIT_RETRIED = "unit.retried"
-LANE_OVERDUE = "lane.overdue"
-ANOMALY_REPEATED_SCENARIO_FAILURE = "anomaly.repeated_scenario_failure"
-ANOMALY_REPEATED_SKIPS = "anomaly.repeated_skips"
-ANOMALY_CAPACITY_STARVED = "anomaly.capacity_starved"
+class EventFamily(_StringEnum):
+    """The groups a subscriber can ask for wholesale, as ``unit.*``."""
 
-EVENT_KINDS = (
-    CAMPAIGN_CREATED,
-    CAMPAIGN_STARTED,
-    CAMPAIGN_PAUSED,
-    CAMPAIGN_RESUMED,
-    CAMPAIGN_CANCELLED,
-    CAMPAIGN_COMPLETE,
-    LANE_STARTED,
-    LANE_RELEASED,
-    UNIT_PASSED,
-    UNIT_FAILED,
-    UNIT_SKIPPED,
-    UNIT_ERRORED,
-    UNIT_UNCLASSIFIABLE,
-    UNIT_RETRIED,
-    LANE_OVERDUE,
-    ANOMALY_REPEATED_SCENARIO_FAILURE,
-    ANOMALY_REPEATED_SKIPS,
-    ANOMALY_CAPACITY_STARVED,
-)
-EVENT_FAMILIES = ("campaign", "lane", "unit", "anomaly")
+    CAMPAIGN = "campaign"
+    LANE = "lane"
+    UNIT = "unit"
+    ANOMALY = "anomaly"
+
+
+class EventKind(_StringEnum):
+    """What a campaign announces.
+
+    New kinds are additive: a subscriber that does not recognise one ignores
+    it, and one asking for a family gets it without asking again.
+    """
+
+    CAMPAIGN_CREATED = "campaign.created"
+    CAMPAIGN_STARTED = "campaign.started"
+    CAMPAIGN_PAUSED = "campaign.paused"
+    CAMPAIGN_RESUMED = "campaign.resumed"
+    CAMPAIGN_CANCELLED = "campaign.cancelled"
+    CAMPAIGN_COMPLETE = "campaign.complete"
+    LANE_STARTED = "lane.started"
+    LANE_RELEASED = "lane.released"
+    LANE_OVERDUE = "lane.overdue"
+    UNIT_PASSED = "unit.passed"
+    UNIT_FAILED = "unit.failed"
+    UNIT_SKIPPED = "unit.skipped"
+    UNIT_ERRORED = "unit.errored"
+    UNIT_UNCLASSIFIABLE = "unit.unclassifiable"
+    UNIT_RETRIED = "unit.retried"
+    ANOMALY_REPEATED_SCENARIO_FAILURE = "anomaly.repeated_scenario_failure"
+    ANOMALY_REPEATED_SKIPS = "anomaly.repeated_skips"
+    ANOMALY_CAPACITY_STARVED = "anomaly.capacity_starved"
+
+    @property
+    def family(self) -> EventFamily:
+        return EventFamily(self.value.split(".", 1)[0])
+
+
+EVENT_KINDS = tuple(kind.value for kind in EventKind)
+EVENT_FAMILIES = tuple(family.value for family in EventFamily)
 
 # Which unit event an outcome produces.
 _UNIT_EVENT_FOR_OUTCOME = {
-    "passed": UNIT_PASSED,
-    "failed": UNIT_FAILED,
-    "skipped": UNIT_SKIPPED,
-    "error": UNIT_ERRORED,
+    Outcome.PASSED: EventKind.UNIT_PASSED,
+    Outcome.FAILED: EventKind.UNIT_FAILED,
+    Outcome.SKIPPED: EventKind.UNIT_SKIPPED,
+    Outcome.ERROR: EventKind.UNIT_ERRORED,
 }
 
 # Enough of a failure to triage without fetching the job's report.
@@ -1075,8 +1141,10 @@ def event_matches(kind: str, patterns: Sequence[str]) -> bool:
 def unit_event_kind(outcome: str, unclassifiable: bool = False) -> str:
     """The event kind an outcome produces."""
     if unclassifiable:
-        return UNIT_UNCLASSIFIABLE
-    return _UNIT_EVENT_FOR_OUTCOME.get(outcome, UNIT_ERRORED)
+        return EventKind.UNIT_UNCLASSIFIABLE
+    return _UNIT_EVENT_FOR_OUTCOME.get(
+        Outcome(outcome), EventKind.UNIT_ERRORED
+    )
 
 
 def failure_details(result: Any) -> list[dict[str, str]]:
@@ -1157,10 +1225,10 @@ def detect_signals(
     failed_releases: dict[tuple[str, str], set[str]] = {}
     skipped = 0
     for status in statuses:
-        if status.state == "failed":
+        if status.state == UnitState.FAILED:
             failing = (status.unit.feature, status.unit.scenario)
             failed_releases.setdefault(failing, set()).add(status.unit.release)
-        elif status.state == "skipped":
+        elif status.state == UnitState.SKIPPED:
             skipped += 1
 
     for (feature, scenario), releases in sorted(failed_releases.items()):
@@ -1168,7 +1236,7 @@ def detect_signals(
             continue
         signals.append(
             Signal(
-                kind=ANOMALY_REPEATED_SCENARIO_FAILURE,
+                kind=EventKind.ANOMALY_REPEATED_SCENARIO_FAILURE,
                 key="{}::{}".format(feature, scenario),
                 data={
                     "feature": feature,
@@ -1181,8 +1249,8 @@ def detect_signals(
     if skipped >= REPEATED_SKIP_UNITS:
         signals.append(
             Signal(
-                kind=ANOMALY_REPEATED_SKIPS,
-                key=ANOMALY_REPEATED_SKIPS,
+                kind=EventKind.ANOMALY_REPEATED_SKIPS,
+                key=EventKind.ANOMALY_REPEATED_SKIPS,
                 data={"skipped": skipped},
             )
         )
@@ -1195,7 +1263,7 @@ def detect_signals(
             continue
         signals.append(
             Signal(
-                kind=LANE_OVERDUE,
+                kind=EventKind.LANE_OVERDUE,
                 key=lane.job_id,
                 data={
                     **lane.unit.as_dict(),

@@ -146,25 +146,28 @@ class CampaignRunner:
                 )
             records = self._store.replay(campaign_id)
             state = domain.lifecycle(records)
-            if state == domain.CANCELLED:
+            if state == domain.Lifecycle.CANCELLED:
                 raise CampaignError(
                     "campaign {!r} was cancelled; create a new one "
                     "instead".format(campaign_id)
                 )
-            if state == domain.COMPLETE:
+            if state == domain.Lifecycle.COMPLETE:
                 raise CampaignError(
                     "campaign {!r} has no work left".format(campaign_id)
                 )
-            if state == domain.RUNNING_STATE and self._active == campaign_id:
+            if (
+                state == domain.Lifecycle.RUNNING
+                and self._active == campaign_id
+            ):
                 return self._control_response(campaign_id)
 
             self._lock.acquire(campaign_id)
             try:
-                self._append_state(campaign_id, domain.RUNNING_STATE)
+                self._append_state(campaign_id, domain.Lifecycle.RUNNING)
             except Exception:
                 self._lock.release(campaign_id)
                 raise
-            self._emit(campaign_id, domain.CAMPAIGN_STARTED)
+            self._emit(campaign_id, domain.EventKind.CAMPAIGN_STARTED)
             self._active = campaign_id
             self._start_ticker(campaign_id)
             return self._control_response(campaign_id)
@@ -173,8 +176,8 @@ class CampaignRunner:
         """Stop opening lanes. Jobs already in flight run to completion."""
         return self._transition(
             campaign_id,
-            domain.PAUSED,
-            allowed=(domain.RUNNING_STATE,),
+            domain.Lifecycle.PAUSED,
+            allowed=(domain.Lifecycle.RUNNING,),
         )
 
     def resume(self, campaign_id: str) -> CampaignControlResponse:
@@ -182,7 +185,7 @@ class CampaignRunner:
         with self._guard:
             records = self._store.replay(campaign_id)
             state = domain.lifecycle(records)
-            if state != domain.PAUSED:
+            if state != domain.Lifecycle.PAUSED:
                 raise CampaignError(
                     "campaign {!r} is {}, not paused".format(
                         campaign_id, state
@@ -195,8 +198,8 @@ class CampaignRunner:
                 )
             if self._active != campaign_id:
                 self._lock.acquire(campaign_id)
-            self._append_state(campaign_id, domain.RUNNING_STATE)
-            self._emit(campaign_id, domain.CAMPAIGN_RESUMED)
+            self._append_state(campaign_id, domain.Lifecycle.RUNNING)
+            self._emit(campaign_id, domain.EventKind.CAMPAIGN_RESUMED)
             self._active = campaign_id
             self._start_ticker(campaign_id)
             return self._control_response(campaign_id)
@@ -209,12 +212,12 @@ class CampaignRunner:
         """
         return self._transition(
             campaign_id,
-            domain.CANCELLED,
+            domain.Lifecycle.CANCELLED,
             allowed=(
-                domain.RUNNING_STATE,
-                domain.PAUSED,
-                domain.CREATED,
-                domain.COMPLETE,
+                domain.Lifecycle.RUNNING,
+                domain.Lifecycle.PAUSED,
+                domain.Lifecycle.CREATED,
+                domain.Lifecycle.COMPLETE,
             ),
         )
 
@@ -239,7 +242,7 @@ class CampaignRunner:
         with self._guard:
             records = self._store.replay(campaign_id)
             state = domain.lifecycle(records)
-            if state == domain.CANCELLED:
+            if state == domain.Lifecycle.CANCELLED:
                 raise CampaignError(
                     "campaign {!r} was cancelled; create a new one "
                     "instead".format(campaign_id)
@@ -261,7 +264,7 @@ class CampaignRunner:
                 campaign_id,
                 [
                     NewEvent(
-                        kind=domain.UNIT_RETRIED,
+                        kind=domain.EventKind.UNIT_RETRIED,
                         at=at,
                         data={
                             **status.unit.as_dict(),
@@ -274,7 +277,7 @@ class CampaignRunner:
             )
 
             lifecycle = domain.lifecycle(self._store.replay(campaign_id))
-            rescheduling = lifecycle == domain.RUNNING_STATE
+            rescheduling = lifecycle == domain.Lifecycle.RUNNING
             if rescheduling:
                 # The ticker stops when a campaign finishes, so a retry on
                 # a completed campaign has to start it again.
@@ -322,7 +325,7 @@ class CampaignRunner:
         emitted.extend(starved)
         emitted.extend(
             NewEvent(
-                kind=domain.LANE_STARTED,
+                kind=domain.EventKind.LANE_STARTED,
                 at=attempt.at,
                 data={
                     **attempt.unit.as_dict(),
@@ -347,10 +350,10 @@ class CampaignRunner:
                 ),
             )
         )
-        if lifecycle == domain.COMPLETE:
+        if lifecycle == domain.Lifecycle.COMPLETE:
             emitted.append(
                 NewEvent(
-                    kind=domain.CAMPAIGN_COMPLETE,
+                    kind=domain.EventKind.CAMPAIGN_COMPLETE,
                     at=self._now(),
                     data={
                         "counts": domain.count_states(
@@ -386,14 +389,14 @@ class CampaignRunner:
             except CampaignError:
                 logger.warning("skipping unreadable campaign %s", campaign_id)
                 continue
-            if domain.lifecycle(records) != domain.RUNNING_STATE:
+            if domain.lifecycle(records) != domain.Lifecycle.RUNNING:
                 continue
             self._append_state(
-                campaign_id, domain.PAUSED, reason=RESTART_REASON
+                campaign_id, domain.Lifecycle.PAUSED, reason=RESTART_REASON
             )
             self._emit(
                 campaign_id,
-                domain.CAMPAIGN_PAUSED,
+                domain.EventKind.CAMPAIGN_PAUSED,
                 reason=RESTART_REASON,
             )
             paused.append(campaign_id)
@@ -413,7 +416,11 @@ class CampaignRunner:
     # -- internals --------------------------------------------------------
 
     def _transition(
-        self, campaign_id: str, state: str, *, allowed: Sequence[str]
+        self,
+        campaign_id: str,
+        state: domain.Lifecycle,
+        *,
+        allowed: Sequence[domain.Lifecycle],
     ) -> CampaignControlResponse:
         with self._guard:
             current = domain.lifecycle(self._store.replay(campaign_id))
@@ -427,13 +434,15 @@ class CampaignRunner:
             self._emit(
                 campaign_id,
                 (
-                    domain.CAMPAIGN_PAUSED
-                    if state == domain.PAUSED
-                    else domain.CAMPAIGN_CANCELLED
+                    domain.EventKind.CAMPAIGN_PAUSED
+                    if state == domain.Lifecycle.PAUSED
+                    else domain.EventKind.CAMPAIGN_CANCELLED
                 ),
             )
             response = self._control_response(campaign_id)
-            drained = state == domain.CANCELLED and not response.lanes_busy
+            drained = (
+                state == domain.Lifecycle.CANCELLED and not response.lanes_busy
+            )
         # Joining the ticker happens outside the guard: a tick that is
         # already in flight must be able to finish without waiting on it.
         if drained:
@@ -463,7 +472,7 @@ class CampaignRunner:
                 problems.append(str(error))
                 starved.append(
                     NewEvent(
-                        kind=domain.ANOMALY_CAPACITY_STARVED,
+                        kind=domain.EventKind.ANOMALY_CAPACITY_STARVED,
                         at=self._now(),
                         data={
                             **unit.as_dict(),
@@ -514,7 +523,7 @@ class CampaignRunner:
                 opened_at=status.attempts[-1].started_at,
             )
             for status in domain.reduce_units(records)
-            if status.state == "running" and status.job_id
+            if status.state == domain.UnitState.RUNNING and status.job_id
         ]
 
     @staticmethod
@@ -526,7 +535,7 @@ class CampaignRunner:
             status
             for status in domain.reduce_units(records)
             # A unit in flight is already being attempted.
-            if status.state != "running"
+            if status.state != domain.UnitState.RUNNING
             and status.state in wanted
             and filters.matches_unit(status.unit)
         ]
@@ -548,12 +557,14 @@ class CampaignRunner:
             }
             events.append(
                 NewEvent(
-                    kind=domain.LANE_RELEASED, at=finished.at, data=dict(body)
+                    kind=domain.EventKind.LANE_RELEASED,
+                    at=finished.at,
+                    data=dict(body),
                 )
             )
             if item.problem:
                 body["problem"] = item.problem
-            if finished.outcome == "failed":
+            if finished.outcome == domain.Outcome.FAILED:
                 # Carried here so a caller can judge the failure without
                 # going back for the job's report.
                 body["failures"] = domain.failure_details(
@@ -578,7 +589,7 @@ class CampaignRunner:
     def _read_lanes(self, records: Sequence[Record]) -> list[Lane]:
         lanes = []
         for status in domain.reduce_units(records):
-            if status.state != "running" or not status.job_id:
+            if status.state != domain.UnitState.RUNNING or not status.job_id:
                 continue
             open_attempt = status.attempts[-1]
             lanes.append(
@@ -594,7 +605,7 @@ class CampaignRunner:
         return lanes
 
     def _append_state(
-        self, campaign_id: str, state: str, reason: str = ""
+        self, campaign_id: str, state: domain.Lifecycle, reason: str = ""
     ) -> None:
         self._store.append(
             campaign_id,
@@ -642,7 +653,10 @@ def _unit_view(status: UnitStatus) -> UnitView:
 
 def _is_finished(lifecycle: str, lanes_busy: int) -> bool:
     """A campaign is done with the scheduler once nothing is in flight."""
-    return lifecycle in (domain.COMPLETE, domain.CANCELLED) and lanes_busy == 0
+    return (
+        lifecycle in (domain.Lifecycle.COMPLETE, domain.Lifecycle.CANCELLED)
+        and lanes_busy == 0
+    )
 
 
 def _header_of(records: Sequence[Record]) -> domain.CampaignHeader:

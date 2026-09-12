@@ -1,16 +1,23 @@
+import json
+
 import pytest
 
 from behave_campaign.domain import (
+    WRITABLE_LIFECYCLE,
     AttemptFinished,
     AttemptStarted,
     CampaignError,
     CampaignHeader,
     Filters,
+    Lifecycle,
     LifecycleRecord,
+    Outcome,
     PlanRecord,
+    RecordType,
     RepoState,
     RetryRecord,
     Unit,
+    UnitState,
     count_states,
     encode_record,
     finished_from_mcp,
@@ -319,3 +326,41 @@ class TestFilters:
 
         assert [s.unit for s in running(statuses)] == [UNIT_A]
         assert [s.unit for s in problems(statuses)] == [UNIT_B]
+
+
+class TestStringEnums:
+    """Every mutually exclusive set is an enum that still reads as a string."""
+
+    @pytest.mark.parametrize(
+        "member,expected",
+        [
+            (RecordType.STARTED, "started"),
+            (Outcome.PASSED, "passed"),
+            (UnitState.UNATTEMPTED, "unattempted"),
+            (Lifecycle.CANCELLED, "cancelled"),
+        ],
+    )
+    def test_a_member_reads_and_serialises_as_its_value(
+        self, member, expected
+    ):
+        assert str(member) == expected
+        assert "{}".format(member) == expected
+        assert json.dumps(member) == '"{}"'.format(expected)
+        assert member == expected
+
+    def test_outcomes_are_a_subset_of_unit_states(self):
+        # A unit's state is an outcome, or one of the two conditions that no
+        # job reports.
+        assert {o.value for o in Outcome} < {s.value for s in UnitState}
+        assert {s.value for s in UnitState} - {o.value for o in Outcome} == {
+            "unattempted",
+            "running",
+        }
+
+    def test_only_three_lifecycle_states_are_ever_written(self):
+        # created is the absence of a record; complete is derived.
+        assert set(WRITABLE_LIFECYCLE) == {
+            Lifecycle.RUNNING,
+            Lifecycle.PAUSED,
+            Lifecycle.CANCELLED,
+        }

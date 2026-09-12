@@ -174,7 +174,7 @@ class CampaignService:
             campaign_id,
             [
                 domain.NewEvent(
-                    kind=domain.CAMPAIGN_CREATED,
+                    kind=domain.EventKind.CAMPAIGN_CREATED,
                     at=at,
                     data={
                         "total_units": len(units),

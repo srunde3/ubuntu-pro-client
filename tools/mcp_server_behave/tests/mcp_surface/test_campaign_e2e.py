@@ -30,7 +30,7 @@ from behave_campaign.adapters import (
     ServiceLaneRunner,
     system_now,
 )
-from behave_campaign.domain import COMPLETE, lifecycle, reduce_units
+from behave_campaign.domain import Lifecycle, lifecycle, reduce_units
 from behave_campaign.repo import repo_state
 from behave_campaign.runner import CampaignRunner, ThreadTicker
 from behave_campaign.service import CampaignService
@@ -119,7 +119,7 @@ def test_a_campaign_runs_its_lanes_concurrently(monkeypatch, tmp_path):
     states = {s.unit.release: s.state for s in statuses}
 
     assert (
-        lifecycle(records) == COMPLETE
+        lifecycle(records) == Lifecycle.COMPLETE
     ), "campaign did not finish within {}s; states were {}".format(
         CAMPAIGN_TIMEOUT_SECONDS, states
     )
