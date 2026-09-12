@@ -8,6 +8,7 @@ def test_load_settings_defaults():
     assert settings == Settings(
         allow_cloud_machine_types=False,
         max_parallel_jobs=1,
+        campaign_poll_timeout=60,
         transport="stdio",
         host="127.0.0.1",
         port=8000,
@@ -70,3 +71,19 @@ def test_load_settings_port_out_of_range_raises():
         load_settings({"MCP_PORT": "70000"})
     with pytest.raises(ConfigError, match="MCP_PORT"):
         load_settings({"MCP_PORT": "0"})
+
+
+def test_campaign_poll_timeout_is_configurable():
+    settings = load_settings({"MCP_CAMPAIGN_POLL_TIMEOUT": "90"})
+
+    assert settings.campaign_poll_timeout == 90
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "121", "soon", "1.5"])
+def test_an_unusable_campaign_poll_timeout_is_rejected(value):
+    # The ceiling exists because the client's own request timeout is the
+    # real limit; a value above it would hang rather than return.
+    with pytest.raises(ConfigError) as error:
+        load_settings({"MCP_CAMPAIGN_POLL_TIMEOUT": value})
+
+    assert "MCP_CAMPAIGN_POLL_TIMEOUT" in str(error.value)

@@ -26,9 +26,12 @@ from behave_campaign.domain import (
     UnitStatus,
 )
 from behave_campaign.messages import (
+    DEFAULT_EVENTS_LIMIT,
     DEFAULT_UNITS_LIMIT,
+    MAX_EVENTS_LIMIT,
     MAX_UNITS_LIMIT,
     AttemptView,
+    AwaitEventsResponse,
     CampaignRepo,
     CampaignScope,
     CampaignStatusResponse,
@@ -36,6 +39,7 @@ from behave_campaign.messages import (
     CreateCampaignResponse,
     DimensionsResponse,
     DimensionValue,
+    EventView,
     ListCampaignsResponse,
     NextUnitsResponse,
     RecordAttemptsResponse,
@@ -44,7 +48,7 @@ from behave_campaign.messages import (
     UnitHistoryView,
     UnitView,
 )
-from behave_campaign.ports import CampaignStore, FeatureReader
+from behave_campaign.ports import CampaignStore, EventLog, FeatureReader
 
 
 def _unit_view(status: UnitStatus) -> UnitView:
@@ -107,6 +111,7 @@ class CampaignService:
         *,
         store: CampaignStore,
         features: FeatureReader,
+        events: EventLog,
         now: Callable[[], str],
         repo_state: Callable[[Path], RepoState],
         max_lane_ceiling: int | None = None,
@@ -119,6 +124,7 @@ class CampaignService:
         """
         self._store = store
         self._features = features
+        self._events = events
         self._now = now
         self._repo_state = repo_state
         self._max_lane_ceiling = max_lane_ceiling
@@ -169,6 +175,21 @@ class CampaignService:
         )
         plans = [PlanRecord(unit=unit, at=at) for unit in units]
         self._store.create(campaign_id, header, plans)
+        self._events.append(
+            campaign_id,
+            [
+                domain.NewEvent(
+                    kind=domain.CAMPAIGN_CREATED,
+                    at=at,
+                    data={
+                        "total_units": len(units),
+                        "install_from": install_from,
+                        "max_lanes": max_lanes,
+                        "scope": filters.scope_as_dict(),
+                    },
+                )
+            ],
+        )
 
         return CreateCampaignResponse(
             campaign=_summary(
@@ -328,6 +349,53 @@ class CampaignService:
             limit_clamped=clamped,
         )
 
+    def await_events(
+        self,
+        *,
+        campaign_id: str,
+        since_seq: int = 0,
+        kinds: Sequence[str] = (),
+        limit: int = DEFAULT_EVENTS_LIMIT,
+        timeout: float = 0.0,
+    ) -> AwaitEventsResponse:
+        """Return events after ``since_seq``, waiting up to ``timeout``.
+
+        ``kinds`` subscribes by exact kind or by family (``unit.*``); empty
+        means everything. A timeout returns an empty batch rather than an
+        error, and the campaign summary comes back either way, so a quiet
+        stretch still tells the caller where things stand.
+        """
+        domain.validate_event_kinds(kinds)
+        capped, _ = self._cap_events(limit)
+
+        if timeout > 0:
+            events = self._events.wait(
+                campaign_id,
+                since_seq=since_seq,
+                kinds=kinds,
+                limit=capped,
+                timeout=timeout,
+            )
+        else:
+            events = self._events.read(
+                campaign_id,
+                since_seq=since_seq,
+                kinds=kinds,
+                limit=capped,
+            )
+
+        records = self._store.replay(campaign_id)
+        statuses = domain.reduce_units(records)
+        return AwaitEventsResponse(
+            campaign=_summary(campaign_id, _header_of(records), statuses),
+            events=[EventView(**event.as_dict()) for event in events],
+            next_seq=(events[-1].seq if events else max(since_seq, 0)),
+            latest_seq=self._events.latest_seq(campaign_id),
+            lanes_busy=len(domain.running(statuses)),
+            lifecycle=domain.lifecycle(records),
+            timed_out=not events,
+        )
+
     def dimensions(self, *, repo_root: Path) -> DimensionsResponse:
         """Report the releases and machine types the feature files can run.
 
@@ -384,6 +452,14 @@ class CampaignService:
                 "hang, so raise the server's limit or lower "
                 "max_lanes.".format(max_lanes, self._max_lane_ceiling)
             )
+
+    @staticmethod
+    def _cap_events(limit: int) -> tuple[int, bool]:
+        if limit < 1:
+            raise CampaignError("limit must be positive")
+        if limit > MAX_EVENTS_LIMIT:
+            return MAX_EVENTS_LIMIT, True
+        return limit, False
 
     @staticmethod
     def _cap(limit: int) -> tuple[int, bool]:

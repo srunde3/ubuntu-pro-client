@@ -9,7 +9,7 @@ import time
 
 import pytest
 
-from behave_campaign.adapters import JsonlCampaignStore
+from behave_campaign.adapters import JsonlCampaignStore, JsonlEventLog
 from behave_campaign.domain import (
     CANCELLED,
     COMPLETE,
@@ -152,9 +152,19 @@ def ticker():
 
 
 @pytest.fixture
-def runner(store, lanes, lock, ticker):
+def events(tmp_path):
+    return JsonlEventLog(tmp_path / "campaigns")
+
+
+@pytest.fixture
+def runner(store, lanes, lock, ticker, events):
     return CampaignRunner(
-        store=store, lanes=lanes, lock=lock, now=lambda: AT, ticker=ticker
+        store=store,
+        lanes=lanes,
+        lock=lock,
+        events=events,
+        now=lambda: AT,
+        ticker=ticker,
     )
 
 
@@ -225,6 +235,7 @@ class TestStart:
             store=store,
             lanes=lanes,
             lock=FakeLock(taken_by_other=True),
+            events=JsonlEventLog(store.root),
             now=lambda: AT,
             ticker=FakeTicker(),
         )
@@ -364,6 +375,7 @@ class TestTick:
             store=store,
             lanes=lanes,
             lock=lock,
+            events=JsonlEventLog(store.root),
             now=lambda: AT,
             ticker=FakeTicker(),
         )
@@ -516,6 +528,7 @@ class TestRecover:
             store=store,
             lanes=FakeLanes(),
             lock=FakeLock(),
+            events=JsonlEventLog(store.root),
             now=lambda: AT,
             ticker=FakeTicker(),
         )
@@ -534,6 +547,7 @@ class TestRecover:
             store=store,
             lanes=FakeLanes(),
             lock=FakeLock(),
+            events=JsonlEventLog(store.root),
             now=lambda: AT,
             ticker=FakeTicker(),
         ).recover()
@@ -552,6 +566,7 @@ class TestRecover:
             store=store,
             lanes=FakeLanes(),
             lock=FakeLock(),
+            events=JsonlEventLog(store.root),
             now=lambda: AT,
             ticker=FakeTicker(),
         ).recover()
@@ -566,6 +581,7 @@ class TestRecover:
             store=store,
             lanes=fresh_lanes,
             lock=FakeLock(),
+            events=JsonlEventLog(store.root),
             now=lambda: AT,
             ticker=FakeTicker(),
         )
@@ -672,6 +688,7 @@ class TestTheWholeLoop:
             store=store,
             lanes=lanes,
             lock=FakeLock(),
+            events=JsonlEventLog(store.root),
             now=lambda: AT,
             ticker=ThreadTicker(interval=0.01),
         )
@@ -702,6 +719,7 @@ class TestTheWholeLoop:
             store=store,
             lanes=lanes,
             lock=FakeLock(),
+            events=JsonlEventLog(store.root),
             now=lambda: AT,
             ticker=ThreadTicker(interval=0.005),
         )
@@ -725,6 +743,7 @@ class TestTheWholeLoop:
             store=store,
             lanes=lanes,
             lock=FakeLock(),
+            events=JsonlEventLog(store.root),
             now=lambda: AT,
             ticker=ThreadTicker(interval=0.01),
         )
@@ -739,3 +758,144 @@ class TestTheWholeLoop:
         assert response.lifecycle == PAUSED
         assert len(lanes.started) == settled
         assert settled < 40
+
+
+class TestEvents:
+    """What the runner announces as it goes."""
+
+    @staticmethod
+    def kinds(events, campaign_id="1234567"):
+        return [
+            e.kind
+            for e in events.read(campaign_id, since_seq=0, kinds=[], limit=100)
+        ]
+
+    def test_starting_and_pausing_are_announced(self, runner, store, events):
+        create(store)
+        runner.start("1234567")
+        runner.pause("1234567")
+        runner.resume("1234567")
+        runner.cancel("1234567")
+
+        assert self.kinds(events) == [
+            "campaign.started",
+            "campaign.paused",
+            "campaign.resumed",
+            "campaign.cancelled",
+        ]
+
+    def test_an_opened_lane_is_announced_with_its_job(
+        self, runner, store, events, lanes
+    ):
+        create(store, max_lanes=1)
+        runner.start("1234567")
+        runner.tick("1234567")
+
+        opened = events.read(
+            "1234567", since_seq=0, kinds=["lane.started"], limit=10
+        )
+
+        assert len(opened) == 1
+        assert opened[0].data["job_id"] == "job1"
+        assert opened[0].data["release"] == UNITS[0].release
+        assert opened[0].data["install_from"] == "proposed"
+
+    def test_a_passing_unit_is_announced(self, runner, store, events, lanes):
+        create(store, units=[UNITS[0]], max_lanes=1)
+        runner.start("1234567")
+        runner.tick("1234567")
+        lanes.finish("job1")
+        runner.tick("1234567")
+
+        assert "unit.passed" in self.kinds(events)
+        assert "lane.released" in self.kinds(events)
+
+    def test_a_failing_unit_carries_its_failing_steps(
+        self, runner, store, events, lanes
+    ):
+        create(store, units=[UNITS[0]], max_lanes=1)
+        runner.start("1234567")
+        runner.tick("1234567")
+        lanes.results["job1"] = {
+            "status": "completed",
+            "ok": False,
+            "job_id": "job1",
+            "summary": {
+                "scenarios": {"passed": 0, "failed": 1, "skipped": 0},
+                "features": {},
+            },
+            "failures": [
+                {
+                    "step": "Then it works",
+                    "status": "failed",
+                    "error_message": "it did not",
+                }
+            ],
+        }
+        runner.tick("1234567")
+
+        failed = events.read(
+            "1234567", since_seq=0, kinds=["unit.failed"], limit=10
+        )
+
+        assert len(failed) == 1
+        assert failed[0].data["failures"][0]["step"] == "Then it works"
+        assert failed[0].data["failures"][0]["error_message"] == "it did not"
+
+    def test_an_unclassifiable_result_has_its_own_kind_and_reason(
+        self, runner, store, events, lanes
+    ):
+        create(store, units=[UNITS[0]], max_lanes=1)
+        runner.start("1234567")
+        runner.tick("1234567")
+        lanes.results["job1"] = {
+            "status": "completed",
+            "ok": True,
+            "job_id": "job1",
+            "summary": {
+                "scenarios": {"passed": 1, "unknown": 1},
+                "features": {},
+            },
+        }
+        runner.tick("1234567")
+
+        odd = events.read(
+            "1234567", since_seq=0, kinds=["unit.unclassifiable"], limit=10
+        )
+
+        assert len(odd) == 1
+        assert odd[0].data["problem"]
+
+    def test_completion_is_announced_with_the_counts(
+        self, runner, store, events, lanes
+    ):
+        create(store, units=[UNITS[0]], max_lanes=1)
+        runner.start("1234567")
+        runner.tick("1234567")
+        lanes.finish("job1")
+        runner.tick("1234567")
+
+        done = events.read(
+            "1234567", since_seq=0, kinds=["campaign.complete"], limit=10
+        )
+
+        assert len(done) == 1
+        assert done[0].data["counts"]["passed"] == 1
+
+    def test_a_restart_pause_says_why(self, runner, store, events):
+        create(store)
+        runner.start("1234567")
+        CampaignRunner(
+            store=store,
+            lanes=FakeLanes(),
+            lock=FakeLock(),
+            events=events,
+            now=lambda: AT,
+            ticker=FakeTicker(),
+        ).recover()
+
+        paused = events.read(
+            "1234567", since_seq=0, kinds=["campaign.paused"], limit=10
+        )
+
+        assert paused[0].data["reason"] == RESTART_REASON

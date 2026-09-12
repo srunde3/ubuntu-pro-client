@@ -60,6 +60,7 @@ def test_append_index_event_byte_shape(tmp_path):
 _SETTINGS = Settings(
     allow_cloud_machine_types=False,
     max_parallel_jobs=1,
+    campaign_poll_timeout=60,
     transport="stdio",
     host="127.0.0.1",
     port=8000,

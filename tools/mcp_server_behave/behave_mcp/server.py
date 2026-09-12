@@ -15,12 +15,15 @@ from starlette.responses import JSONResponse
 from behave_campaign.adapters import (
     FileCampaignRunLock,
     JsonlCampaignStore,
+    JsonlEventLog,
     ParserFeatureReader,
     ServiceLaneRunner,
     system_now,
 )
 from behave_campaign.domain import Filters
 from behave_campaign.messages import (
+    DEFAULT_EVENTS_LIMIT,
+    AwaitEventsResponse,
     CampaignControlResponse,
     CampaignStatusResponse,
     CreateCampaignResponse,
@@ -161,6 +164,7 @@ _workspace = LocalWorkspace()
 # The runner holds the run lock and the ticker for the active campaign, so
 # unlike the per-call service there is exactly one for the server's lifetime.
 _runner: CampaignRunner | None = None
+_events: JsonlEventLog | None = None
 _runner_guard = threading.Lock()
 
 
@@ -168,6 +172,19 @@ def _campaign_dir(repo_root: str) -> Path:
     return _workspace.resolve_campaign_dir(
         _workspace.resolve_repo_root(repo_root or None)
     )
+
+
+def campaign_events(campaign_dir: Path) -> JsonlEventLog:
+    """Return the one event log for a campaign directory.
+
+    Shared rather than per-call: a blocked reader is woken through the same
+    object the runner appends to, so it has to outlive a single request.
+    """
+    global _events
+    with _runner_guard:
+        if _events is None:
+            _events = JsonlEventLog(campaign_dir)
+        return _events
 
 
 def campaign_runner(repo_root: str) -> CampaignRunner:
@@ -185,6 +202,9 @@ def campaign_runner(repo_root: str) -> CampaignRunner:
                 store=JsonlCampaignStore(campaign_dir),
                 lanes=ServiceLaneRunner(_service),
                 lock=FileCampaignRunLock(campaign_dir),
+                events=(
+                    JsonlEventLog(campaign_dir) if _events is None else _events
+                ),
                 now=system_now,
             )
         return _runner
@@ -198,9 +218,11 @@ def campaign_service(repo_root: str) -> CampaignService:
     It holds no state of its own.
     """
     resolved = _workspace.resolve_repo_root(repo_root or None)
+    campaign_dir = _workspace.resolve_campaign_dir(resolved)
     return CampaignService(
-        store=JsonlCampaignStore(_workspace.resolve_campaign_dir(resolved)),
+        store=JsonlCampaignStore(campaign_dir),
         features=ParserFeatureReader(),
+        events=campaign_events(campaign_dir),
         now=system_now,
         repo_state=read_repo_state,
         max_lane_ceiling=_settings.max_parallel_jobs,
@@ -718,6 +740,77 @@ def cancel_campaign(
     campaign_id: CampaignIdArg, repo_root: RepoRoot = ""
 ) -> CampaignControlResponse:
     return campaign_runner(repo_root).cancel(campaign_id)
+
+
+@mcp.tool(
+    description=(
+        "Wait for news about a campaign. Returns every event after "
+        "since_seq, blocking up to timeout_seconds for something to happen, "
+        "and always reports the campaign's counts and lifecycle -- so a "
+        "batch that comes back empty still says where things stand. Pass "
+        "next_seq from the previous response as the next since_seq to read "
+        "the stream without gaps or repeats. Filter with kinds: exact kinds "
+        "like 'unit.failed', or a family like 'unit.*'; omit for "
+        "everything. Families are campaign.*, lane.* and unit.*. A "
+        "unit.failed event carries the failing steps, so a failure can be "
+        "judged without fetching the job's report."
+    )
+)
+def await_campaign_events(
+    campaign_id: CampaignIdArg,
+    since_seq: Annotated[
+        int,
+        Field(
+            default=0,
+            description=(
+                "Return events numbered above this. Use next_seq from the "
+                "previous response; 0 starts from the beginning."
+            ),
+        ),
+    ] = 0,
+    kinds: Annotated[
+        list[str],
+        Field(
+            description=(
+                "Event kinds or families to return. Empty means all of them."
+            ),
+        ),
+    ] = [],
+    timeout_seconds: Annotated[
+        int,
+        Field(
+            default=0,
+            description=(
+                "How long to wait for a matching event. 0 returns whatever "
+                "is already there without blocking. Above the server's "
+                "MCP_CAMPAIGN_POLL_TIMEOUT the call is rejected rather "
+                "than quietly shortened."
+            ),
+        ),
+    ] = 0,
+    limit: Annotated[
+        int,
+        Field(
+            default=DEFAULT_EVENTS_LIMIT,
+            description="Most events to return in one batch.",
+        ),
+    ] = DEFAULT_EVENTS_LIMIT,
+    repo_root: RepoRoot = "",
+) -> AwaitEventsResponse:
+    if timeout_seconds > _settings.campaign_poll_timeout:
+        raise ValueError(
+            "timeout_seconds {} exceeds this server's limit of {}; a longer "
+            "wait would outlast the client's own request timeout".format(
+                timeout_seconds, _settings.campaign_poll_timeout
+            )
+        )
+    return campaign_service(repo_root).await_events(
+        campaign_id=campaign_id,
+        since_seq=since_seq,
+        kinds=kinds,
+        limit=limit,
+        timeout=float(max(timeout_seconds, 0)),
+    )
 
 
 def main() -> None:

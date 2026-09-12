@@ -16,13 +16,14 @@ from __future__ import annotations
 import logging
 import threading
 from pathlib import Path
-from typing import Callable, Sequence
+from typing import Any, Callable, Sequence
 
 from behave_campaign import domain
 from behave_campaign.domain import (
     AttemptRecord,
     CampaignError,
     Lane,
+    NewEvent,
     Record,
     StateRecord,
     Unit,
@@ -35,6 +36,7 @@ from behave_campaign.messages import (
 from behave_campaign.ports import (
     CampaignRunLock,
     CampaignStore,
+    EventLog,
     LaneRunner,
     LaneStartError,
     Ticker,
@@ -108,12 +110,14 @@ class CampaignRunner:
         store: CampaignStore,
         lanes: LaneRunner,
         lock: CampaignRunLock,
+        events: EventLog,
         now: Callable[[], str],
         ticker: Ticker | None = None,
     ) -> None:
         self._store = store
         self._lanes = lanes
         self._lock = lock
+        self._events = events
         self._now = now
         self._ticker = ticker if ticker is not None else ThreadTicker()
         self._guard = threading.Lock()
@@ -149,6 +153,7 @@ class CampaignRunner:
             except Exception:
                 self._lock.release(campaign_id)
                 raise
+            self._emit(campaign_id, domain.CAMPAIGN_STARTED)
             self._active = campaign_id
             self._start_ticker(campaign_id)
             return self._control_response(campaign_id)
@@ -180,6 +185,7 @@ class CampaignRunner:
             if self._active != campaign_id:
                 self._lock.acquire(campaign_id)
             self._append_state(campaign_id, domain.RUNNING_STATE)
+            self._emit(campaign_id, domain.CAMPAIGN_RESUMED)
             self._active = campaign_id
             self._start_ticker(campaign_id)
             return self._control_response(campaign_id)
@@ -208,6 +214,7 @@ class CampaignRunner:
         )
 
         problems: list[str] = []
+        emitted: list[NewEvent] = []
         if plan.record:
             self._store.append(
                 campaign_id, [item.attempt for item in plan.record]
@@ -215,11 +222,40 @@ class CampaignRunner:
             problems.extend(
                 item.problem for item in plan.record if item.problem
             )
+            emitted.extend(self._outcome_events(plan.record, lanes))
 
         started = self._open_lanes(campaign_id, header, plan.start, problems)
+        emitted.extend(
+            NewEvent(
+                kind=domain.LANE_STARTED,
+                at=attempt.at,
+                data={
+                    **attempt.unit.as_dict(),
+                    "job_id": attempt.job_id,
+                    "install_from": attempt.install_from,
+                },
+            )
+            for attempt in started
+        )
 
         busy = sum(1 for lane in lanes if not lane.finished) + len(started)
         lifecycle = domain.lifecycle(self._store.replay(campaign_id))
+        if lifecycle == domain.COMPLETE:
+            emitted.append(
+                NewEvent(
+                    kind=domain.CAMPAIGN_COMPLETE,
+                    at=self._now(),
+                    data={
+                        "counts": domain.count_states(
+                            domain.reduce_units(
+                                self._store.replay(campaign_id)
+                            )
+                        )
+                    },
+                )
+            )
+        self._events.append(campaign_id, emitted)
+
         return TickReport(
             campaign_id=campaign_id,
             lifecycle=lifecycle,
@@ -250,6 +286,11 @@ class CampaignRunner:
             self._append_state(
                 campaign_id, domain.PAUSED, reason=RESTART_REASON
             )
+            self._emit(
+                campaign_id,
+                domain.CAMPAIGN_PAUSED,
+                reason=RESTART_REASON,
+            )
             paused.append(campaign_id)
         return paused
 
@@ -278,6 +319,14 @@ class CampaignRunner:
                     )
                 )
             self._append_state(campaign_id, state)
+            self._emit(
+                campaign_id,
+                (
+                    domain.CAMPAIGN_PAUSED
+                    if state == domain.PAUSED
+                    else domain.CAMPAIGN_CANCELLED
+                ),
+            )
             response = self._control_response(campaign_id)
             drained = state == domain.CANCELLED and not response.lanes_busy
         # Joining the ticker happens outside the guard: a tick that is
@@ -321,6 +370,50 @@ class CampaignRunner:
             # what keeps the unit out of the next tick's selection.
             self._store.append(campaign_id, started)
         return started
+
+    def _outcome_events(
+        self,
+        classified: Sequence[domain.Classification],
+        lanes: Sequence[Lane],
+    ) -> list[NewEvent]:
+        """A released-lane event and an outcome event per finished lane."""
+        results = {lane.unit: lane.result for lane in lanes if lane.finished}
+        events: list[NewEvent] = []
+        for item in classified:
+            attempt = item.attempt
+            body: dict[str, Any] = {
+                **attempt.unit.as_dict(),
+                "job_id": attempt.job_id,
+                "state": attempt.state,
+            }
+            events.append(
+                NewEvent(
+                    kind=domain.LANE_RELEASED, at=attempt.at, data=dict(body)
+                )
+            )
+            if item.problem:
+                body["problem"] = item.problem
+            if attempt.state == "failed":
+                # Carried here so a caller can judge the failure without
+                # going back for the job's report.
+                body["failures"] = domain.failure_details(
+                    results.get(attempt.unit)
+                )
+            events.append(
+                NewEvent(
+                    kind=domain.unit_event_kind(
+                        attempt.state, bool(item.problem)
+                    ),
+                    at=attempt.at,
+                    data=body,
+                )
+            )
+        return events
+
+    def _emit(self, campaign_id: str, kind: str, **data: Any) -> None:
+        self._events.append(
+            campaign_id, [NewEvent(kind=kind, at=self._now(), data=data)]
+        )
 
     def _read_lanes(self, records: Sequence[Record]) -> list[Lane]:
         lanes = []

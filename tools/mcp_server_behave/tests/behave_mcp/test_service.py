@@ -29,6 +29,7 @@ def _settings(*, allow_cloud=False, max_parallel_jobs=1) -> Settings:
     return Settings(
         allow_cloud_machine_types=allow_cloud,
         max_parallel_jobs=max_parallel_jobs,
+        campaign_poll_timeout=60,
         transport="stdio",
         host="127.0.0.1",
         port=8000,

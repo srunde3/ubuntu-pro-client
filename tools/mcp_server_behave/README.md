@@ -62,6 +62,13 @@ finish rather than killing them.
 Only one campaign schedules at a time, held by an advisory lock so a
 concurrent CLI fails cleanly instead of interleaving writes.
 
+`await_campaign_events` is how a caller follows a running campaign: it blocks
+until something happens, returns every event after a cursor, and always
+reports the campaign's counts and lifecycle -- so an empty batch is still
+informative. Events are filtered by kind (`unit.failed`) or family
+(`unit.*`), and a `unit.failed` event carries the failing steps so a failure
+can be judged without fetching the job's report.
+
 The package is also usable on its own through the `behave-campaign` CLI, and
 shares this project's `pyproject.toml`, virtualenv, and CI job. See
 [behave_campaign/README.md](behave_campaign/README.md) for the record format,
@@ -171,8 +178,13 @@ Every tool also accepts a `repo_root` parameter:
 
 Campaign files are written under:
 
-- `MCP_CAMPAIGN_DIR`: directory holding campaign records and their run
-  locks. Defaults to `<repo_root>/.mcp_server_behave/campaigns`.
+- `MCP_CAMPAIGN_DIR`: directory holding campaign records, their event logs
+  and their run locks. Defaults to
+  `<repo_root>/.mcp_server_behave/campaigns`.
+- `MCP_CAMPAIGN_POLL_TIMEOUT`: longest wait `await_campaign_events` may be
+  asked for, in seconds. Defaults to `60`, and must be between 1 and 120 --
+  the real ceiling is the MCP client's own request timeout, which varies per
+  host. A call asking for longer is rejected rather than quietly shortened.
 
 One more variable is read at the point a job starts, and can vary per-call:
 

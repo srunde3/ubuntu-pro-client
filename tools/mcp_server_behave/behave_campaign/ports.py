@@ -14,7 +14,9 @@ from typing import Any, Callable, Protocol, Sequence
 from behave_campaign.domain import (
     CampaignError,
     CampaignHeader,
+    Event,
     Filters,
+    NewEvent,
     PlanRecord,
     Record,
     Unit,
@@ -117,6 +119,52 @@ class LaneRunner(Protocol):
         The payload is whatever ``classify_result`` understands: the MCP's
         own completion shape.
         """
+        ...
+
+
+class EventLog(Protocol):
+    """Numbered, durable notifications about one campaign.
+
+    The campaign's own record is the truth about what happened; this is how
+    a watcher hears about it promptly. ``seq`` is monotonic per campaign and
+    survives a restart, so a cursor stays valid across one.
+    """
+
+    def append(
+        self, campaign_id: str, events: Sequence[NewEvent]
+    ) -> list[Event]:
+        """Number and store ``events``, returning them as stored."""
+        ...
+
+    def read(
+        self,
+        campaign_id: str,
+        *,
+        since_seq: int,
+        kinds: Sequence[str],
+        limit: int,
+    ) -> list[Event]:
+        """Return matching events after ``since_seq``, oldest first."""
+        ...
+
+    def wait(
+        self,
+        campaign_id: str,
+        *,
+        since_seq: int,
+        kinds: Sequence[str],
+        limit: int,
+        timeout: float,
+    ) -> list[Event]:
+        """Like ``read``, but block until something matches or time runs out.
+
+        Returns an empty list on timeout rather than raising: a quiet
+        campaign is not an error.
+        """
+        ...
+
+    def latest_seq(self, campaign_id: str) -> int:
+        """Return the highest seq stored, or 0 when there are none."""
         ...
 
 

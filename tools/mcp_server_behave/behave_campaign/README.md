@@ -154,6 +154,36 @@ write the same files the CLI does, under the directory named by
   further calls needed to keep it moving.
 - `pause_campaign` / `resume_campaign` -- stop and restart lane opening.
 - `cancel_campaign` -- close a campaign to further scheduling, for good.
+- `await_campaign_events` -- wait for news, with a cursor.
+
+## Events
+
+A campaign announces what happens to it. The record is still the truth; this
+is how a watcher hears about it promptly.
+
+| Family | Kinds |
+| --- | --- |
+| `campaign.*` | `created`, `started`, `paused`, `resumed`, `cancelled`, `complete` |
+| `lane.*` | `started`, `released` |
+| `unit.*` | `passed`, `failed`, `skipped`, `errored`, `unclassifiable` |
+
+Subscribe by exact kind or by family (`unit.*`); omit `kinds` for everything.
+An unknown kind or family is rejected rather than quietly matching nothing,
+because a typo would otherwise look like a campaign that never emits.
+
+A `unit.failed` event carries the failing steps and their messages, so a
+failure can be judged without fetching the job's report. A
+`unit.unclassifiable` event carries the reason the result could not be read.
+
+`seq` is dense and monotonic within a campaign, so a cursor never skips: pass
+`next_seq` from one response as the next `since_seq`. Events are appended to
+`<campaign_id>.events.jsonl` and held in memory for serving, which is what
+lets a cursor survive a restart and a blocked reader be woken by an append.
+
+There is deliberately no heartbeat. Every response carries the campaign's
+counts and lifecycle, so a batch that came back empty on timeout still says
+where things stand, and an agent that has stopped polling would not receive a
+heartbeat anyway.
 
 ## Lifecycle
 
@@ -184,7 +214,7 @@ Same hexagonal layering as [behave_mcp](../behave_mcp), one module per layer:
 - `domain.py` -- pure campaign rules. Units, attempts, state reduction, and
   the order remaining work is taken up in. No I/O.
 - `ports.py` -- the Protocols the service and runner depend on:
-  `CampaignStore`, `FeatureReader`, `LaneRunner`, `Ticker`,
+  `CampaignStore`, `FeatureReader`, `LaneRunner`, `EventLog`, `Ticker`,
   `CampaignRunLock`.
 - `adapters.py` -- concrete implementations. Two stores satisfy
   `CampaignStore` because the front-ends address campaigns differently: the

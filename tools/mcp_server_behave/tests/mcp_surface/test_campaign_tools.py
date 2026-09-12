@@ -231,19 +231,28 @@ class StubTicker:
 def runner(repo, monkeypatch, tmp_path):
     """Replace the server's runner with one that launches no real jobs."""
     import behave_mcp.server as server_module
-    from behave_campaign.adapters import JsonlCampaignStore, system_now
+    from behave_campaign.adapters import (
+        JsonlCampaignStore,
+        JsonlEventLog,
+        system_now,
+    )
     from behave_campaign.runner import CampaignRunner
 
     lanes = StubLanes()
     ticker = StubTicker()
+    # The same log the server's own service reads, so events the runner
+    # emits are visible to await_campaign_events.
+    events = JsonlEventLog(tmp_path / "campaigns")
     replacement = CampaignRunner(
         store=JsonlCampaignStore(tmp_path / "campaigns"),
         lanes=lanes,
         lock=_FakeLock(),
+        events=events,
         now=system_now,
         ticker=ticker,
     )
     monkeypatch.setattr(server_module, "_runner", replacement)
+    monkeypatch.setattr(server_module, "_events", events)
     replacement.lanes = lanes
     replacement.ticker = ticker
     return replacement
@@ -359,3 +368,108 @@ async def test_a_started_campaign_fills_lanes_on_its_tick(repo, runner):
     assert len(runner.lanes.started) == 1
     assert payload["campaign"]["counts"]["running"] == 1
     assert len(payload["running"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_await_events_reports_the_campaign_being_created(repo, runner):
+    async with create_connected_server_and_client_session(mcp) as client:
+        await client.call_tool("create_campaign", {"campaign_id": "1234567"})
+        result = await client.call_tool(
+            "await_campaign_events", {"campaign_id": "1234567"}
+        )
+
+    payload = result_json(result)
+
+    assert [e["kind"] for e in payload["events"]] == ["campaign.created"]
+    assert payload["next_seq"] == 1
+    assert payload["lifecycle"] == "created"
+
+
+@pytest.mark.asyncio
+async def test_await_events_follows_a_campaign_through_a_lane(repo, runner):
+    async with create_connected_server_and_client_session(mcp) as client:
+        await client.call_tool(
+            "create_campaign", {"campaign_id": "1234567", "max_lanes": 1}
+        )
+        await client.call_tool("start_campaign", {"campaign_id": "1234567"})
+        # Open the lane, poll it once while it is still going, then poll it
+        # again once the stub reports it finished.
+        for _ in range(3):
+            runner.ticker.tick()
+
+        result = await client.call_tool(
+            "await_campaign_events",
+            {"campaign_id": "1234567", "kinds": ["unit.*"]},
+        )
+
+    payload = result_json(result)
+
+    assert [e["kind"] for e in payload["events"]] == ["unit.passed"]
+    assert payload["campaign"]["counts"]["passed"] == 1
+
+
+@pytest.mark.asyncio
+async def test_the_cursor_reads_the_stream_without_repeats(repo, runner):
+    async with create_connected_server_and_client_session(mcp) as client:
+        await client.call_tool("create_campaign", {"campaign_id": "1234567"})
+        await client.call_tool("start_campaign", {"campaign_id": "1234567"})
+
+        first = result_json(
+            await client.call_tool(
+                "await_campaign_events", {"campaign_id": "1234567"}
+            )
+        )
+        second = result_json(
+            await client.call_tool(
+                "await_campaign_events",
+                {"campaign_id": "1234567", "since_seq": first["next_seq"]},
+            )
+        )
+
+    assert [e["kind"] for e in first["events"]] == [
+        "campaign.created",
+        "campaign.started",
+    ]
+    assert second["events"] == []
+    assert second["timed_out"] is True
+
+
+@pytest.mark.asyncio
+async def test_an_empty_batch_still_says_where_things_stand(repo, runner):
+    async with create_connected_server_and_client_session(mcp) as client:
+        await client.call_tool("create_campaign", {"campaign_id": "1234567"})
+        result = await client.call_tool(
+            "await_campaign_events",
+            {"campaign_id": "1234567", "since_seq": 99},
+        )
+
+    payload = result_json(result)
+
+    # This is why there is no heartbeat event: a quiet poll is informative.
+    assert payload["events"] == []
+    assert payload["campaign"]["counts"]["unattempted"] == 2
+    assert payload["lifecycle"] == "created"
+
+
+@pytest.mark.asyncio
+async def test_an_unknown_event_kind_is_an_error(repo, runner):
+    async with create_connected_server_and_client_session(mcp) as client:
+        await client.call_tool("create_campaign", {"campaign_id": "1234567"})
+        result = await client.call_tool(
+            "await_campaign_events",
+            {"campaign_id": "1234567", "kinds": ["unit.exploded"]},
+        )
+
+    assert "unknown event kind" in result_error_text(result)
+
+
+@pytest.mark.asyncio
+async def test_a_timeout_beyond_the_server_limit_is_refused(repo, runner):
+    async with create_connected_server_and_client_session(mcp) as client:
+        await client.call_tool("create_campaign", {"campaign_id": "1234567"})
+        result = await client.call_tool(
+            "await_campaign_events",
+            {"campaign_id": "1234567", "timeout_seconds": 9999},
+        )
+
+    assert "exceeds this server's limit" in result_error_text(result)

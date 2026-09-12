@@ -32,6 +32,7 @@ class Settings:
 
     allow_cloud_machine_types: bool
     max_parallel_jobs: int
+    campaign_poll_timeout: int
     transport: Transport
     host: str
     port: int
@@ -47,6 +48,7 @@ def load_settings(environ: Mapping[str, str]) -> Settings:
             environ, domain.ALLOW_CLOUD_MACHINE_TYPES_ENV_VAR
         ),
         max_parallel_jobs=_parse_max_parallel_jobs(environ),
+        campaign_poll_timeout=_parse_campaign_poll_timeout(environ),
         transport=_parse_transport(environ),
         host=environ.get(HOST_ENV_VAR, "").strip() or _DEFAULT_HOST,
         port=_parse_port(environ),
@@ -74,6 +76,28 @@ def _parse_max_parallel_jobs(environ: Mapping[str, str]) -> int:
         raise ConfigError(
             f"{domain.MAX_PARALLEL_JOBS_ENV_VAR} must be a positive "
             f"integer, got {raw!r}"
+        )
+
+    return value
+
+
+def _parse_campaign_poll_timeout(environ: Mapping[str, str]) -> int:
+    raw = environ.get(domain.CAMPAIGN_POLL_TIMEOUT_ENV_VAR, "").strip()
+    if not raw:
+        return domain.DEFAULT_CAMPAIGN_POLL_TIMEOUT
+
+    try:
+        value = int(raw)
+    except ValueError:
+        raise ConfigError(
+            f"{domain.CAMPAIGN_POLL_TIMEOUT_ENV_VAR} must be an integer "
+            f"between 1 and {domain.MAX_CAMPAIGN_POLL_TIMEOUT}, got {raw!r}"
+        )
+
+    if not 0 < value <= domain.MAX_CAMPAIGN_POLL_TIMEOUT:
+        raise ConfigError(
+            f"{domain.CAMPAIGN_POLL_TIMEOUT_ENV_VAR} must be an integer "
+            f"between 1 and {domain.MAX_CAMPAIGN_POLL_TIMEOUT}, got {raw!r}"
         )
 
     return value

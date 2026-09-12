@@ -8,7 +8,7 @@ the rules stay directly testable.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Iterable, Sequence
 
 PLAN = "plan"
@@ -286,7 +286,7 @@ def validate_install_source(value: str) -> str:
 def _parse_stored_attempt(body: dict[str, Any]) -> AttemptRecord:
     _require_fields(body, ATTEMPT_FIELDS, "attempt")
     attempt = parse_attempt(
-        {field: body[field] for field in ATTEMPT_INPUT_FIELDS}
+        {name: body[name] for name in ATTEMPT_INPUT_FIELDS}
     )
     return AttemptRecord(
         unit=attempt.unit,
@@ -309,23 +309,23 @@ def _parse_campaign(body: dict[str, Any]) -> CampaignHeader:
         raise CampaignError(
             "campaign field 'campaign_id' must be a string or null"
         )
-    for field in ("commit", "branch"):
-        if repo[field] is not None and not isinstance(repo[field], str):
+    for name in ("commit", "branch"):
+        if repo[name] is not None and not isinstance(repo[name], str):
             raise CampaignError(
-                "campaign repo '{}' must be a string or null".format(field)
+                "campaign repo '{}' must be a string or null".format(name)
             )
     if repo["dirty"] is not None and not isinstance(repo["dirty"], bool):
         raise CampaignError("campaign repo 'dirty' must be a boolean or null")
 
     values: dict[str, tuple[str, ...]] = {}
-    for field in SCOPE_FIELDS:
-        if not isinstance(scope[field], list) or not all(
-            isinstance(item, str) for item in scope[field]
+    for name in SCOPE_FIELDS:
+        if not isinstance(scope[name], list) or not all(
+            isinstance(item, str) for item in scope[name]
         ):
             raise CampaignError(
-                "campaign filter '{}' must be a list of strings".format(field)
+                "campaign filter '{}' must be a list of strings".format(name)
             )
-        values[field] = tuple(scope[field])
+        values[name] = tuple(scope[name])
 
     install_from = validate_install_source(
         _text(body, "install_from", "campaign")
@@ -761,3 +761,170 @@ def plan_tick(
         ),
         lifecycle=state,
     )
+
+
+# Event kinds, grouped into families so a subscriber can ask for "unit.*"
+# rather than enumerating outcomes. New kinds are additive: a client that
+# does not recognise one ignores it.
+CAMPAIGN_CREATED = "campaign.created"
+CAMPAIGN_STARTED = "campaign.started"
+CAMPAIGN_PAUSED = "campaign.paused"
+CAMPAIGN_RESUMED = "campaign.resumed"
+CAMPAIGN_CANCELLED = "campaign.cancelled"
+CAMPAIGN_COMPLETE = "campaign.complete"
+LANE_STARTED = "lane.started"
+LANE_RELEASED = "lane.released"
+UNIT_PASSED = "unit.passed"
+UNIT_FAILED = "unit.failed"
+UNIT_SKIPPED = "unit.skipped"
+UNIT_ERRORED = "unit.errored"
+UNIT_UNCLASSIFIABLE = "unit.unclassifiable"
+
+EVENT_KINDS = (
+    CAMPAIGN_CREATED,
+    CAMPAIGN_STARTED,
+    CAMPAIGN_PAUSED,
+    CAMPAIGN_RESUMED,
+    CAMPAIGN_CANCELLED,
+    CAMPAIGN_COMPLETE,
+    LANE_STARTED,
+    LANE_RELEASED,
+    UNIT_PASSED,
+    UNIT_FAILED,
+    UNIT_SKIPPED,
+    UNIT_ERRORED,
+    UNIT_UNCLASSIFIABLE,
+)
+EVENT_FAMILIES = ("campaign", "lane", "unit")
+
+# Which unit event an attempt state produces.
+_UNIT_EVENT_FOR_STATE = {
+    "passed": UNIT_PASSED,
+    "failed": UNIT_FAILED,
+    "skipped": UNIT_SKIPPED,
+    "error": UNIT_ERRORED,
+}
+
+# Enough of a failure to triage without fetching the job's report.
+MAX_EVENT_FAILURES = 3
+MAX_EVENT_ERROR_CHARS = 1200
+
+
+@dataclass(frozen=True)
+class NewEvent:
+    """An event on its way to the log, before the log numbers it."""
+
+    kind: str
+    at: str = ""
+    data: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class Event:
+    """A numbered event. ``seq`` is monotonic within one campaign."""
+
+    seq: int
+    kind: str
+    at: str
+    campaign_id: str
+    data: dict[str, Any] = field(default_factory=dict)
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "seq": self.seq,
+            "kind": self.kind,
+            "at": self.at,
+            "campaign_id": self.campaign_id,
+            "data": dict(self.data),
+        }
+
+
+def parse_event(raw: Any) -> Event:
+    """Read one stored event back."""
+    body = _require_fields(
+        raw, ("seq", "kind", "at", "campaign_id", "data"), "event"
+    )
+    seq = body["seq"]
+    if isinstance(seq, bool) or not isinstance(seq, int) or seq < 1:
+        raise CampaignError("event field 'seq' must be a positive integer")
+    data = body["data"]
+    if not isinstance(data, dict):
+        raise CampaignError("event field 'data' must be an object")
+    return Event(
+        seq=seq,
+        kind=_text(body, "kind", "event"),
+        at=_text(body, "at", "event"),
+        campaign_id=_text(body, "campaign_id", "event"),
+        data=data,
+    )
+
+
+def validate_event_kinds(kinds: Sequence[str]) -> tuple[str, ...]:
+    """Return the subscription patterns, rejecting ones that match nothing.
+
+    A typo in a filter would otherwise look like a campaign that never emits
+    anything, which is the most confusing failure available here.
+    """
+    for pattern in kinds:
+        if pattern.endswith(".*"):
+            if pattern[:-2] in EVENT_FAMILIES:
+                continue
+            raise CampaignError(
+                "unknown event family {!r}; known families: {}".format(
+                    pattern[:-2], ", ".join(EVENT_FAMILIES)
+                )
+            )
+        elif pattern not in EVENT_KINDS:
+            raise CampaignError(
+                "unknown event kind {!r}; known kinds: {}".format(
+                    pattern, ", ".join(EVENT_KINDS)
+                )
+            )
+    return tuple(kinds)
+
+
+def event_matches(kind: str, patterns: Sequence[str]) -> bool:
+    """Whether ``kind`` is wanted. No patterns means everything is."""
+    if not patterns:
+        return True
+    for pattern in patterns:
+        if pattern.endswith(".*"):
+            if kind.startswith(pattern[:-1]):
+                return True
+        elif kind == pattern:
+            return True
+    return False
+
+
+def unit_event_kind(state: str, unclassifiable: bool = False) -> str:
+    """The event kind an attempt outcome produces."""
+    if unclassifiable:
+        return UNIT_UNCLASSIFIABLE
+    return _UNIT_EVENT_FOR_STATE.get(state, UNIT_ERRORED)
+
+
+def failure_details(result: Any) -> list[dict[str, str]]:
+    """Pull the failing steps out of a job result, for a unit.failed event.
+
+    Carried on the event so a caller can judge a failure without going back
+    for the job's report.
+    """
+    if not isinstance(result, dict):
+        return []
+    raw = result.get("failures")
+    if not isinstance(raw, list):
+        return []
+    details = []
+    for failure in raw[:MAX_EVENT_FAILURES]:
+        if not isinstance(failure, dict):
+            continue
+        details.append(
+            {
+                "step": str(failure.get("step", "")),
+                "status": str(failure.get("status", "")),
+                "error_message": str(failure.get("error_message", ""))[
+                    :MAX_EVENT_ERROR_CHARS
+                ],
+            }
+        )
+    return details

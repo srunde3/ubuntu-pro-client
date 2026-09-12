@@ -16,7 +16,12 @@ from typing import Any, Callable, Sequence
 
 from pydantic import BaseModel
 
-from .adapters import ParserFeatureReader, SingleFileCampaignStore, system_now
+from .adapters import (
+    NullEventLog,
+    ParserFeatureReader,
+    SingleFileCampaignStore,
+    system_now,
+)
 from .domain import DEFAULT_INSTALL_SOURCE, INSTALL_SOURCES, STATES, Filters
 from .messages import DEFAULT_UNITS_LIMIT
 from .repo import repo_state
@@ -27,6 +32,9 @@ def _service(campaign_file: Path) -> CampaignService:
     return CampaignService(
         store=SingleFileCampaignStore(campaign_file),
         features=ParserFeatureReader(),
+        # The CLI reports to someone already reading its output, so it has
+        # no use for a notification channel.
+        events=NullEventLog(),
         now=system_now,
         repo_state=repo_state,
         # Nothing here runs tests, so no lane ceiling applies.

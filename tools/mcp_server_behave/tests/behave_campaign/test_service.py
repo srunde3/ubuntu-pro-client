@@ -1,6 +1,6 @@
 import pytest
 
-from behave_campaign.adapters import JsonlCampaignStore
+from behave_campaign.adapters import JsonlCampaignStore, JsonlEventLog
 from behave_campaign.domain import (
     AttemptRecord,
     CampaignError,
@@ -50,10 +50,16 @@ def features():
 
 
 @pytest.fixture
-def service(tmp_path, features):
+def events(tmp_path):
+    return JsonlEventLog(tmp_path / "campaigns")
+
+
+@pytest.fixture
+def service(tmp_path, features, events):
     return CampaignService(
         store=JsonlCampaignStore(tmp_path / "campaigns"),
         features=features,
+        events=events,
         now=lambda: AT,
         repo_state=lambda root: REPO,
         max_lane_ceiling=8,
@@ -505,3 +511,59 @@ class TestUnitHistory:
         result = service.unit_history(campaign_id="1234567", limit=10_000)
 
         assert result.limit_clamped
+
+
+class TestAwaitEvents:
+    def test_creating_a_campaign_announces_it(self, service):
+        create(service, install_from="proposed", max_lanes=4)
+
+        result = service.await_events(campaign_id="1234567")
+
+        assert [e.kind for e in result.events] == ["campaign.created"]
+        assert result.events[0].data["total_units"] == 3
+        assert result.events[0].data["install_from"] == "proposed"
+        assert result.events[0].data["max_lanes"] == 4
+
+    def test_the_cursor_advances_past_what_was_read(self, service):
+        create(service)
+
+        first = service.await_events(campaign_id="1234567")
+        again = service.await_events(
+            campaign_id="1234567", since_seq=first.next_seq
+        )
+
+        assert first.next_seq == 1
+        assert again.events == []
+        assert again.next_seq == 1
+
+    def test_it_always_reports_where_the_campaign_stands(self, service):
+        create(service)
+
+        # Read past everything, so the batch is empty on purpose.
+        result = service.await_events(campaign_id="1234567", since_seq=99)
+
+        assert result.events == []
+        assert result.timed_out
+        assert result.campaign.counts.unattempted == 3
+        assert result.lifecycle == "created"
+        assert result.lanes_busy == 0
+
+    def test_a_filter_selects_kinds(self, service):
+        create(service)
+
+        result = service.await_events(campaign_id="1234567", kinds=["unit.*"])
+
+        assert result.events == []
+        assert result.latest_seq == 1
+
+    def test_an_unknown_kind_is_rejected(self, service):
+        create(service)
+
+        with pytest.raises(CampaignError):
+            service.await_events(campaign_id="1234567", kinds=["nope.*"])
+
+    def test_a_non_positive_limit_is_rejected(self, service):
+        create(service)
+
+        with pytest.raises(CampaignError):
+            service.await_events(campaign_id="1234567", limit=0)

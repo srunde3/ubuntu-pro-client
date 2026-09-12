@@ -6,6 +6,8 @@ from pydantic import BaseModel
 # the units that need attention. The whole list is opt-in and capped.
 DEFAULT_UNITS_LIMIT = 200
 MAX_UNITS_LIMIT = 2000
+DEFAULT_EVENTS_LIMIT = 100
+MAX_EVENTS_LIMIT = 1000
 
 
 class UnitView(BaseModel):
@@ -176,3 +178,30 @@ class TickReport(BaseModel):
     lanes_busy: int = 0
     problems: list[str] = []
     finished: bool = False
+
+
+class EventView(BaseModel):
+    """One numbered event. ``data`` is kind-specific."""
+
+    seq: int = 0
+    kind: str = ""
+    at: str = ""
+    campaign_id: str = ""
+    data: dict = {}
+
+
+class AwaitEventsResponse(BaseModel):
+    """A batch of events, plus where the campaign stands.
+
+    ``next_seq`` is the cursor to pass back. The campaign summary is always
+    present, so a batch that came back empty on timeout still says what is
+    happening -- which is why there is no separate heartbeat event.
+    """
+
+    campaign: CampaignSummary = CampaignSummary()
+    events: list[EventView] = []
+    next_seq: int = 0
+    latest_seq: int = 0
+    lanes_busy: int = 0
+    lifecycle: str = ""
+    timed_out: bool = False

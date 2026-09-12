@@ -25,6 +25,7 @@ import pytest
 from behave_campaign.adapters import (
     FileCampaignRunLock,
     JsonlCampaignStore,
+    JsonlEventLog,
     ParserFeatureReader,
     ServiceLaneRunner,
     system_now,
@@ -61,6 +62,7 @@ def test_a_campaign_runs_its_lanes_concurrently(monkeypatch, tmp_path):
 
     campaign_dir = tmp_path / "campaigns"
     store = JsonlCampaignStore(campaign_dir)
+    events = JsonlEventLog(campaign_dir)
 
     # A service of its own, so the lane limit is this test's rather than
     # whatever the server process was started with.
@@ -72,6 +74,7 @@ def test_a_campaign_runs_its_lanes_concurrently(monkeypatch, tmp_path):
     created = CampaignService(
         store=store,
         features=ParserFeatureReader(),
+        events=events,
         now=system_now,
         repo_state=repo_state,
         max_lane_ceiling=settings.max_parallel_jobs,
@@ -90,6 +93,7 @@ def test_a_campaign_runs_its_lanes_concurrently(monkeypatch, tmp_path):
         store=store,
         lanes=ServiceLaneRunner(service),
         lock=FileCampaignRunLock(campaign_dir),
+        events=events,
         now=system_now,
         ticker=ThreadTicker(interval=1.0),
     )
@@ -138,3 +142,22 @@ def test_a_campaign_runs_its_lanes_concurrently(monkeypatch, tmp_path):
         assert status.job_id
         report = tmp_path / "logs" / "{}_report.json".format(status.job_id)
         assert report.is_file(), report
+
+    # The stream a watching agent would have seen, from real jobs.
+    stream = events.read(CAMPAIGN_ID, since_seq=0, kinds=[], limit=500)
+    kinds = [event.kind for event in stream]
+
+    assert kinds[0] == "campaign.created"
+    assert "campaign.started" in kinds
+    assert kinds[-1] == "campaign.complete"
+    assert kinds.count("lane.started") == len(RELEASES)
+    assert kinds.count("lane.released") == len(RELEASES)
+    assert sum(1 for kind in kinds if kind.startswith("unit.")) == len(
+        RELEASES
+    )
+    # seq is dense and monotonic, so a cursor cannot skip anything.
+    assert [event.seq for event in stream] == list(range(1, len(stream) + 1))
+
+    persisted = campaign_dir / "{}.events.jsonl".format(CAMPAIGN_ID)
+    assert persisted.is_file()
+    assert len(persisted.read_text().splitlines()) == len(stream)

@@ -11,6 +11,8 @@ from __future__ import annotations
 import fcntl
 import json
 import os
+import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import IO, Any, Sequence
@@ -19,11 +21,15 @@ from behave_campaign import discovery
 from behave_campaign.domain import (
     CampaignError,
     CampaignHeader,
+    Event,
     Filters,
+    NewEvent,
     PlanRecord,
     Record,
     Unit,
     encode_record,
+    event_matches,
+    parse_event,
     parse_record,
 )
 from behave_campaign.ports import (
@@ -211,6 +217,171 @@ class ParserFeatureReader:
 
     def available_dimensions(self, repo_root: Path) -> dict[str, Any]:
         return discovery.available_dimensions(repo_root)
+
+
+class JsonlEventLog:
+    """Events in ``<campaign_id>.events.jsonl``, plus a copy in memory.
+
+    The file is what makes a cursor survive a restart; the in-memory copy is
+    what a blocked reader is woken from. Holding every event rather than a
+    bounded window means there is one retrieval path instead of two, and no
+    rarely-exercised fallback for a cursor that has fallen behind. A
+    campaign's event count is bounded by its unit count in practice.
+    """
+
+    def __init__(self, root: Path) -> None:
+        self._root = root
+        self._events: dict[str, list[Event]] = {}
+        self._changed = threading.Condition()
+
+    def path_for(self, campaign_id: str) -> Path:
+        return self._root / (campaign_id + EVENTS_SUFFIX)
+
+    def append(
+        self, campaign_id: str, events: Sequence[NewEvent]
+    ) -> list[Event]:
+        if not events:
+            return []
+        with self._changed:
+            stored = self._loaded(campaign_id)
+            numbered = [
+                Event(
+                    seq=len(stored) + offset + 1,
+                    kind=event.kind,
+                    at=event.at,
+                    campaign_id=campaign_id,
+                    data=dict(event.data),
+                )
+                for offset, event in enumerate(events)
+            ]
+            path = self.path_for(campaign_id)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            payload = "".join(
+                json.dumps(
+                    event.as_dict(), sort_keys=True, separators=(",", ":")
+                )
+                + "\n"
+                for event in numbered
+            )
+            with path.open("a") as stream:
+                _append_locked(stream, payload)
+            stored.extend(numbered)
+            self._changed.notify_all()
+            return numbered
+
+    def read(
+        self,
+        campaign_id: str,
+        *,
+        since_seq: int,
+        kinds: Sequence[str],
+        limit: int,
+    ) -> list[Event]:
+        with self._changed:
+            return self._matching(campaign_id, since_seq, kinds, limit)
+
+    def wait(
+        self,
+        campaign_id: str,
+        *,
+        since_seq: int,
+        kinds: Sequence[str],
+        limit: int,
+        timeout: float,
+    ) -> list[Event]:
+        deadline = time.monotonic() + timeout
+        with self._changed:
+            while True:
+                found = self._matching(campaign_id, since_seq, kinds, limit)
+                if found:
+                    return found
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return []
+                self._changed.wait(remaining)
+
+    def latest_seq(self, campaign_id: str) -> int:
+        with self._changed:
+            stored = self._loaded(campaign_id)
+            return stored[-1].seq if stored else 0
+
+    def _matching(
+        self,
+        campaign_id: str,
+        since_seq: int,
+        kinds: Sequence[str],
+        limit: int,
+    ) -> list[Event]:
+        found = []
+        for event in self._loaded(campaign_id):
+            if event.seq <= since_seq:
+                continue
+            if not event_matches(event.kind, kinds):
+                continue
+            found.append(event)
+            if len(found) >= limit:
+                break
+        return found
+
+    def _loaded(self, campaign_id: str) -> list[Event]:
+        """Return the campaign's events, reading the file the first time."""
+        stored = self._events.get(campaign_id)
+        if stored is not None:
+            return stored
+        stored = []
+        path = self.path_for(campaign_id)
+        if path.is_file():
+            with path.open("r") as stream:
+                for number, line in enumerate(stream, 1):
+                    if not line.strip():
+                        continue
+                    try:
+                        stored.append(parse_event(json.loads(line)))
+                    except ValueError as error:
+                        raise CampaignError(
+                            "invalid event in {} on line {}: {}".format(
+                                path.name, number, error
+                            )
+                        ) from error
+        self._events[campaign_id] = stored
+        return stored
+
+
+class NullEventLog:
+    """Discards events, for a front-end with nobody listening.
+
+    The CLI reports to a person who is already looking at the output, so it
+    has no use for a notification channel.
+    """
+
+    def append(
+        self, campaign_id: str, events: Sequence[NewEvent]
+    ) -> list[Event]:
+        return []
+
+    def read(
+        self,
+        campaign_id: str,
+        *,
+        since_seq: int,
+        kinds: Sequence[str],
+        limit: int,
+    ) -> list[Event]:
+        return []
+
+    def wait(
+        self,
+        campaign_id: str,
+        *,
+        since_seq: int,
+        kinds: Sequence[str],
+        limit: int,
+        timeout: float,
+    ) -> list[Event]:
+        return []
+
+    def latest_seq(self, campaign_id: str) -> int:
+        return 0
 
 
 class ServiceLaneRunner:
