@@ -212,7 +212,15 @@ class StubLanes:
 
 
 class StubTicker:
-    """Captures the tick callable so no thread runs during a test."""
+    """Captures the tick callable so no thread runs during a test.
+
+    ``drive`` stands in for the real loop: it ticks until the runner says
+    the campaign is finished, rather than a count the test guessed.
+    """
+
+    # Only a runaway guard. A campaign of a few units finishes in a handful
+    # of ticks; this exists so a bug loops finitely.
+    MAX_TICKS = 200
 
     def __init__(self):
         self.tick = None
@@ -225,6 +233,18 @@ class StubTicker:
 
     def is_running(self):
         return self.tick is not None
+
+    def drive(self):
+        """Tick until the campaign reports itself done, as the thread does."""
+        assert self.tick is not None, "the ticker was never started"
+        for _ in range(self.MAX_TICKS):
+            if self.tick is None:
+                return
+            if self.tick():
+                return
+        raise AssertionError(
+            "campaign still unfinished after {} ticks".format(self.MAX_TICKS)
+        )
 
 
 @pytest.fixture
@@ -357,7 +377,8 @@ async def test_a_started_campaign_fills_lanes_on_its_tick(repo, runner):
             "create_campaign", {"campaign_id": "1234567", "max_lanes": 1}
         )
         await client.call_tool("start_campaign", {"campaign_id": "1234567"})
-        # The ticker is a stub, so drive the tick the way the thread would.
+        # One tick only: this is about the lane being open, not the campaign
+        # finishing.
         runner.ticker.tick()
         status = await client.call_tool(
             "campaign_status", {"campaign_id": "1234567"}
@@ -392,10 +413,7 @@ async def test_await_events_follows_a_campaign_through_a_lane(repo, runner):
             "create_campaign", {"campaign_id": "1234567", "max_lanes": 1}
         )
         await client.call_tool("start_campaign", {"campaign_id": "1234567"})
-        # Open the lane, poll it once while it is still going, then poll it
-        # again once the stub reports it finished.
-        for _ in range(3):
-            runner.ticker.tick()
+        runner.ticker.drive()
 
         result = await client.call_tool(
             "await_campaign_events",
@@ -404,8 +422,14 @@ async def test_await_events_follows_a_campaign_through_a_lane(repo, runner):
 
     payload = result_json(result)
 
-    assert [e["kind"] for e in payload["events"]] == ["unit.passed"]
-    assert payload["campaign"]["counts"]["passed"] == 1
+    # Every unit in the fixture feature, run to completion.
+    assert [e["kind"] for e in payload["events"]] == [
+        "unit.passed",
+        "unit.passed",
+    ]
+    assert payload["campaign"]["counts"]["passed"] == 2
+    assert payload["campaign"]["counts"]["unattempted"] == 0
+    assert payload["lifecycle"] == "complete"
 
 
 @pytest.mark.asyncio
@@ -505,10 +529,7 @@ async def test_retry_units_requeues_a_failure(repo, runner, monkeypatch):
         # campaign asking for more than the server allows is refused.
         await client.call_tool("create_campaign", {"campaign_id": "1234567"})
         await client.call_tool("start_campaign", {"campaign_id": "1234567"})
-        # Two units through one lane: open, poll, finish-and-open, poll,
-        # finish.
-        for _ in range(5):
-            runner.ticker.tick()
+        runner.ticker.drive()
 
         status = result_json(
             await client.call_tool(

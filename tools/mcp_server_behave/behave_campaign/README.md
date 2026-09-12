@@ -155,6 +155,8 @@ write the same files the CLI does, under the directory named by
 - `pause_campaign` / `resume_campaign` -- stop and restart lane opening.
 - `cancel_campaign` -- close a campaign to further scheduling, for good.
 - `await_campaign_events` -- wait for news, with a cursor.
+- `retry_units` -- ask for another attempt at units that already had one.
+- `kill_job` -- terminate a job that has hung.
 
 ## Events
 
@@ -164,8 +166,9 @@ is how a watcher hears about it promptly.
 | Family | Kinds |
 | --- | --- |
 | `campaign.*` | `created`, `started`, `paused`, `resumed`, `cancelled`, `complete` |
-| `lane.*` | `started`, `released` |
-| `unit.*` | `passed`, `failed`, `skipped`, `errored`, `unclassifiable` |
+| `lane.*` | `started`, `released`, `overdue` |
+| `unit.*` | `passed`, `failed`, `skipped`, `errored`, `unclassifiable`, `retried` |
+| `anomaly.*` | `repeated_scenario_failure`, `repeated_skips`, `capacity_starved` |
 
 Subscribe by exact kind or by family (`unit.*`); omit `kinds` for everything.
 An unknown kind or family is rejected rather than quietly matching nothing,
@@ -179,6 +182,13 @@ failure can be judged without fetching the job's report. A
 `next_seq` from one response as the next `since_seq`. Events are appended to
 `<campaign_id>.events.jsonl` and held in memory for serving, which is what
 lets a cursor survive a restart and a blocked reader be woken by an append.
+
+`anomaly.*` and `lane.overdue` are derived: nothing acts on them. A run of
+skips usually means a config the host does not have, and one scenario failing
+across every release usually means a real defect rather than flake -- but
+which of those it is, and what to do about it, is not for an unattended loop
+to decide. Each is reported once per condition rather than every tick, keyed
+on the condition itself, so a lane that stays slow does not flood the stream.
 
 There is deliberately no heartbeat. Every response carries the campaign's
 counts and lifecycle, so a batch that came back empty on timeout still says
@@ -199,6 +209,13 @@ in the response says how many are still draining. Nothing kills a job.
 The scheduler never retries. A unit that failed, was skipped, or errored stays
 that way until someone asks for another attempt, because judging a failure
 flaky-or-real is not something an unattended loop should decide.
+
+`retry_units` is how that ask is made. It appends a `retry` record, so a unit
+becomes schedulable again when it carries one newer than its last attempt --
+the file still says who asked and when, and running it appends a `running`
+attempt that clears the request. Retrying a campaign that had finished starts
+it scheduling again; a paused one accepts the request and stays paused.
+Cancelling is what closes a campaign against being reopened this way.
 
 Lane state lives in the record, not in memory: a unit in flight is one whose
 latest attempt is `running`, written before the lane is released. That is what

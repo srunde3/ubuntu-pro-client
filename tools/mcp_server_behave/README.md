@@ -67,7 +67,14 @@ until something happens, returns every event after a cursor, and always
 reports the campaign's counts and lifecycle -- so an empty batch is still
 informative. Events are filtered by kind (`unit.failed`) or family
 (`unit.*`), and a `unit.failed` event carries the failing steps so a failure
-can be judged without fetching the job's report.
+can be judged without fetching the job's report. `anomaly.*` events and
+`lane.overdue` are derived signals offered for judgement -- repeated skips,
+one scenario failing across every release, a refused lane, a job running far
+too long -- and nothing acts on them automatically.
+
+`retry_units` asks for another attempt at units that already had one, which
+is the only way a non-passing unit is ever re-run. `kill_job` terminates a
+job that has hung, so its lane is recorded and freed instead of held open.
 
 The package is also usable on its own through the `behave-campaign` CLI, and
 shares this project's `pyproject.toml`, virtualenv, and CI job. See

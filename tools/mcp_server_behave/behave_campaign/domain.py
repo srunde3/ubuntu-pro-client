@@ -9,6 +9,7 @@ the rules stay directly testable.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any, Iterable, Sequence
 
 PLAN = "plan"
@@ -750,6 +751,8 @@ class Lane:
     job_id: str
     result: Any = None
     install_from: str = DEFAULT_INSTALL_SOURCE
+    # When the lane opened, from the running attempt that recorded it.
+    opened_at: str = ""
 
     @property
     def finished(self) -> bool:
@@ -835,6 +838,10 @@ UNIT_SKIPPED = "unit.skipped"
 UNIT_ERRORED = "unit.errored"
 UNIT_UNCLASSIFIABLE = "unit.unclassifiable"
 UNIT_RETRIED = "unit.retried"
+LANE_OVERDUE = "lane.overdue"
+ANOMALY_REPEATED_SCENARIO_FAILURE = "anomaly.repeated_scenario_failure"
+ANOMALY_REPEATED_SKIPS = "anomaly.repeated_skips"
+ANOMALY_CAPACITY_STARVED = "anomaly.capacity_starved"
 
 EVENT_KINDS = (
     CAMPAIGN_CREATED,
@@ -851,8 +858,12 @@ EVENT_KINDS = (
     UNIT_ERRORED,
     UNIT_UNCLASSIFIABLE,
     UNIT_RETRIED,
+    LANE_OVERDUE,
+    ANOMALY_REPEATED_SCENARIO_FAILURE,
+    ANOMALY_REPEATED_SKIPS,
+    ANOMALY_CAPACITY_STARVED,
 )
-EVENT_FAMILIES = ("campaign", "lane", "unit")
+EVENT_FAMILIES = ("campaign", "lane", "unit", "anomaly")
 
 # Which unit event an attempt state produces.
 _UNIT_EVENT_FOR_STATE = {
@@ -985,3 +996,105 @@ def failure_details(result: Any) -> list[dict[str, str]]:
             }
         )
     return details
+
+
+# Thresholds for the derived signals. Each is a judgement call offered to
+# whoever is watching, never something the scheduler acts on itself.
+DEFAULT_OVERDUE_SECONDS = 3600.0
+REPEATED_FAILURE_RELEASES = 3
+REPEATED_SKIP_UNITS = 5
+
+_TIMESTAMP_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
+
+
+@dataclass(frozen=True)
+class Signal:
+    """A derived observation worth telling someone about.
+
+    ``key`` identifies the condition rather than the moment, so a signal
+    that stays true is reported once instead of on every tick.
+    """
+
+    kind: str
+    key: str
+    data: dict[str, Any] = field(default_factory=dict)
+
+
+def elapsed_seconds(since: str, now: str) -> float | None:
+    """Seconds between two campaign timestamps, or None if unreadable."""
+    try:
+        start = datetime.strptime(since, _TIMESTAMP_FORMAT)
+        end = datetime.strptime(now, _TIMESTAMP_FORMAT)
+    except (ValueError, TypeError):
+        return None
+    return (end - start).total_seconds()
+
+
+def detect_signals(
+    *,
+    statuses: Sequence[UnitStatus],
+    lanes: Sequence[Lane],
+    at: str,
+    overdue_seconds: float = DEFAULT_OVERDUE_SECONDS,
+) -> list[Signal]:
+    """Derive the signals a watcher should judge. Pure; acts on nothing.
+
+    None of these stop a campaign. A run of skips usually means a config
+    the host does not have, and one scenario failing across every release
+    usually means a real defect rather than flake -- but which of those it
+    is, and what to do, is not for an unattended loop to decide.
+    """
+    signals: list[Signal] = []
+
+    failed_releases: dict[tuple[str, str], set[str]] = {}
+    skipped = 0
+    for status in statuses:
+        if status.state == "failed":
+            failing = (status.unit.feature, status.unit.scenario)
+            failed_releases.setdefault(failing, set()).add(status.unit.release)
+        elif status.state == "skipped":
+            skipped += 1
+
+    for (feature, scenario), releases in sorted(failed_releases.items()):
+        if len(releases) < REPEATED_FAILURE_RELEASES:
+            continue
+        signals.append(
+            Signal(
+                kind=ANOMALY_REPEATED_SCENARIO_FAILURE,
+                key="{}::{}".format(feature, scenario),
+                data={
+                    "feature": feature,
+                    "scenario": scenario,
+                    "releases": sorted(releases),
+                },
+            )
+        )
+
+    if skipped >= REPEATED_SKIP_UNITS:
+        signals.append(
+            Signal(
+                kind=ANOMALY_REPEATED_SKIPS,
+                key=ANOMALY_REPEATED_SKIPS,
+                data={"skipped": skipped},
+            )
+        )
+
+    for lane in lanes:
+        if lane.finished:
+            continue
+        age = elapsed_seconds(lane.opened_at, at)
+        if age is None or age < overdue_seconds:
+            continue
+        signals.append(
+            Signal(
+                kind=LANE_OVERDUE,
+                key=lane.job_id,
+                data={
+                    **lane.unit.as_dict(),
+                    "job_id": lane.job_id,
+                    "elapsed_seconds": int(age),
+                },
+            )
+        )
+
+    return signals

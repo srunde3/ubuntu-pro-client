@@ -1072,3 +1072,103 @@ class TestRetryUnits:
         assert len(retried) == 1
         assert retried[0].data["previous_state"] == "failed"
         assert retried[0].data["reason"] == "flaky"
+
+
+class TestSignals:
+    """Derived signals reach the event log, and are said once."""
+
+    def test_a_hung_lane_is_reported_once(self, store, lanes, lock, events):
+        runner = CampaignRunner(
+            store=store,
+            lanes=lanes,
+            lock=lock,
+            events=events,
+            now=lambda: "2026-09-12T12:00:00Z",
+            ticker=FakeTicker(),
+            overdue_seconds=60,
+        )
+        create(store, units=[UNITS[0]], max_lanes=1)
+        runner.start("1234567")
+        runner.tick("1234567")
+
+        # Time moves on while the job does not.
+        runner._now = lambda: "2026-09-12T13:00:00Z"
+        runner.tick("1234567")
+        runner.tick("1234567")
+
+        overdue = events.read(
+            "1234567", since_seq=0, kinds=["lane.overdue"], limit=10
+        )
+
+        assert len(overdue) == 1
+        assert overdue[0].data["job_id"] == "job1"
+        assert overdue[0].data["elapsed_seconds"] == 3600
+
+    def test_a_refused_lane_is_reported_as_starvation(
+        self, store, lock, events
+    ):
+        lanes = FakeLanes(max_starts=1)
+        runner = CampaignRunner(
+            store=store,
+            lanes=lanes,
+            lock=lock,
+            events=events,
+            now=lambda: AT,
+            ticker=FakeTicker(),
+        )
+        create(store, max_lanes=3)
+        runner.start("1234567")
+
+        runner.tick("1234567")
+
+        starved = events.read(
+            "1234567",
+            since_seq=0,
+            kinds=["anomaly.capacity_starved"],
+            limit=10,
+        )
+
+        assert len(starved) == 1
+        assert starved[0].data["reason"]
+
+    def test_a_scenario_failing_across_releases_is_reported(
+        self, runner, store, lanes
+    ):
+        units = [
+            Unit("features/a.feature", "A", release, "lxd-vm")
+            for release in ("focal", "jammy", "noble")
+        ]
+        create(store, units=units, max_lanes=3)
+        runner.start("1234567")
+        runner.tick("1234567")
+        for job in ("job1", "job2", "job3"):
+            lanes.finish(job, passed=0, failed=1)
+        runner.tick("1234567")
+
+        reported = runner._events.read(
+            "1234567",
+            since_seq=0,
+            kinds=["anomaly.*"],
+            limit=10,
+        )
+
+        assert [e.kind for e in reported] == [
+            "anomaly.repeated_scenario_failure"
+        ]
+        assert reported[0].data["releases"] == ["focal", "jammy", "noble"]
+
+    def test_a_healthy_campaign_reports_no_anomalies(
+        self, runner, store, lanes
+    ):
+        create(store, max_lanes=3)
+        runner.start("1234567")
+        runner.tick("1234567")
+        for job in ("job1", "job2", "job3"):
+            lanes.finish(job)
+        runner.tick("1234567")
+
+        reported = runner._events.read(
+            "1234567", since_seq=0, kinds=["anomaly.*"], limit=10
+        )
+
+        assert reported == []

@@ -118,6 +118,7 @@ class CampaignRunner:
         events: EventLog,
         now: Callable[[], str],
         ticker: Ticker | None = None,
+        overdue_seconds: float = domain.DEFAULT_OVERDUE_SECONDS,
     ) -> None:
         self._store = store
         self._lanes = lanes
@@ -125,8 +126,13 @@ class CampaignRunner:
         self._events = events
         self._now = now
         self._ticker = ticker if ticker is not None else ThreadTicker()
+        self._overdue_seconds = overdue_seconds
         self._guard = threading.Lock()
         self._active: str | None = None
+        # Signals already reported, so a condition that stays true is said
+        # once rather than every tick. Per-process: a restart may repeat
+        # one, which is better than losing it.
+        self._reported: set[tuple[str, str]] = set()
 
     # -- control ----------------------------------------------------------
 
@@ -309,7 +315,11 @@ class CampaignRunner:
             )
             emitted.extend(self._outcome_events(plan.record, lanes))
 
-        started = self._open_lanes(campaign_id, header, plan.start, problems)
+        starved: list[NewEvent] = []
+        started = self._open_lanes(
+            campaign_id, header, plan.start, problems, starved
+        )
+        emitted.extend(starved)
         emitted.extend(
             NewEvent(
                 kind=domain.LANE_STARTED,
@@ -324,7 +334,19 @@ class CampaignRunner:
         )
 
         busy = sum(1 for lane in lanes if not lane.finished) + len(started)
-        lifecycle = domain.lifecycle(self._store.replay(campaign_id))
+        settled = self._store.replay(campaign_id)
+        lifecycle = domain.lifecycle(settled)
+        emitted.extend(
+            self._signal_events(
+                campaign_id,
+                domain.detect_signals(
+                    statuses=domain.reduce_units(settled),
+                    lanes=self._read_lane_ages(settled),
+                    at=self._now(),
+                    overdue_seconds=self._overdue_seconds,
+                ),
+            )
+        )
         if lifecycle == domain.COMPLETE:
             emitted.append(
                 NewEvent(
@@ -332,9 +354,7 @@ class CampaignRunner:
                     at=self._now(),
                     data={
                         "counts": domain.count_states(
-                            domain.reduce_units(
-                                self._store.replay(campaign_id)
-                            )
+                            domain.reduce_units(settled)
                         )
                     },
                 )
@@ -427,6 +447,7 @@ class CampaignRunner:
         header: domain.CampaignHeader,
         units: Sequence[Unit],
         problems: list[str],
+        starved: list[NewEvent],
     ) -> list[AttemptRecord]:
         repo_root = Path(header.repo.root)
         install_from = header.install_from
@@ -440,6 +461,16 @@ class CampaignRunner:
                 # Capacity or a bad start: leave the unit unattempted so a
                 # later tick picks it up, and say why.
                 problems.append(str(error))
+                starved.append(
+                    NewEvent(
+                        kind=domain.ANOMALY_CAPACITY_STARVED,
+                        at=self._now(),
+                        data={
+                            **unit.as_dict(),
+                            "reason": str(error),
+                        },
+                    )
+                )
                 break
             started.append(
                 AttemptRecord(
@@ -455,6 +486,36 @@ class CampaignRunner:
             # what keeps the unit out of the next tick's selection.
             self._store.append(campaign_id, started)
         return started
+
+    def _signal_events(
+        self, campaign_id: str, signals: Sequence[domain.Signal]
+    ) -> list[NewEvent]:
+        """Turn new signals into events, skipping ones already reported."""
+        fresh = []
+        for signal in signals:
+            marker = (signal.kind, signal.key)
+            if marker in self._reported:
+                continue
+            self._reported.add(marker)
+            fresh.append(
+                NewEvent(
+                    kind=signal.kind, at=self._now(), data=dict(signal.data)
+                )
+            )
+        return fresh
+
+    def _read_lane_ages(self, records: Sequence[Record]) -> list[Lane]:
+        """Lanes as they stand now, without polling their jobs again."""
+        return [
+            Lane(
+                unit=status.unit,
+                job_id=status.job_id,
+                install_from=status.attempts[-1].install_from,
+                opened_at=status.attempts[-1].at,
+            )
+            for status in domain.reduce_units(records)
+            if status.state == "running" and status.job_id
+        ]
 
     @staticmethod
     def _select_for_retry(
@@ -524,9 +585,10 @@ class CampaignRunner:
                     unit=status.unit,
                     job_id=status.job_id,
                     result=self._lanes.poll(status.job_id),
-                    # What this job actually ran with, from the running
-                    # attempt the lane recorded when it opened.
+                    # What this job actually ran with, and when it began,
+                    # from the running attempt the lane recorded.
                     install_from=status.attempts[-1].install_from,
+                    opened_at=status.attempts[-1].at,
                 )
             )
         return lanes
