@@ -127,9 +127,14 @@ job covers exactly one unit, so the mapping is:
 | `completed`, only skips | `skipped` |
 | `completed`, no parseable report (`summary: null`) | `error` |
 
-Anything else -- mixed passes and skips, an `unknown` scenario status, or a
-pass contradicted by `ok: false` -- is rejected so it gets looked at rather
-than silently recorded. Pass an explicit attempt state if that ever happens.
+Anything else -- a scenario status outside passed/failed/skipped, no scenario
+counts at all, or a pass contradicted by `ok: false` -- cannot be classified.
+A skipped Examples row alongside a passing one is not one of these: that run
+passed.
+
+The CLI rejects an unclassifiable result so it gets looked at rather than
+silently recorded. A scheduler has nobody to raise at, so it records the
+attempt as `error` and keeps the reason, rather than stopping the campaign.
 
 ## MCP tools
 

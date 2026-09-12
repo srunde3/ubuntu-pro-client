@@ -14,6 +14,18 @@ from typing import Any, Iterable, Sequence
 PLAN = "plan"
 ATTEMPT = "attempt"
 CAMPAIGN = "campaign"
+STATE = "state"
+
+# Lifecycle. Only RUNNING, PAUSED and CANCELLED are ever written: CREATED is
+# the absence of any state record, and COMPLETE is derived from the counts,
+# so it cannot disagree with the units.
+CREATED = "created"
+RUNNING_STATE = "running"
+PAUSED = "paused"
+CANCELLED = "cancelled"
+COMPLETE = "complete"
+WRITABLE_LIFECYCLE = (RUNNING_STATE, PAUSED, CANCELLED)
+LIFECYCLE_STATES = (CREATED, *WRITABLE_LIFECYCLE, COMPLETE)
 UNATTEMPTED = "unattempted"
 ATTEMPT_STATES = ("running", "passed", "failed", "skipped", "error")
 PROBLEM_STATES = ("failed", "skipped", "error")
@@ -30,6 +42,7 @@ UNIT_FIELDS = ("feature", "scenario", "release", "machine_type")
 ATTEMPT_INPUT_FIELDS = (*UNIT_FIELDS, "state", "job_id")
 ATTEMPT_FIELDS = (*ATTEMPT_INPUT_FIELDS, "install_from", "at")
 PLAN_FIELDS = (*UNIT_FIELDS, "at")
+STATE_FIELDS = ("state", "at", "reason")
 CAMPAIGN_FIELDS = ("at", "campaign_id", "repo", "filters")
 # Written only when set, and tolerated when absent, so a campaign file
 # created before these existed still replays. The MCP sets both; the CLI
@@ -164,7 +177,20 @@ class CampaignHeader:
     max_lanes: int | None = None
 
 
-Record = CampaignHeader | PlanRecord | AttemptRecord
+@dataclass(frozen=True)
+class StateRecord:
+    """A lifecycle transition someone asked for.
+
+    ``reason`` explains transitions the server made on its own, such as
+    pausing after a restart, and is empty for ones a caller asked for.
+    """
+
+    state: str
+    at: str = ""
+    reason: str = ""
+
+
+Record = CampaignHeader | PlanRecord | AttemptRecord | StateRecord
 
 
 def _require_fields(
@@ -346,9 +372,24 @@ def parse_record(raw: Any) -> Record:
         return _parse_stored_attempt(body)
     if kind == CAMPAIGN:
         return _parse_campaign(body)
+    if kind == STATE:
+        _require_fields(body, STATE_FIELDS, "state")
+        state = body["state"]
+        if state not in WRITABLE_LIFECYCLE:
+            raise CampaignError(
+                "state must be one of: {}".format(
+                    ", ".join(WRITABLE_LIFECYCLE)
+                )
+            )
+        reason = body["reason"]
+        if not isinstance(reason, str):
+            raise CampaignError("state field 'reason' must be a string")
+        return StateRecord(
+            state=state, at=_text(body, "at", "state"), reason=reason
+        )
     raise CampaignError(
-        "record type must be one of: {}, {}, {}".format(
-            CAMPAIGN, PLAN, ATTEMPT
+        "record type must be one of: {}, {}, {}, {}".format(
+            CAMPAIGN, PLAN, ATTEMPT, STATE
         )
     )
 
@@ -369,6 +410,14 @@ def encode_record(record: Record) -> dict[str, Any]:
         if record.max_lanes is not None:
             header["max_lanes"] = record.max_lanes
         return header
+
+    if isinstance(record, StateRecord):
+        return {
+            "type": STATE,
+            "state": record.state,
+            "at": record.at,
+            "reason": record.reason,
+        }
 
     data: dict[str, Any] = record.unit.as_dict()
     data["at"] = record.at
@@ -397,7 +446,7 @@ def reduce_units(records: Iterable[Record]) -> list[UnitStatus]:
     seen: set[Unit] = set()
     attempts: dict[Unit, list[AttemptRecord]] = {}
     for record in records:
-        if isinstance(record, CampaignHeader):
+        if isinstance(record, (CampaignHeader, StateRecord)):
             continue
         if isinstance(record, PlanRecord):
             if record.unit not in seen:
@@ -430,6 +479,21 @@ def select_next(
     unattempted = [s for s in statuses if s.state == UNATTEMPTED]
     retryable = [s for s in statuses if s.state in PROBLEM_STATES]
     return (unattempted + retryable)[:limit]
+
+
+def select_unattempted(
+    statuses: Sequence[UnitStatus], limit: int
+) -> list[UnitStatus]:
+    """Units never yet attempted, for a scheduler to open lanes for.
+
+    Unlike ``select_next``, this never returns a failed, skipped or errored
+    unit. The scheduler runs unattended, and re-running a non-passing unit
+    is a judgement call -- flaky or real, worth the machine time or not --
+    that belongs to whoever is watching, not to the tick loop.
+    """
+    if limit < 1:
+        raise CampaignError("limit must be positive")
+    return [s for s in statuses if s.state == UNATTEMPTED][:limit]
 
 
 def count_states(statuses: Iterable[UnitStatus]) -> dict[str, int]:
@@ -540,3 +604,150 @@ def describe_units(units: Iterable[Unit], limit: int = 5) -> str:
     if len(ordered) > limit:
         described.append("... and {} more".format(len(ordered) - limit))
     return "; ".join(described)
+
+
+def lifecycle(records: Sequence[Record]) -> str:
+    """Return a campaign's current lifecycle state.
+
+    ``complete`` is derived rather than written: a running campaign with
+    nothing left unattempted and nothing in flight is finished, whether or
+    not anyone noticed. Problem units do not count as remaining work,
+    because a non-passing unit is only ever retried when asked for.
+    """
+    current = CREATED
+    for record in records:
+        if isinstance(record, StateRecord):
+            current = record.state
+
+    if current != RUNNING_STATE:
+        return current
+
+    statuses = reduce_units(records)
+    outstanding = [
+        status
+        for status in statuses
+        if status.state in (UNATTEMPTED, "running")
+    ]
+    return RUNNING_STATE if outstanding else COMPLETE
+
+
+def last_state_reason(records: Sequence[Record]) -> str:
+    """Return the reason on the most recent lifecycle transition."""
+    reason = ""
+    for record in records:
+        if isinstance(record, StateRecord):
+            reason = record.reason
+    return reason
+
+
+@dataclass(frozen=True)
+class Classification:
+    """One finished job mapped onto an attempt.
+
+    ``problem`` is set when the job's result could not be classified. The
+    attempt is still recorded, as ``error``, because a scheduler has nobody
+    to raise at and one strange job must not stop a campaign.
+    """
+
+    attempt: AttemptRecord
+    problem: str = ""
+
+
+def classify_result(unit: Unit, result: Any, at: str = "") -> Classification:
+    """Map an MCP job payload onto an attempt. Never raises."""
+    try:
+        attempt = attempt_from_mcp(unit, result)
+    except CampaignError as error:
+        job_id = ""
+        if isinstance(result, dict):
+            raw_job_id = result.get("job_id")
+            job_id = raw_job_id if isinstance(raw_job_id, str) else ""
+        return Classification(
+            attempt=AttemptRecord(
+                unit=unit, state="error", job_id=job_id, at=at
+            ),
+            problem=str(error),
+        )
+    return Classification(
+        attempt=AttemptRecord(
+            unit=attempt.unit,
+            state=attempt.state,
+            job_id=attempt.job_id,
+            at=at,
+        )
+    )
+
+
+@dataclass(frozen=True)
+class Lane:
+    """One unit occupying a lane, and its job's result if it has finished."""
+
+    unit: Unit
+    job_id: str
+    result: Any = None
+
+    @property
+    def finished(self) -> bool:
+        return self.result is not None
+
+
+@dataclass(frozen=True)
+class TickPlan:
+    """What one scheduler tick decided to do.
+
+    ``record`` holds the finished lanes, classified. ``start`` holds the
+    units to open new lanes for. Both are empty when there is nothing to do,
+    which is the common case.
+    """
+
+    record: tuple[Classification, ...] = ()
+    start: tuple[Unit, ...] = ()
+    lifecycle: str = CREATED
+
+    @property
+    def idle(self) -> bool:
+        return not self.record and not self.start
+
+
+def plan_tick(
+    *,
+    records: Sequence[Record],
+    lanes: Sequence[Lane],
+    max_lanes: int,
+    at: str = "",
+) -> TickPlan:
+    """Decide what to do next. Pure: starts nothing and writes nothing.
+
+    Finished lanes are classified first, so the units they free are
+    available to fill in the same tick. New lanes are opened only while the
+    campaign is running, which is what makes a paused campaign drain: its
+    in-flight jobs are still recorded, and nothing new begins.
+    """
+    classified = tuple(
+        classify_result(lane.unit, lane.result, at)
+        for lane in lanes
+        if lane.finished
+    )
+
+    after = [*records, *(item.attempt for item in classified)]
+    state = lifecycle(after)
+    if state != RUNNING_STATE:
+        return TickPlan(record=classified, lifecycle=state)
+
+    busy = sum(1 for lane in lanes if not lane.finished)
+    free = max(max_lanes - busy, 0)
+    if not free:
+        return TickPlan(record=classified, lifecycle=state)
+
+    # Only unattempted units: a scheduler never retries a problem unit on
+    # its own. select_unattempted also skips units already running, and
+    # every busy lane recorded a running attempt when it opened, so a unit
+    # cannot enter two lanes.
+    return TickPlan(
+        record=classified,
+        start=tuple(
+            status.unit
+            for status in select_unattempted(reduce_units(after), free)
+        ),
+        lifecycle=state,
+    )
