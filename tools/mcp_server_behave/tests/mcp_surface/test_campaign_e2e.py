@@ -131,11 +131,13 @@ def test_a_campaign_runs_its_lanes_concurrently(monkeypatch, tmp_path):
     assert set(states) == set(RELEASES)
     assert all(state in TERMINAL_STATES for state in states.values()), states
 
-    # Each unit was attempted exactly once: a running attempt when its lane
-    # opened, then the outcome. No unit was scheduled twice.
+    # Each unit was attempted exactly once, and that attempt finished.
     for status in statuses:
-        assert [a.state for a in status.attempts][0] == "running"
-        assert len(status.attempts) == 2, status
+        assert len(status.attempts) == 1, status
+        attempt = status.attempts[0]
+        assert not attempt.running
+        assert attempt.outcome == status.state
+        assert attempt.started_at and attempt.finished_at
 
     # Every recorded job left artifacts behind to inspect.
     for status in statuses:

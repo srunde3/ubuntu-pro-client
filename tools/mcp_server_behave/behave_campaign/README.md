@@ -10,9 +10,27 @@ A **test unit** is one behave scenario for one release on one `machine_type`.
 
 ## Storage
 
-One append-only JSON Lines file per campaign. `create` writes a `campaign`
-header first, then one `plan` record per unit; `record` appends `attempt`
-records. The whole campaign replays from the file.
+One append-only JSON Lines file per campaign, replayed in full to get the
+current state. Six record types:
+
+| type | written when | says |
+| --- | --- | --- |
+| `campaign` | once, first line | how the campaign was built: scope, checkout, install source, lanes |
+| `plan` | once per unit, at creation | this unit is in scope |
+| `started` | a lane opens | a job began for this unit, and what it installs from |
+| `finished` | that job ends | what it established: `passed`, `failed`, `skipped` or `error` |
+| `lifecycle` | a control verb | the campaign was started, paused or cancelled, and why |
+| `retry` | `retry_units` | someone asked for another go at a unit |
+
+One try at a unit is one job, written as two records. Both are needed: the
+`started` record is what holds the lane, including across a restart. Neither
+is an attempt on its own -- an **attempt** is the pair, matched on `job_id`,
+and that is what `attempts` and `attempt_count` report. A unit tried twice has
+two attempts, not four.
+
+`running` is therefore not an outcome. A unit is running when its latest
+attempt has no `finished` record yet, which is a fact about the attempt rather
+than a result the job reported.
 
 The `campaign` header captures how the campaign was built, so it can be
 recreated and audited later: the campaign id, the filters used, the checkout it
@@ -23,12 +41,13 @@ UTC timestamp, and every attempt records the install source the job ran with --
 the evidence an SRU verification actually rests on, which would otherwise only
 live in MCP job history that expires.
 
-Current state per unit:
+A unit's state is derived, never stored:
 
-- A unit with no attempts is `unattempted`.
+- No attempts at all is `unattempted`.
 - Any passing attempt makes and keeps the unit `passed`.
-- Otherwise the latest attempt state wins: `running`, `failed`, `skipped`,
-  or `error`.
+- An unfinished latest attempt is `running`.
+- Otherwise the latest attempt's outcome wins: `failed`, `skipped` or
+  `error`.
 
 ## Scope
 
@@ -114,17 +133,21 @@ The tool fails loudly instead of guessing:
 
 ## MCP results
 
-`record --from-mcp` takes `[{"unit": {...}, "result": <MCP payload>}]`, where
-`result` is a `start_scenario` or `wait_for_scenario_completion` response. Each
-job covers exactly one unit, so the mapping is:
+`record` takes completed tries: `[{unit..., "job_id": ..., "outcome": ...}]`,
+and writes both halves for each, since a caller recording out of band is
+describing a whole attempt. `--from-mcp` takes
+`[{"unit": {...}, "result": <MCP payload>}]` instead and reads the outcome out
+of the payload. Each job covers exactly one unit, so the mapping is:
 
-| MCP payload | State |
+| MCP payload | Outcome |
 | --- | --- |
-| `started`, `timeout` | `running` |
 | `completed`, every scenario passed | `passed` |
 | `completed`, any scenario failed | `failed` |
 | `completed`, only skips | `skipped` |
 | `completed`, no parseable report (`summary: null`) | `error` |
+
+A job still in flight cannot be recorded this way. The scheduler owns those:
+it wrote the `started` record itself and will write the finish.
 
 Anything else -- a scenario status outside passed/failed/skipped, no scenario
 counts at all, or a pass contradicted by `ok: false` -- cannot be classified.

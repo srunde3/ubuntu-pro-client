@@ -2,7 +2,8 @@ import pytest
 
 from behave_campaign.adapters import JsonlCampaignStore, JsonlEventLog
 from behave_campaign.domain import (
-    AttemptRecord,
+    AttemptFinished,
+    AttemptStarted,
     CampaignError,
     Filters,
     RepoState,
@@ -247,19 +248,14 @@ class TestCampaignStatus:
         store.append(
             "1234567",
             [
-                AttemptRecord(
+                AttemptStarted(
                     unit=UNITS[0],
-                    state="running",
                     job_id="job1",
                     install_from="proposed",
                     at=AT,
                 ),
-                AttemptRecord(
-                    unit=UNITS[1],
-                    state="failed",
-                    job_id="job2",
-                    install_from="proposed",
-                    at=AT,
+                AttemptFinished(
+                    unit=UNITS[1], job_id="job2", outcome="failed", at=AT
                 ),
             ],
         )
@@ -286,12 +282,8 @@ class TestCampaignStatus:
         store.append(
             "1234567",
             [
-                AttemptRecord(
-                    unit=UNITS[0],
-                    state="passed",
-                    job_id="job1",
-                    install_from="proposed",
-                    at=AT,
+                AttemptFinished(
+                    unit=UNITS[0], job_id="job1", outcome="passed", at=AT
                 )
             ],
         )
@@ -326,7 +318,7 @@ class TestDimensions:
         ]
 
 
-def record(service, unit, state, job_id, **kwargs):
+def record(service, unit, outcome, job_id, **kwargs):
     fields = {
         "campaign_id": "1234567",
         "payload": [
@@ -335,7 +327,7 @@ def record(service, unit, state, job_id, **kwargs):
                 "scenario": unit.scenario,
                 "release": unit.release,
                 "machine_type": unit.machine_type,
-                "state": state,
+                "outcome": outcome,
                 "job_id": job_id,
             }
         ],
@@ -359,10 +351,14 @@ class TestRecordAttempts:
         create(service)
         record(service, UNITS[0], "passed", "job1")
 
-        attempt = store.replay("1234567")[-1]
+        started, finished = store.replay("1234567")[-2:]
 
-        assert attempt.install_from == "proposed"
-        assert attempt.at == AT
+        # A completed try is written as both halves, with the source on the
+        # start -- that is what the job actually ran with.
+        assert started.install_from == "proposed"
+        assert started.at == AT
+        assert finished.outcome == "passed"
+        assert finished.job_id == started.job_id
 
     def test_a_pass_supersedes_an_earlier_failure(self, service):
         create(service)
@@ -445,15 +441,16 @@ class TestNextUnits:
             "failed",
         ]
 
-    def test_passing_and_running_units_are_never_returned(self, service):
+    def test_a_passing_unit_is_never_returned(self, service):
         create(service)
         record(service, UNITS[0], "passed", "job1")
-        record(service, UNITS[1], "running", "job2")
 
         result = service.next_units(campaign_id="1234567", limit=5)
 
-        assert [u.release for u in result.units] == ["jammy"]
-        assert result.units[0].feature == "features/b.feature"
+        assert UNITS[0] not in [
+            Unit(u.feature, u.scenario, u.release, u.machine_type)
+            for u in result.units
+        ]
 
     def test_the_limit_caps_the_selection(self, service):
         create(service)
@@ -483,7 +480,8 @@ class TestUnitHistory:
         )
         attempts = result.units[0].attempts
 
-        assert [(a.state, a.job_id) for a in attempts] == [
+        # Two tries, so two attempts.
+        assert [(a.outcome, a.job_id) for a in attempts] == [
             ("failed", "job1"),
             ("passed", "job2"),
         ]

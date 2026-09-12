@@ -12,11 +12,12 @@ from behave_campaign.domain import (
     CREATED,
     PAUSED,
     RUNNING_STATE,
-    AttemptRecord,
+    AttemptFinished,
+    AttemptStarted,
     CampaignHeader,
     Lane,
+    LifecycleRecord,
     PlanRecord,
-    StateRecord,
     Unit,
     classify_result,
     detect_signals,
@@ -37,10 +38,19 @@ def plan(*units):
     return [CampaignHeader(at=AT), *(PlanRecord(unit=u, at=AT) for u in units)]
 
 
-def attempt(unit, state, job_id="job1"):
-    return AttemptRecord(
-        unit=unit, state=state, job_id=job_id, install_from="proposed", at=AT
-    )
+def attempt(unit, outcome, job_id="job1"):
+    """One record standing for a try.
+
+    A try still in flight is just its start; a finished one is just its
+    finish, which reduce_units reads as a whole attempt -- the shape an
+    out-of-band recording takes. Tests that need a real start/finish pair
+    go through the runner or the service.
+    """
+    if outcome == "running":
+        return AttemptStarted(
+            unit=unit, job_id=job_id, install_from="proposed", at=AT
+        )
+    return AttemptFinished(unit=unit, job_id=job_id, outcome=outcome, at=AT)
 
 
 def completed(
@@ -64,8 +74,8 @@ class TestLifecycle:
     def test_the_latest_state_record_wins(self):
         records = [
             *plan(UNIT_A),
-            StateRecord(state=RUNNING_STATE, at=AT),
-            StateRecord(state=PAUSED, at=AT),
+            LifecycleRecord(state=RUNNING_STATE, at=AT),
+            LifecycleRecord(state=PAUSED, at=AT),
         ]
 
         assert lifecycle(records) == PAUSED
@@ -73,22 +83,22 @@ class TestLifecycle:
     def test_a_resumed_campaign_is_running_again(self):
         records = [
             *plan(UNIT_A),
-            StateRecord(state=RUNNING_STATE, at=AT),
-            StateRecord(state=PAUSED, at=AT),
-            StateRecord(state=RUNNING_STATE, at=AT),
+            LifecycleRecord(state=RUNNING_STATE, at=AT),
+            LifecycleRecord(state=PAUSED, at=AT),
+            LifecycleRecord(state=RUNNING_STATE, at=AT),
         ]
 
         assert lifecycle(records) == RUNNING_STATE
 
     def test_running_with_work_left_stays_running(self):
-        records = [*plan(UNIT_A, UNIT_B), StateRecord(RUNNING_STATE, AT)]
+        records = [*plan(UNIT_A, UNIT_B), LifecycleRecord(RUNNING_STATE, AT)]
 
         assert lifecycle(records) == RUNNING_STATE
 
     def test_running_with_a_job_in_flight_stays_running(self):
         records = [
             *plan(UNIT_A),
-            StateRecord(RUNNING_STATE, AT),
+            LifecycleRecord(RUNNING_STATE, AT),
             attempt(UNIT_A, "running"),
         ]
 
@@ -97,7 +107,7 @@ class TestLifecycle:
     def test_running_with_nothing_left_is_complete(self):
         records = [
             *plan(UNIT_A, UNIT_B),
-            StateRecord(RUNNING_STATE, AT),
+            LifecycleRecord(RUNNING_STATE, AT),
             attempt(UNIT_A, "passed"),
             attempt(UNIT_B, "passed"),
         ]
@@ -109,7 +119,7 @@ class TestLifecycle:
         # all finished is complete even when some of them failed.
         records = [
             *plan(UNIT_A, UNIT_B),
-            StateRecord(RUNNING_STATE, AT),
+            LifecycleRecord(RUNNING_STATE, AT),
             attempt(UNIT_A, "failed"),
             attempt(UNIT_B, "skipped"),
         ]
@@ -119,9 +129,9 @@ class TestLifecycle:
     def test_a_paused_campaign_with_nothing_left_stays_paused(self):
         records = [
             *plan(UNIT_A),
-            StateRecord(RUNNING_STATE, AT),
+            LifecycleRecord(RUNNING_STATE, AT),
             attempt(UNIT_A, "passed"),
-            StateRecord(PAUSED, AT),
+            LifecycleRecord(PAUSED, AT),
         ]
 
         assert lifecycle(records) == PAUSED
@@ -129,8 +139,8 @@ class TestLifecycle:
     def test_a_cancelled_campaign_stays_cancelled(self):
         records = [
             *plan(UNIT_A),
-            StateRecord(RUNNING_STATE, AT),
-            StateRecord(CANCELLED, AT),
+            LifecycleRecord(RUNNING_STATE, AT),
+            LifecycleRecord(CANCELLED, AT),
         ]
 
         assert lifecycle(records) == CANCELLED
@@ -138,8 +148,8 @@ class TestLifecycle:
     def test_the_reason_of_the_latest_transition_is_reported(self):
         records = [
             *plan(UNIT_A),
-            StateRecord(RUNNING_STATE, AT),
-            StateRecord(PAUSED, AT, reason="server_restart"),
+            LifecycleRecord(RUNNING_STATE, AT),
+            LifecycleRecord(PAUSED, AT, reason="server_restart"),
         ]
 
         assert last_state_reason(records) == "server_restart"
@@ -152,21 +162,21 @@ class TestClassifyResult:
     def test_a_clean_pass_is_recorded_as_passed(self):
         result = classify_result(UNIT_A, completed(passed=2), AT)
 
-        assert result.attempt.state == "passed"
-        assert result.attempt.job_id == "job1"
-        assert result.attempt.at == AT
+        assert result.finished.outcome == "passed"
+        assert result.finished.job_id == "job1"
+        assert result.finished.at == AT
         assert not result.problem
 
     def test_any_failure_is_recorded_as_failed(self):
         result = classify_result(UNIT_A, completed(passed=1, failed=1), AT)
 
-        assert result.attempt.state == "failed"
+        assert result.finished.outcome == "failed"
         assert not result.problem
 
     def test_a_skip_only_run_is_recorded_as_skipped(self):
         result = classify_result(UNIT_A, completed(passed=0, skipped=2), AT)
 
-        assert result.attempt.state == "skipped"
+        assert result.finished.outcome == "skipped"
 
     def test_a_missing_report_is_recorded_as_error(self):
         result = classify_result(
@@ -180,7 +190,7 @@ class TestClassifyResult:
             AT,
         )
 
-        assert result.attempt.state == "error"
+        assert result.finished.outcome == "error"
         assert not result.problem
 
     def test_a_pass_alongside_a_skip_is_still_a_pass(self):
@@ -189,7 +199,7 @@ class TestClassifyResult:
         # not: that run passed.
         result = classify_result(UNIT_A, completed(passed=1, skipped=1), AT)
 
-        assert result.attempt.state == "passed"
+        assert result.finished.outcome == "passed"
         assert not result.problem
 
     def test_an_unclassifiable_result_becomes_error_with_a_reason(self):
@@ -197,7 +207,7 @@ class TestClassifyResult:
         # has nobody to raise at, so it records the oddity and keeps going.
         result = classify_result(UNIT_A, completed(passed=1, unknown=1), AT)
 
-        assert result.attempt.state == "error"
+        assert result.finished.outcome == "error"
         assert result.problem
         assert "classify" in result.problem
 
@@ -206,18 +216,18 @@ class TestClassifyResult:
             UNIT_A, completed(passed=1, unknown=1, job_id="job-xyz"), AT
         )
 
-        assert result.attempt.job_id == "job-xyz"
+        assert result.finished.job_id == "job-xyz"
 
     def test_a_pass_contradicted_by_ok_false_is_flagged(self):
         result = classify_result(UNIT_A, completed(passed=1, ok=False), AT)
 
-        assert result.attempt.state == "error"
+        assert result.finished.outcome == "error"
         assert result.problem
 
     def test_junk_is_recorded_rather_than_raised(self):
         result = classify_result(UNIT_A, "not a payload", AT)
 
-        assert result.attempt.state == "error"
+        assert result.finished.outcome == "error"
         assert result.problem
 
 
@@ -231,7 +241,7 @@ class TestPlanTick:
     def test_a_running_campaign_fills_every_free_lane(self):
         records = [
             *plan(UNIT_A, UNIT_B, UNIT_C),
-            StateRecord(RUNNING_STATE, AT),
+            LifecycleRecord(RUNNING_STATE, AT),
         ]
 
         tick = plan_tick(records=records, lanes=[], max_lanes=2, at=AT)
@@ -242,7 +252,7 @@ class TestPlanTick:
     def test_it_never_opens_more_lanes_than_the_limit(self):
         records = [
             *plan(UNIT_A, UNIT_B, UNIT_C),
-            StateRecord(RUNNING_STATE, AT),
+            LifecycleRecord(RUNNING_STATE, AT),
         ]
         lanes = [Lane(unit=UNIT_A, job_id="job1")]
 
@@ -251,7 +261,7 @@ class TestPlanTick:
         assert len(tick.start) == 1
 
     def test_a_full_window_starts_nothing(self):
-        records = [*plan(UNIT_A, UNIT_B), StateRecord(RUNNING_STATE, AT)]
+        records = [*plan(UNIT_A, UNIT_B), LifecycleRecord(RUNNING_STATE, AT)]
         lanes = [
             Lane(unit=UNIT_A, job_id="job1"),
             Lane(unit=UNIT_B, job_id="job2"),
@@ -264,32 +274,32 @@ class TestPlanTick:
     def test_a_finished_lane_is_recorded(self):
         records = [
             *plan(UNIT_A),
-            StateRecord(RUNNING_STATE, AT),
+            LifecycleRecord(RUNNING_STATE, AT),
             attempt(UNIT_A, "running"),
         ]
         lanes = [Lane(unit=UNIT_A, job_id="job1", result=completed())]
 
         tick = plan_tick(records=records, lanes=lanes, max_lanes=2, at=AT)
 
-        assert [c.attempt.state for c in tick.record] == ["passed"]
+        assert [c.finished.outcome for c in tick.record] == ["passed"]
 
     def test_a_freed_lane_is_refilled_in_the_same_tick(self):
         records = [
             *plan(UNIT_A, UNIT_B),
-            StateRecord(RUNNING_STATE, AT),
+            LifecycleRecord(RUNNING_STATE, AT),
             attempt(UNIT_A, "running"),
         ]
         lanes = [Lane(unit=UNIT_A, job_id="job1", result=completed())]
 
         tick = plan_tick(records=records, lanes=lanes, max_lanes=1, at=AT)
 
-        assert [c.attempt.unit for c in tick.record] == [UNIT_A]
+        assert [c.finished.unit for c in tick.record] == [UNIT_A]
         assert tick.start == (UNIT_B,)
 
     def test_a_unit_in_flight_is_never_started_twice(self):
         records = [
             *plan(UNIT_A, UNIT_B),
-            StateRecord(RUNNING_STATE, AT),
+            LifecycleRecord(RUNNING_STATE, AT),
             attempt(UNIT_A, "running"),
         ]
         lanes = [Lane(unit=UNIT_A, job_id="job1")]
@@ -301,7 +311,7 @@ class TestPlanTick:
     def test_a_failed_unit_is_not_retried_on_its_own(self):
         records = [
             *plan(UNIT_A, UNIT_B),
-            StateRecord(RUNNING_STATE, AT),
+            LifecycleRecord(RUNNING_STATE, AT),
             attempt(UNIT_A, "failed"),
             attempt(UNIT_B, "passed"),
         ]
@@ -314,24 +324,24 @@ class TestPlanTick:
     def test_a_paused_campaign_records_but_starts_nothing(self):
         records = [
             *plan(UNIT_A, UNIT_B),
-            StateRecord(RUNNING_STATE, AT),
+            LifecycleRecord(RUNNING_STATE, AT),
             attempt(UNIT_A, "running"),
-            StateRecord(PAUSED, AT),
+            LifecycleRecord(PAUSED, AT),
         ]
         lanes = [Lane(unit=UNIT_A, job_id="job1", result=completed())]
 
         tick = plan_tick(records=records, lanes=lanes, max_lanes=4, at=AT)
 
-        assert [c.attempt.state for c in tick.record] == ["passed"]
+        assert [c.finished.outcome for c in tick.record] == ["passed"]
         assert tick.start == ()
         assert tick.lifecycle == PAUSED
 
     def test_a_cancelled_campaign_records_but_starts_nothing(self):
         records = [
             *plan(UNIT_A, UNIT_B),
-            StateRecord(RUNNING_STATE, AT),
+            LifecycleRecord(RUNNING_STATE, AT),
             attempt(UNIT_A, "running"),
-            StateRecord(CANCELLED, AT),
+            LifecycleRecord(CANCELLED, AT),
         ]
         lanes = [Lane(unit=UNIT_A, job_id="job1", result=completed())]
 
@@ -344,7 +354,7 @@ class TestPlanTick:
     def test_the_last_finished_lane_completes_the_campaign(self):
         records = [
             *plan(UNIT_A),
-            StateRecord(RUNNING_STATE, AT),
+            LifecycleRecord(RUNNING_STATE, AT),
             attempt(UNIT_A, "running"),
         ]
         lanes = [Lane(unit=UNIT_A, job_id="job1", result=completed())]
@@ -357,7 +367,7 @@ class TestPlanTick:
     def test_an_unclassifiable_result_does_not_stop_scheduling(self):
         records = [
             *plan(UNIT_A, UNIT_B),
-            StateRecord(RUNNING_STATE, AT),
+            LifecycleRecord(RUNNING_STATE, AT),
             attempt(UNIT_A, "running"),
         ]
         lanes = [
@@ -380,8 +390,8 @@ class TestPlanTick:
 def test_no_lane_is_ever_opened_outside_running(state):
     records = [
         *plan(UNIT_A, UNIT_B),
-        StateRecord(RUNNING_STATE, AT),
-        StateRecord(state, AT),
+        LifecycleRecord(RUNNING_STATE, AT),
+        LifecycleRecord(state, AT),
     ]
 
     assert plan_tick(records=records, lanes=[], max_lanes=8, at=AT).start == ()
@@ -394,7 +404,7 @@ class TestSchedulerNeverRetries:
     def test_a_problem_unit_is_never_started_automatically(self, state):
         records = [
             *plan(UNIT_A, UNIT_B),
-            StateRecord(RUNNING_STATE, AT),
+            LifecycleRecord(RUNNING_STATE, AT),
             attempt(UNIT_A, state),
             attempt(UNIT_B, "passed"),
         ]
@@ -407,7 +417,7 @@ class TestSchedulerNeverRetries:
     def test_problem_units_do_not_crowd_out_untouched_ones(self, state):
         records = [
             *plan(UNIT_A, UNIT_B, UNIT_C),
-            StateRecord(RUNNING_STATE, AT),
+            LifecycleRecord(RUNNING_STATE, AT),
             attempt(UNIT_A, state),
         ]
 
@@ -418,14 +428,14 @@ class TestSchedulerNeverRetries:
     def test_a_lane_that_errors_frees_capacity_for_untouched_work(self):
         records = [
             *plan(UNIT_A, UNIT_B),
-            StateRecord(RUNNING_STATE, AT),
+            LifecycleRecord(RUNNING_STATE, AT),
             attempt(UNIT_A, "running"),
         ]
         lanes = [Lane(unit=UNIT_A, job_id="job1", result=completed(passed=0))]
 
         tick = plan_tick(records=records, lanes=lanes, max_lanes=1, at=AT)
 
-        assert tick.record[0].attempt.state == "error"
+        assert tick.record[0].finished.outcome == "error"
         assert tick.start == (UNIT_B,)
 
 
@@ -438,13 +448,7 @@ class TestDetectSignals:
         records = [*plan(unit)]
         if state != "unattempted":
             records.append(
-                AttemptRecord(
-                    unit=unit,
-                    state=state,
-                    job_id="job",
-                    install_from="proposed",
-                    at=at,
-                )
+                AttemptFinished(unit=unit, job_id="job", outcome=state, at=at)
             )
         return reduce_units(records)[0]
 

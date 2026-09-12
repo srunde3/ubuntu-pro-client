@@ -121,12 +121,16 @@ class DimensionsResponse(BaseModel):
 
 
 class AttemptView(BaseModel):
-    """One recorded attempt at a unit."""
+    """One try at a unit: one job, from start to finish.
 
-    state: str = ""
+    ``outcome`` is None while the job is still running.
+    """
+
     job_id: str = ""
     install_from: str = ""
-    at: str = ""
+    started_at: str = ""
+    outcome: str | None = None
+    finished_at: str = ""
 
 
 class UnitHistoryView(UnitView):

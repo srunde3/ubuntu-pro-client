@@ -20,14 +20,14 @@ from typing import Any, Callable, Sequence
 
 from behave_campaign import domain
 from behave_campaign.domain import (
-    AttemptRecord,
+    AttemptStarted,
     CampaignError,
     Filters,
     Lane,
+    LifecycleRecord,
     NewEvent,
     Record,
     RetryRecord,
-    StateRecord,
     Unit,
     UnitStatus,
 )
@@ -308,7 +308,7 @@ class CampaignRunner:
         emitted: list[NewEvent] = []
         if plan.record:
             self._store.append(
-                campaign_id, [item.attempt for item in plan.record]
+                campaign_id, [item.finished for item in plan.record]
             )
             problems.extend(
                 item.problem for item in plan.record if item.problem
@@ -448,10 +448,10 @@ class CampaignRunner:
         units: Sequence[Unit],
         problems: list[str],
         starved: list[NewEvent],
-    ) -> list[AttemptRecord]:
+    ) -> list[AttemptStarted]:
         repo_root = Path(header.repo.root)
         install_from = header.install_from
-        started: list[AttemptRecord] = []
+        started: list[AttemptStarted] = []
         for unit in units:
             try:
                 job_id = self._lanes.start(
@@ -473,17 +473,17 @@ class CampaignRunner:
                 )
                 break
             started.append(
-                AttemptRecord(
+                AttemptStarted(
                     unit=unit,
-                    state="running",
                     job_id=job_id,
                     install_from=install_from,
                     at=self._now(),
                 )
             )
         if started:
-            # Recorded straight after starting, because a running attempt is
-            # what keeps the unit out of the next tick's selection.
+            # Recorded straight after starting, because an unfinished
+            # attempt is what keeps the unit out of the next tick's
+            # selection.
             self._store.append(campaign_id, started)
         return started
 
@@ -511,7 +511,7 @@ class CampaignRunner:
                 unit=status.unit,
                 job_id=status.job_id,
                 install_from=status.attempts[-1].install_from,
-                opened_at=status.attempts[-1].at,
+                opened_at=status.attempts[-1].started_at,
             )
             for status in domain.reduce_units(records)
             if status.state == "running" and status.job_id
@@ -521,7 +521,7 @@ class CampaignRunner:
     def _select_for_retry(
         records: Sequence[Record], filters: Filters
     ) -> list[UnitStatus]:
-        wanted = filters.state or domain.PROBLEM_STATES
+        wanted = filters.state or domain.PROBLEM_OUTCOMES
         return [
             status
             for status in domain.reduce_units(records)
@@ -540,31 +540,31 @@ class CampaignRunner:
         results = {lane.unit: lane.result for lane in lanes if lane.finished}
         events: list[NewEvent] = []
         for item in classified:
-            attempt = item.attempt
+            finished = item.finished
             body: dict[str, Any] = {
-                **attempt.unit.as_dict(),
-                "job_id": attempt.job_id,
-                "state": attempt.state,
+                **finished.unit.as_dict(),
+                "job_id": finished.job_id,
+                "outcome": finished.outcome,
             }
             events.append(
                 NewEvent(
-                    kind=domain.LANE_RELEASED, at=attempt.at, data=dict(body)
+                    kind=domain.LANE_RELEASED, at=finished.at, data=dict(body)
                 )
             )
             if item.problem:
                 body["problem"] = item.problem
-            if attempt.state == "failed":
+            if finished.outcome == "failed":
                 # Carried here so a caller can judge the failure without
                 # going back for the job's report.
                 body["failures"] = domain.failure_details(
-                    results.get(attempt.unit)
+                    results.get(finished.unit)
                 )
             events.append(
                 NewEvent(
                     kind=domain.unit_event_kind(
-                        attempt.state, bool(item.problem)
+                        finished.outcome, bool(item.problem)
                     ),
-                    at=attempt.at,
+                    at=finished.at,
                     data=body,
                 )
             )
@@ -580,15 +580,15 @@ class CampaignRunner:
         for status in domain.reduce_units(records):
             if status.state != "running" or not status.job_id:
                 continue
+            open_attempt = status.attempts[-1]
             lanes.append(
                 Lane(
                     unit=status.unit,
                     job_id=status.job_id,
                     result=self._lanes.poll(status.job_id),
-                    # What this job actually ran with, and when it began,
-                    # from the running attempt the lane recorded.
-                    install_from=status.attempts[-1].install_from,
-                    opened_at=status.attempts[-1].at,
+                    # What this job actually ran with, and when it began.
+                    install_from=open_attempt.install_from,
+                    opened_at=open_attempt.started_at,
                 )
             )
         return lanes
@@ -598,7 +598,7 @@ class CampaignRunner:
     ) -> None:
         self._store.append(
             campaign_id,
-            [StateRecord(state=state, at=self._now(), reason=reason)],
+            [LifecycleRecord(state=state, at=self._now(), reason=reason)],
         )
 
     def _control_response(self, campaign_id: str) -> CampaignControlResponse:

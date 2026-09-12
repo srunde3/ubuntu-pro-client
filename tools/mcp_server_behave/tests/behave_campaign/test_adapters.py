@@ -8,7 +8,8 @@ from behave_campaign.adapters import (
     SingleFileCampaignStore,
 )
 from behave_campaign.domain import (
-    AttemptRecord,
+    AttemptFinished,
+    AttemptStarted,
     CampaignError,
     CampaignHeader,
     Filters,
@@ -109,17 +110,16 @@ class TestJsonlCampaignStore:
     def test_append_adds_attempts_after_the_plan(self, tmp_path):
         store = JsonlCampaignStore(tmp_path)
         store.create("1234567", header(), plans(UNIT_A))
-        attempt = AttemptRecord(
-            unit=UNIT_A,
-            state="passed",
-            job_id="job1",
-            install_from="proposed",
-            at=AT,
+        started = AttemptStarted(
+            unit=UNIT_A, job_id="job1", install_from="proposed", at=AT
+        )
+        finished = AttemptFinished(
+            unit=UNIT_A, job_id="job1", outcome="passed", at=AT
         )
 
-        store.append("1234567", [attempt])
+        store.append("1234567", [started, finished])
 
-        assert store.replay("1234567")[-1] == attempt
+        assert store.replay("1234567")[-2:] == [started, finished]
 
     def test_append_of_nothing_leaves_the_file_alone(self, tmp_path):
         store = JsonlCampaignStore(tmp_path)

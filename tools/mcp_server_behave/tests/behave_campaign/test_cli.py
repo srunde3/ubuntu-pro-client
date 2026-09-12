@@ -32,14 +32,15 @@ FEATURE_B = """Feature: B feature
 """
 
 
-def attempt(unit, state, job_id):
+def attempt(unit, outcome, job_id):
+    """One completed try, as the CLI's record command takes it."""
     feature, scenario, release, machine_type = unit
     return {
         "feature": feature,
         "scenario": scenario,
         "release": release,
         "machine_type": machine_type,
-        "state": state,
+        "outcome": outcome,
         "job_id": job_id,
     }
 
@@ -178,12 +179,23 @@ class TestRecord:
         result = run(
             ["record"],
             [
-                attempt(UNIT_A_JAMMY, "running", "job-1"),
-                attempt(UNIT_A_NOBLE, "running", "job-2"),
+                attempt(UNIT_A_JAMMY, "failed", "job-1"),
+                attempt(UNIT_A_NOBLE, "passed", "job-2"),
             ],
         )
 
-        assert result["campaign"]["counts"]["running"] == 2
+        assert result["recorded"] == 2
+        assert result["campaign"]["counts"]["failed"] == 1
+        assert result["campaign"]["counts"]["passed"] == 1
+
+    def test_a_job_still_in_flight_cannot_be_recorded(self, planned, run):
+        # The scheduler owns unfinished jobs: it wrote the start and will
+        # write the finish. The CLI records completed tries only.
+        error = run(
+            ["record"], [attempt(UNIT_A_JAMMY, "running", "job-1")], expect=2
+        )
+
+        assert "outcome must be one of" in error
 
     def test_attempts_store_install_source_and_timestamp(
         self, planned, run, campaign_file
@@ -192,10 +204,18 @@ class TestRecord:
             ["record", "--install-from", "proposed"],
             [attempt(UNIT_A_JAMMY, "passed", "job-1")],
         )
-        stored = json.loads(campaign_file.read_text().splitlines()[-1])
+        lines = campaign_file.read_text().splitlines()
+        started = json.loads(lines[-2])
+        finished = json.loads(lines[-1])
 
-        assert stored["install_from"] == "proposed"
-        assert stored["at"].endswith("Z")
+        # One completed try is written as both halves; the start is what
+        # carries the install source.
+        assert started["type"] == "started"
+        assert started["install_from"] == "proposed"
+        assert started["at"].endswith("Z")
+        assert finished["type"] == "finished"
+        assert finished["outcome"] == "passed"
+        assert finished["job_id"] == started["job_id"]
 
     def test_unknown_install_source_is_rejected(
         self, planned, tmp_path, campaign_file
@@ -285,7 +305,7 @@ class TestQueries:
             ["record"],
             [
                 attempt(UNIT_A_JAMMY, "failed", "job-1"),
-                attempt(UNIT_A_NOBLE, "running", "job-2"),
+                attempt(UNIT_A_NOBLE, "passed", "job-2"),
             ],
         )
 
@@ -310,24 +330,25 @@ class TestQueries:
         assert result["running"] == []
         assert result["problems"] == []
 
-    def test_status_reports_running_and_problems(self, planned, run):
+    def test_status_reports_problems(self, planned, run):
         run(
             ["record"],
             [
                 attempt(UNIT_A_JAMMY, "failed", "job-1"),
-                attempt(UNIT_A_NOBLE, "running", "job-2"),
+                attempt(UNIT_A_NOBLE, "skipped", "job-2"),
             ],
         )
 
         result = run(["status"])
 
         assert result["campaign"]["counts"]["failed"] == 1
-        assert result["campaign"]["counts"]["running"] == 1
-        assert len(result["running"]) == 1
-        assert result["running"][0]["job_id"] == "job-2"
-        assert len(result["problems"]) == 1
-        assert result["problems"][0]["job_id"] == "job-1"
-        assert result["problems"][0]["state"] == "failed"
+        assert result["campaign"]["counts"]["skipped"] == 1
+        assert result["running"] == []
+        assert {u["job_id"] for u in result["problems"]} == {"job-1", "job-2"}
+        assert {u["state"] for u in result["problems"]} == {
+            "failed",
+            "skipped",
+        }
 
     def test_history_lists_every_attempt(self, planned, run):
         run(["record"], [attempt(UNIT_A_JAMMY, "failed", "job-1")])
@@ -337,12 +358,14 @@ class TestQueries:
 
         attempts = result["units"][0]["attempts"]
 
-        assert [(a["state"], a["job_id"]) for a in attempts] == [
+        # Two tries, so two attempts -- not four records' worth.
+        assert [(a["outcome"], a["job_id"]) for a in attempts] == [
             ("failed", "job-1"),
             ("passed", "job-2"),
         ]
         assert all(a["install_from"] == "proposed" for a in attempts)
-        assert all(a["at"].endswith("Z") for a in attempts)
+        assert all(a["started_at"].endswith("Z") for a in attempts)
+        assert all(a["finished_at"].endswith("Z") for a in attempts)
 
     def test_status_on_missing_campaign_file_is_empty(self, run):
         result = run(["status"])

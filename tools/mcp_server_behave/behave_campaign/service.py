@@ -16,7 +16,8 @@ from typing import Any, Callable, Sequence
 
 from behave_campaign import domain
 from behave_campaign.domain import (
-    AttemptRecord,
+    AttemptFinished,
+    AttemptStarted,
     CampaignError,
     CampaignHeader,
     Filters,
@@ -67,13 +68,7 @@ def _unit_history_view(status: UnitStatus) -> UnitHistoryView:
     return UnitHistoryView(
         **_unit_view(status).model_dump(),
         attempts=[
-            AttemptView(
-                state=attempt.state,
-                job_id=attempt.job_id,
-                install_from=attempt.install_from,
-                at=attempt.at,
-            )
-            for attempt in status.attempts
+            AttemptView(**attempt.as_dict()) for attempt in status.attempts
         ],
     )
 
@@ -209,39 +204,54 @@ class CampaignService:
     ) -> RecordAttemptsResponse:
         """Append attempts to a campaign and report the resulting state.
 
-        ``payload`` is either a list of attempt objects or, with
-        ``from_mcp``, a list of ``{"unit": ..., "result": <MCP payload>}``
-        entries that the domain classifies. An attempt against a unit the
-        campaign never planned is rejected, because it means the scope and
-        the work have diverged.
+        Each entry describes one completed try: the unit, its ``job_id`` and
+        its ``outcome``. With ``from_mcp``, entries are
+        ``{"unit": ..., "result": <completed MCP payload>}`` and the domain
+        reads the outcome out of them. An attempt against a unit the campaign
+        never planned is rejected, because it means the scope and the work
+        have diverged.
+
+        A job still in flight cannot be recorded here: the scheduler owns
+        those, having written the start itself.
         """
         domain.validate_install_source(install_from)
         if from_mcp:
-            parsed = domain.attempts_from_mcp(payload)
+            parsed = domain.finished_from_mcp_payload(payload)
         else:
             if not isinstance(payload, list) or not payload:
                 raise CampaignError("input must be a non-empty JSON array")
-            parsed = [domain.parse_attempt(raw) for raw in payload]
+            parsed = [domain.parse_finished(raw) for raw in payload]
 
         at = self._now()
-        attempts = [
-            AttemptRecord(
-                unit=attempt.unit,
-                state=attempt.state,
-                job_id=attempt.job_id,
-                install_from=install_from,
-                at=at,
+        # One completed try becomes both halves: it started, and it
+        # finished. A caller recording out of band is describing a whole
+        # attempt, not half of one.
+        records: list[Record] = []
+        for finished in parsed:
+            records.append(
+                AttemptStarted(
+                    unit=finished.unit,
+                    job_id=finished.job_id,
+                    install_from=install_from,
+                    at=at,
+                )
             )
-            for attempt in parsed
-        ]
+            records.append(
+                AttemptFinished(
+                    unit=finished.unit,
+                    job_id=finished.job_id,
+                    outcome=finished.outcome,
+                    at=at,
+                )
+            )
 
         existing = self._store.replay(campaign_id)
-        self._reject_unplanned(existing, attempts)
-        self._store.append(campaign_id, attempts)
+        self._reject_unplanned(existing, parsed)
+        self._store.append(campaign_id, records)
 
-        statuses = domain.reduce_units([*existing, *attempts])
+        statuses = domain.reduce_units([*existing, *records])
         return RecordAttemptsResponse(
-            recorded=len(attempts),
+            recorded=len(parsed),
             campaign=_summary(campaign_id, _header_of(existing), statuses),
             running=[
                 _unit_view(status) for status in domain.running(statuses)
@@ -423,7 +433,7 @@ class CampaignService:
 
     @staticmethod
     def _reject_unplanned(
-        existing: Sequence[Record], attempts: Sequence[AttemptRecord]
+        existing: Sequence[Record], finished: Sequence[AttemptFinished]
     ) -> None:
         planned = {
             record.unit
@@ -431,7 +441,7 @@ class CampaignService:
             if isinstance(record, PlanRecord)
         }
         unplanned = {
-            attempt.unit for attempt in attempts if attempt.unit not in planned
+            item.unit for item in finished if item.unit not in planned
         }
         if unplanned:
             raise CampaignError(

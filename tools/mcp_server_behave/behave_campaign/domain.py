@@ -13,10 +13,15 @@ from datetime import datetime
 from typing import Any, Iterable, Sequence
 
 PLAN = "plan"
-ATTEMPT = "attempt"
 CAMPAIGN = "campaign"
-STATE = "state"
 RETRY = "retry"
+LIFECYCLE = "lifecycle"
+# One try at a unit is one job, written as two records: a job starts, and
+# later it finishes. Both are needed -- the opening record is what holds the
+# lane, including across a restart -- but neither is an attempt on its own.
+STARTED = "started"
+FINISHED = "finished"
+RECORD_TYPES = (CAMPAIGN, PLAN, STARTED, FINISHED, LIFECYCLE, RETRY)
 
 # Lifecycle. Only RUNNING, PAUSED and CANCELLED are ever written: CREATED is
 # the absence of any state record, and COMPLETE is derived from the counts,
@@ -29,9 +34,14 @@ COMPLETE = "complete"
 WRITABLE_LIFECYCLE = (RUNNING_STATE, PAUSED, CANCELLED)
 LIFECYCLE_STATES = (CREATED, *WRITABLE_LIFECYCLE, COMPLETE)
 UNATTEMPTED = "unattempted"
-ATTEMPT_STATES = ("running", "passed", "failed", "skipped", "error")
-PROBLEM_STATES = ("failed", "skipped", "error")
-STATES = (UNATTEMPTED, *ATTEMPT_STATES)
+RUNNING = "running"
+# What a finished job established. "running" is not among them: a unit is
+# running when its latest attempt has no finish yet, which is a fact about
+# the attempt rather than a result it reported.
+OUTCOMES = ("passed", "failed", "skipped", "error")
+PROBLEM_OUTCOMES = ("failed", "skipped", "error")
+# A unit's derived condition, which is what callers filter and count on.
+STATES = (UNATTEMPTED, RUNNING, *OUTCOMES)
 INSTALL_SOURCES = (
     "local",
     "archive",
@@ -42,10 +52,12 @@ INSTALL_SOURCES = (
 )
 DEFAULT_INSTALL_SOURCE = INSTALL_SOURCES[0]
 UNIT_FIELDS = ("feature", "scenario", "release", "machine_type")
-ATTEMPT_INPUT_FIELDS = (*UNIT_FIELDS, "state", "job_id")
-ATTEMPT_FIELDS = (*ATTEMPT_INPUT_FIELDS, "install_from", "at")
+STARTED_FIELDS = (*UNIT_FIELDS, "job_id", "install_from", "at")
+FINISHED_FIELDS = (*UNIT_FIELDS, "job_id", "outcome", "at")
+# What a caller hands to record_attempts: one completed try.
+FINISHED_INPUT_FIELDS = (*UNIT_FIELDS, "job_id", "outcome")
 PLAN_FIELDS = (*UNIT_FIELDS, "at")
-STATE_FIELDS = ("state", "at", "reason")
+LIFECYCLE_FIELDS = ("state", "at", "reason")
 RETRY_FIELDS = (*UNIT_FIELDS, "at", "reason")
 CAMPAIGN_FIELDS = (
     "at",
@@ -108,12 +120,52 @@ class PlanRecord:
 
 
 @dataclass(frozen=True)
-class AttemptRecord:
+class AttemptStarted:
+    """A job began for this unit. Written as the lane opens."""
+
     unit: Unit
-    state: str
     job_id: str
     install_from: str = ""
     at: str = ""
+
+
+@dataclass(frozen=True)
+class AttemptFinished:
+    """That job ended, and what it established."""
+
+    unit: Unit
+    job_id: str
+    outcome: str
+    at: str = ""
+
+
+@dataclass(frozen=True)
+class Attempt:
+    """One try at a unit: one job, from start to finish.
+
+    Derived rather than stored, by pairing a ``started`` record with the
+    ``finished`` one that shares its ``job_id``. This is what "attempt"
+    means to a caller, so counting these counts tries.
+    """
+
+    job_id: str
+    install_from: str = ""
+    started_at: str = ""
+    outcome: str | None = None
+    finished_at: str = ""
+
+    @property
+    def running(self) -> bool:
+        return self.outcome is None
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "job_id": self.job_id,
+            "install_from": self.install_from,
+            "started_at": self.started_at,
+            "outcome": self.outcome,
+            "finished_at": self.finished_at,
+        }
 
 
 @dataclass(frozen=True)
@@ -121,7 +173,7 @@ class UnitStatus:
     unit: Unit
     state: str
     job_id: str | None
-    attempts: tuple[AttemptRecord, ...]
+    attempts: tuple[Attempt, ...]
     # Someone asked for another go at this unit since its last attempt. The
     # state still reports what actually happened; this is only about what
     # the scheduler may pick up.
@@ -133,10 +185,7 @@ class UnitStatus:
         data["job_id"] = self.job_id
         data["retry_pending"] = self.retry_pending
         if include_attempts:
-            data["attempts"] = [
-                {"state": attempt.state, "job_id": attempt.job_id}
-                for attempt in self.attempts
-            ]
+            data["attempts"] = [attempt.as_dict() for attempt in self.attempts]
         else:
             data["attempt_count"] = len(self.attempts)
         return data
@@ -203,7 +252,7 @@ class RetryRecord:
 
 
 @dataclass(frozen=True)
-class StateRecord:
+class LifecycleRecord:
     """A lifecycle transition someone asked for.
 
     ``reason`` explains transitions the server made on its own, such as
@@ -216,7 +265,12 @@ class StateRecord:
 
 
 Record = (
-    CampaignHeader | PlanRecord | AttemptRecord | StateRecord | RetryRecord
+    CampaignHeader
+    | PlanRecord
+    | AttemptStarted
+    | AttemptFinished
+    | LifecycleRecord
+    | RetryRecord
 )
 
 
@@ -260,19 +314,21 @@ def parse_unit(raw: Any) -> Unit:
     return _unit_from(_require_fields(raw, UNIT_FIELDS, "unit"), "unit")
 
 
-def parse_attempt(raw: Any) -> AttemptRecord:
-    body = _require_fields(raw, ATTEMPT_INPUT_FIELDS, "attempt")
-    state = body["state"]
-    if state not in ATTEMPT_STATES:
+def validate_outcome(value: Any) -> str:
+    if value not in OUTCOMES:
         raise CampaignError(
-            "attempt state must be one of: {}".format(
-                ", ".join(ATTEMPT_STATES)
-            )
+            "outcome must be one of: {}".format(", ".join(OUTCOMES))
         )
-    return AttemptRecord(
+    return str(value)
+
+
+def parse_finished(raw: Any) -> AttemptFinished:
+    """Read one completed try as a caller describes it."""
+    body = _require_fields(raw, FINISHED_INPUT_FIELDS, "attempt")
+    return AttemptFinished(
         unit=_unit_from(body, "attempt"),
-        state=state,
         job_id=_text(body, "job_id", "attempt"),
+        outcome=validate_outcome(body["outcome"]),
     )
 
 
@@ -306,19 +362,25 @@ def validate_install_source(value: str) -> str:
     return value
 
 
-def _parse_stored_attempt(body: dict[str, Any]) -> AttemptRecord:
-    _require_fields(body, ATTEMPT_FIELDS, "attempt")
-    attempt = parse_attempt(
-        {name: body[name] for name in ATTEMPT_INPUT_FIELDS}
-    )
-    return AttemptRecord(
-        unit=attempt.unit,
-        state=attempt.state,
-        job_id=attempt.job_id,
+def _parse_started(body: dict[str, Any]) -> AttemptStarted:
+    _require_fields(body, STARTED_FIELDS, "started")
+    return AttemptStarted(
+        unit=_unit_from(body, "started"),
+        job_id=_text(body, "job_id", "started"),
         install_from=validate_install_source(
-            _text(body, "install_from", "attempt")
+            _text(body, "install_from", "started")
         ),
-        at=_text(body, "at", "attempt"),
+        at=_text(body, "at", "started"),
+    )
+
+
+def _parse_finished(body: dict[str, Any]) -> AttemptFinished:
+    _require_fields(body, FINISHED_FIELDS, "finished")
+    return AttemptFinished(
+        unit=_unit_from(body, "finished"),
+        job_id=_text(body, "job_id", "finished"),
+        outcome=validate_outcome(body["outcome"]),
+        at=_text(body, "at", "finished"),
     )
 
 
@@ -390,8 +452,10 @@ def parse_record(raw: Any) -> Record:
             unit=parse_unit({f: body[f] for f in UNIT_FIELDS}),
             at=_text(body, "at", "plan"),
         )
-    if kind == ATTEMPT:
-        return _parse_stored_attempt(body)
+    if kind == STARTED:
+        return _parse_started(body)
+    if kind == FINISHED:
+        return _parse_finished(body)
     if kind == CAMPAIGN:
         return _parse_campaign(body)
     if kind == RETRY:
@@ -404,25 +468,23 @@ def parse_record(raw: Any) -> Record:
             at=_text(body, "at", "retry"),
             reason=reason,
         )
-    if kind == STATE:
-        _require_fields(body, STATE_FIELDS, "state")
+    if kind == LIFECYCLE:
+        _require_fields(body, LIFECYCLE_FIELDS, "lifecycle")
         state = body["state"]
         if state not in WRITABLE_LIFECYCLE:
             raise CampaignError(
-                "state must be one of: {}".format(
+                "lifecycle state must be one of: {}".format(
                     ", ".join(WRITABLE_LIFECYCLE)
                 )
             )
         reason = body["reason"]
         if not isinstance(reason, str):
-            raise CampaignError("state field 'reason' must be a string")
-        return StateRecord(
-            state=state, at=_text(body, "at", "state"), reason=reason
+            raise CampaignError("lifecycle field 'reason' must be a string")
+        return LifecycleRecord(
+            state=state, at=_text(body, "at", "lifecycle"), reason=reason
         )
     raise CampaignError(
-        "record type must be one of: {}, {}, {}, {}, {}".format(
-            CAMPAIGN, PLAN, ATTEMPT, STATE, RETRY
-        )
+        "record type must be one of: {}".format(", ".join(RECORD_TYPES))
     )
 
 
@@ -438,9 +500,9 @@ def encode_record(record: Record) -> dict[str, Any]:
             "max_lanes": record.max_lanes,
         }
 
-    if isinstance(record, StateRecord):
+    if isinstance(record, LifecycleRecord):
         return {
-            "type": STATE,
+            "type": LIFECYCLE,
             "state": record.state,
             "at": record.at,
             "reason": record.reason,
@@ -455,35 +517,55 @@ def encode_record(record: Record) -> dict[str, Any]:
 
     data: dict[str, Any] = record.unit.as_dict()
     data["at"] = record.at
-    if isinstance(record, AttemptRecord):
-        data["type"] = ATTEMPT
-        data["state"] = record.state
+    if isinstance(record, AttemptStarted):
+        data["type"] = STARTED
         data["job_id"] = record.job_id
         data["install_from"] = record.install_from
+        return data
+    if isinstance(record, AttemptFinished):
+        data["type"] = FINISHED
+        data["job_id"] = record.job_id
+        data["outcome"] = record.outcome
         return data
     data["type"] = PLAN
     return data
 
 
-def _current_attempt(
-    attempts: Sequence[AttemptRecord],
-) -> AttemptRecord | None:
+def _current_attempt(attempts: Sequence[Attempt]) -> Attempt | None:
+    """The attempt that decides a unit's state.
+
+    A pass stands whatever came before or after it: a unit that has ever
+    passed is passed. Otherwise the latest try is what counts.
+    """
     for attempt in attempts:
-        if attempt.state == "passed":
+        if attempt.outcome == "passed":
             return attempt
     return attempts[-1] if attempts else None
 
 
+def _unit_state(attempt: Attempt | None) -> str:
+    if attempt is None:
+        return UNATTEMPTED
+    return RUNNING if attempt.running else str(attempt.outcome)
+
+
 def reduce_units(records: Iterable[Record]) -> list[UnitStatus]:
-    """Collapse records into one current status per planned unit."""
+    """Collapse records into one current status per planned unit.
+
+    Attempts are assembled here: a ``started`` record opens one and the
+    ``finished`` record sharing its ``job_id`` closes it, so one try is one
+    attempt however many records described it.
+    """
     planned: list[Unit] = []
     seen: set[Unit] = set()
-    attempts: dict[Unit, list[AttemptRecord]] = {}
-    # A retry asks for another go; the next attempt answers it. Reading the
+    attempts: dict[Unit, list[Attempt]] = {}
+    open_attempts: dict[tuple[Unit, str], int] = {}
+    # A retry asks for another go; the next start answers it. Reading the
     # records in order is what decides which of the two came last.
     pending: dict[Unit, bool] = {}
+
     for record in records:
-        if isinstance(record, (CampaignHeader, StateRecord)):
+        if isinstance(record, (CampaignHeader, LifecycleRecord)):
             continue
         if isinstance(record, PlanRecord):
             if record.unit not in seen:
@@ -491,8 +573,39 @@ def reduce_units(records: Iterable[Record]) -> list[UnitStatus]:
                 planned.append(record.unit)
         elif isinstance(record, RetryRecord):
             pending[record.unit] = True
-        else:
-            attempts.setdefault(record.unit, []).append(record)
+        elif isinstance(record, AttemptStarted):
+            started = attempts.setdefault(record.unit, [])
+            open_attempts[(record.unit, record.job_id)] = len(started)
+            started.append(
+                Attempt(
+                    job_id=record.job_id,
+                    install_from=record.install_from,
+                    started_at=record.at,
+                )
+            )
+            pending[record.unit] = False
+        elif isinstance(record, AttemptFinished):
+            index = open_attempts.pop((record.unit, record.job_id), None)
+            if index is None:
+                # A finish with no start: recorded out of band rather than
+                # by a lane. Stand it up as a whole attempt of its own.
+                attempts.setdefault(record.unit, []).append(
+                    Attempt(
+                        job_id=record.job_id,
+                        started_at=record.at,
+                        outcome=record.outcome,
+                        finished_at=record.at,
+                    )
+                )
+            else:
+                opened = attempts[record.unit][index]
+                attempts[record.unit][index] = Attempt(
+                    job_id=opened.job_id,
+                    install_from=opened.install_from,
+                    started_at=opened.started_at,
+                    outcome=record.outcome,
+                    finished_at=record.at,
+                )
             pending[record.unit] = False
 
     statuses = []
@@ -502,7 +615,7 @@ def reduce_units(records: Iterable[Record]) -> list[UnitStatus]:
         statuses.append(
             UnitStatus(
                 unit=unit,
-                state=current.state if current else UNATTEMPTED,
+                state=_unit_state(current),
                 job_id=current.job_id if current else None,
                 attempts=unit_attempts,
                 retry_pending=pending.get(unit, False),
@@ -518,7 +631,7 @@ def select_next(
     if limit < 1:
         raise CampaignError("limit must be positive")
     unattempted = [s for s in statuses if s.state == UNATTEMPTED]
-    retryable = [s for s in statuses if s.state in PROBLEM_STATES]
+    retryable = [s for s in statuses if s.state in PROBLEM_OUTCOMES]
     return (unattempted + retryable)[:limit]
 
 
@@ -554,14 +667,14 @@ def count_states(statuses: Iterable[UnitStatus]) -> dict[str, int]:
 
 
 def problems(statuses: Iterable[UnitStatus]) -> list[UnitStatus]:
-    return [s for s in statuses if s.state in PROBLEM_STATES]
+    return [s for s in statuses if s.state in PROBLEM_OUTCOMES]
 
 
 def running(statuses: Iterable[UnitStatus]) -> list[UnitStatus]:
     return [s for s in statuses if s.state == "running"]
 
 
-def _completed_state(result: dict[str, Any]) -> str:
+def _completed_outcome(result: dict[str, Any]) -> str:
     summary = result.get("summary")
     if summary is None:
         return "error"
@@ -602,45 +715,50 @@ def _completed_state(result: dict[str, Any]) -> str:
             return "skipped"
 
     raise CampaignError(
-        "cannot classify scenario counts {}; record an explicit state".format(
-            counts
-        )
+        "cannot classify scenario counts {}; record an explicit "
+        "outcome".format(counts)
     )
 
 
-def attempt_from_mcp(unit: Unit, result: Any) -> AttemptRecord:
-    """Map one MCP start or wait payload onto a single attempt."""
+def finished_from_mcp(unit: Unit, result: Any) -> AttemptFinished:
+    """Map one completed MCP job payload onto a finished attempt.
+
+    Only a completed job can be recorded this way. A job still in flight is
+    the scheduler's business -- it wrote the ``started`` record itself and
+    will write the finish -- so handing one here means something is being
+    recorded that nobody has an outcome for yet.
+    """
     if not isinstance(result, dict):
         raise CampaignError("each MCP result must be a JSON object")
 
     status = result.get("status")
-    if status not in (*MCP_RUNNING_STATUSES, MCP_COMPLETED):
+    if status != MCP_COMPLETED:
         raise CampaignError(
-            "cannot record an attempt for MCP status '{}'".format(status)
+            "cannot record an outcome for MCP status '{}'; only a "
+            "completed job has one".format(status)
         )
     if "job_id" not in result:
         raise CampaignError("MCP result is missing 'job_id'")
 
-    state = _completed_state(result) if status == MCP_COMPLETED else "running"
-    return AttemptRecord(
+    return AttemptFinished(
         unit=unit,
-        state=state,
         job_id=_text(result, "job_id", "MCP result"),
+        outcome=_completed_outcome(result),
     )
 
 
-def attempts_from_mcp(payload: Any) -> list[AttemptRecord]:
-    """Map ``[{"unit": ..., "result": ...}]`` MCP payloads onto attempts."""
+def finished_from_mcp_payload(payload: Any) -> list[AttemptFinished]:
+    """Map ``[{"unit": ..., "result": ...}]`` MCP payloads onto outcomes."""
     if not isinstance(payload, list) or not payload:
         raise CampaignError("input must be a non-empty JSON array")
 
-    attempts = []
+    finished = []
     for entry in payload:
         body = _require_fields(entry, ("unit", "result"), "MCP entry")
-        attempts.append(
-            attempt_from_mcp(parse_unit(body["unit"]), body["result"])
+        finished.append(
+            finished_from_mcp(parse_unit(body["unit"]), body["result"])
         )
-    return attempts
+    return finished
 
 
 def describe_units(units: Iterable[Unit], limit: int = 5) -> str:
@@ -666,7 +784,7 @@ def lifecycle(records: Sequence[Record]) -> str:
     """
     current = CREATED
     for record in records:
-        if isinstance(record, StateRecord):
+        if isinstance(record, LifecycleRecord):
             current = record.state
 
     if current != RUNNING_STATE:
@@ -685,7 +803,7 @@ def last_state_reason(records: Sequence[Record]) -> str:
     """Return the reason on the most recent lifecycle transition."""
     reason = ""
     for record in records:
-        if isinstance(record, StateRecord):
+        if isinstance(record, LifecycleRecord):
             reason = record.reason
     return reason
 
@@ -695,44 +813,34 @@ class Classification:
     """One finished job mapped onto an attempt.
 
     ``problem`` is set when the job's result could not be classified. The
-    attempt is still recorded, as ``error``, because a scheduler has nobody
+    outcome is still recorded, as ``error``, because a scheduler has nobody
     to raise at and one strange job must not stop a campaign.
     """
 
-    attempt: AttemptRecord
+    finished: AttemptFinished
     problem: str = ""
 
 
-def classify_result(
-    unit: Unit,
-    result: Any,
-    at: str = "",
-    install_from: str = DEFAULT_INSTALL_SOURCE,
-) -> Classification:
-    """Map an MCP job payload onto an attempt. Never raises."""
+def classify_result(unit: Unit, result: Any, at: str = "") -> Classification:
+    """Map a finished MCP job onto an outcome. Never raises."""
     try:
-        attempt = attempt_from_mcp(unit, result)
+        finished = finished_from_mcp(unit, result)
     except CampaignError as error:
         job_id = ""
         if isinstance(result, dict):
             raw_job_id = result.get("job_id")
             job_id = raw_job_id if isinstance(raw_job_id, str) else ""
         return Classification(
-            attempt=AttemptRecord(
-                unit=unit,
-                state="error",
-                job_id=job_id,
-                install_from=install_from,
-                at=at,
+            finished=AttemptFinished(
+                unit=unit, job_id=job_id, outcome="error", at=at
             ),
             problem=str(error),
         )
     return Classification(
-        attempt=AttemptRecord(
-            unit=attempt.unit,
-            state=attempt.state,
-            job_id=attempt.job_id,
-            install_from=install_from,
+        finished=AttemptFinished(
+            unit=finished.unit,
+            job_id=finished.job_id,
+            outcome=finished.outcome,
             at=at,
         )
     )
@@ -792,12 +900,12 @@ def plan_tick(
     in-flight jobs are still recorded, and nothing new begins.
     """
     classified = tuple(
-        classify_result(lane.unit, lane.result, at, lane.install_from)
+        classify_result(lane.unit, lane.result, at)
         for lane in lanes
         if lane.finished
     )
 
-    after = [*records, *(item.attempt for item in classified)]
+    after = [*records, *(item.finished for item in classified)]
     state = lifecycle(after)
     if state != RUNNING_STATE:
         return TickPlan(record=classified, lifecycle=state)
@@ -865,8 +973,8 @@ EVENT_KINDS = (
 )
 EVENT_FAMILIES = ("campaign", "lane", "unit", "anomaly")
 
-# Which unit event an attempt state produces.
-_UNIT_EVENT_FOR_STATE = {
+# Which unit event an outcome produces.
+_UNIT_EVENT_FOR_OUTCOME = {
     "passed": UNIT_PASSED,
     "failed": UNIT_FAILED,
     "skipped": UNIT_SKIPPED,
@@ -964,11 +1072,11 @@ def event_matches(kind: str, patterns: Sequence[str]) -> bool:
     return False
 
 
-def unit_event_kind(state: str, unclassifiable: bool = False) -> str:
-    """The event kind an attempt outcome produces."""
+def unit_event_kind(outcome: str, unclassifiable: bool = False) -> str:
+    """The event kind an outcome produces."""
     if unclassifiable:
         return UNIT_UNCLASSIFIABLE
-    return _UNIT_EVENT_FOR_STATE.get(state, UNIT_ERRORED)
+    return _UNIT_EVENT_FOR_OUTCOME.get(outcome, UNIT_ERRORED)
 
 
 def failure_details(result: Any) -> list[dict[str, str]]:
