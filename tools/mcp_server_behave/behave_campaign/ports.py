@@ -9,9 +9,10 @@ callables rather than Protocols, matching ``behave_mcp.service``.
 """
 
 from pathlib import Path
-from typing import Protocol, Sequence
+from typing import Any, Protocol, Sequence
 
 from behave_campaign.domain import (
+    CampaignError,
     CampaignHeader,
     Filters,
     PlanRecord,
@@ -20,15 +21,19 @@ from behave_campaign.domain import (
 )
 
 
-class CampaignExistsError(Exception):
+# These subclass CampaignError -- and so ValueError -- because they report a
+# caller's mistake, not a bug: asking for a campaign that isn't there, or
+# creating one twice. Front-ends can then handle every campaign failure in
+# one place instead of enumerating store exceptions.
+class CampaignExistsError(CampaignError):
     """Raised when creating a campaign whose id is already taken."""
 
 
-class CampaignNotFoundError(Exception):
+class CampaignNotFoundError(CampaignError):
     """Raised when addressing a campaign that was never created."""
 
 
-class CampaignLockedError(Exception):
+class CampaignLockedError(CampaignError):
     """Raised when a campaign's run lock is held by someone else."""
 
 
@@ -86,7 +91,7 @@ class FeatureReader(Protocol):
         """
         ...
 
-    def available_dimensions(self, repo_root: Path) -> dict[str, object]:
+    def available_dimensions(self, repo_root: Path) -> dict[str, Any]:
         """Return the releases and machine types the feature files can run."""
         ...
 

@@ -32,7 +32,16 @@ class FakeFeatureReader:
         return [unit for unit in self.units if filters.matches_unit(unit)]
 
     def available_dimensions(self, repo_root):
-        return {"releases": [], "machine_types": []}
+        return {
+            "releases": [
+                {"name": "jammy", "scenario_count": 2},
+                {"name": "noble", "scenario_count": 1},
+            ],
+            "machine_types": [
+                {"name": "lxd-container", "scenario_count": 2},
+                {"name": "lxd-vm", "scenario_count": 1},
+            ],
+        }
 
 
 @pytest.fixture
@@ -293,3 +302,201 @@ class TestCampaignStatus:
         assert status.campaign.install_from == "proposed"
         assert status.campaign.max_lanes == 4
         assert status.campaign.created_at == AT
+
+
+class TestDimensions:
+    def test_it_reports_releases_and_machine_types(self, service):
+        result = service.dimensions("/repo")
+
+        assert [v.name for v in result.releases] == ["jammy", "noble"]
+        assert result.releases[0].scenario_count == 2
+        assert [v.name for v in result.machine_types] == [
+            "lxd-container",
+            "lxd-vm",
+        ]
+
+
+def record(service, unit, state, job_id, **kwargs):
+    fields = {
+        "campaign_id": "1234567",
+        "payload": [
+            {
+                "feature": unit.feature,
+                "scenario": unit.scenario,
+                "release": unit.release,
+                "machine_type": unit.machine_type,
+                "state": state,
+                "job_id": job_id,
+            }
+        ],
+        "install_from": "proposed",
+    }
+    fields.update(kwargs)
+    return service.record_attempts(**fields)
+
+
+class TestRecordAttempts:
+    def test_an_attempt_updates_the_unit_state(self, service):
+        create(service)
+
+        result = record(service, UNITS[0], "failed", "job1")
+
+        assert result.campaign.counts.failed == 1
+        assert [u.job_id for u in result.problems] == ["job1"]
+
+    def test_it_stamps_the_install_source_and_time(self, service, store):
+        create(service)
+        record(service, UNITS[0], "passed", "job1")
+
+        attempt = store.replay("1234567")[-1]
+
+        assert attempt.install_from == "proposed"
+        assert attempt.at == AT
+
+    def test_a_pass_supersedes_an_earlier_failure(self, service):
+        create(service)
+        record(service, UNITS[0], "failed", "job1")
+
+        result = record(service, UNITS[0], "passed", "job2")
+
+        assert result.campaign.counts.passed == 1
+        assert result.campaign.counts.failed == 0
+
+    def test_an_unplanned_unit_is_rejected(self, service, store):
+        create(service)
+        before = store.replay("1234567")
+        stranger = Unit("features/z.feature", "Z", "focal", "lxd-vm")
+
+        with pytest.raises(CampaignError) as error:
+            record(service, stranger, "failed", "job1")
+
+        assert "unplanned units" in str(error.value)
+        assert store.replay("1234567") == before
+
+    def test_an_unknown_install_source_is_rejected(self, service):
+        create(service)
+
+        with pytest.raises(CampaignError) as error:
+            record(service, UNITS[0], "passed", "job1", install_from="nope")
+
+        assert "install source" in str(error.value)
+
+    def test_an_empty_payload_is_rejected(self, service):
+        create(service)
+
+        with pytest.raises(CampaignError):
+            service.record_attempts(
+                campaign_id="1234567", payload=[], install_from="proposed"
+            )
+
+    def test_mcp_results_are_classified(self, service):
+        create(service)
+        unit = UNITS[0]
+
+        result = service.record_attempts(
+            campaign_id="1234567",
+            payload=[
+                {
+                    "unit": {
+                        "feature": unit.feature,
+                        "scenario": unit.scenario,
+                        "release": unit.release,
+                        "machine_type": unit.machine_type,
+                    },
+                    "result": {
+                        "status": "completed",
+                        "ok": True,
+                        "job_id": "job-abc",
+                        "summary": {
+                            "scenarios": {"passed": 1},
+                            "features": {"passed": 1},
+                        },
+                    },
+                }
+            ],
+            install_from="proposed",
+            from_mcp=True,
+        )
+
+        assert result.campaign.counts.passed == 1
+
+
+class TestNextUnits:
+    def test_unattempted_units_come_before_problems(self, service):
+        create(service)
+        record(service, UNITS[0], "failed", "job1")
+
+        result = service.next_units(campaign_id="1234567", limit=5)
+
+        assert [u.state for u in result.units] == [
+            "unattempted",
+            "unattempted",
+            "failed",
+        ]
+
+    def test_passing_and_running_units_are_never_returned(self, service):
+        create(service)
+        record(service, UNITS[0], "passed", "job1")
+        record(service, UNITS[1], "running", "job2")
+
+        result = service.next_units(campaign_id="1234567", limit=5)
+
+        assert [u.release for u in result.units] == ["jammy"]
+        assert result.units[0].feature == "features/b.feature"
+
+    def test_the_limit_caps_the_selection(self, service):
+        create(service)
+
+        assert (
+            len(service.next_units(campaign_id="1234567", limit=2).units) == 2
+        )
+
+    def test_filters_narrow_the_selection(self, service):
+        create(service)
+
+        result = service.next_units(
+            campaign_id="1234567", filters=Filters(release=("noble",)), limit=5
+        )
+
+        assert [u.release for u in result.units] == ["noble"]
+
+
+class TestUnitHistory:
+    def test_every_attempt_is_listed_oldest_first(self, service):
+        create(service)
+        record(service, UNITS[0], "failed", "job1")
+        record(service, UNITS[0], "passed", "job2")
+
+        result = service.unit_history(
+            campaign_id="1234567", filters=Filters(release=("jammy",))
+        )
+        attempts = result.units[0].attempts
+
+        assert [(a.state, a.job_id) for a in attempts] == [
+            ("failed", "job1"),
+            ("passed", "job2"),
+        ]
+        assert all(a.install_from == "proposed" for a in attempts)
+
+    def test_units_without_attempts_are_still_listed(self, service):
+        create(service)
+
+        result = service.unit_history(campaign_id="1234567")
+
+        assert len(result.units) == 3
+        assert result.units[0].attempts == []
+
+    def test_the_list_is_capped_and_says_so(self, service):
+        create(service)
+
+        result = service.unit_history(campaign_id="1234567", limit=2)
+
+        assert len(result.units) == 2
+        assert result.truncated
+
+    def test_an_oversized_limit_is_clamped(self, service):
+        create(service)
+
+        result = service.unit_history(campaign_id="1234567", limit=10_000)
+
+        assert result.limit_clamped

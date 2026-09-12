@@ -94,3 +94,46 @@ class CampaignStatusResponse(BaseModel):
     units: list[UnitView] | None = None
     truncated: bool = False
     limit_clamped: bool = False
+
+
+class DimensionValue(BaseModel):
+    """A release or machine_type, with how many scenarios reference it."""
+
+    name: str = ""
+    scenario_count: int = 0
+
+
+class DimensionsResponse(BaseModel):
+    """Releases and machine types the feature files can run."""
+
+    releases: list[DimensionValue] = []
+    machine_types: list[DimensionValue] = []
+
+
+class AttemptView(BaseModel):
+    """One recorded attempt at a unit."""
+
+    state: str = ""
+    job_id: str = ""
+    install_from: str = ""
+    at: str = ""
+
+
+class UnitHistoryView(UnitView):
+    """A unit with every attempt against it, oldest first."""
+
+    attempts: list[AttemptView] = []
+
+
+class NextUnitsResponse(BaseModel):
+    """Units to run next: never-attempted first, then retryable problems."""
+
+    units: list[UnitView] = []
+
+
+class UnitHistoryResponse(BaseModel):
+    """Every selected unit with its full attempt history."""
+
+    units: list[UnitHistoryView] = []
+    truncated: bool = False
+    limit_clamped: bool = False

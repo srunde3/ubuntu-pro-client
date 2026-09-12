@@ -65,6 +65,10 @@ uv run behave-campaign create --campaign T.jsonl --repo-root ../.. \
 uv run behave-campaign create --campaign T.jsonl --repo-root ../.. \
   --campaign-id 1234567
 
+# Record the install source and lane count for a runner to honour.
+uv run behave-campaign create --campaign T.jsonl --repo-root ../.. \
+  --campaign-id 1234567 --install-from proposed --max-lanes 8
+
 # Record started and finished attempts in batches.
 uv run behave-campaign record --campaign T.jsonl --install-from proposed \
   --input attempts.json
@@ -76,13 +80,23 @@ uv run behave-campaign record --campaign T.jsonl --install-from proposed \
 # Ask what to run next, then inspect results.
 uv run behave-campaign next --campaign T.jsonl --limit 4
 uv run behave-campaign status --campaign T.jsonl --state failed
+uv run behave-campaign status --campaign T.jsonl --include-units --limit 50
 uv run behave-campaign history --campaign T.jsonl \
   --feature features/cli/attach.feature
 ```
 
 All commands read `--input` from stdin by default and print JSON to stdout.
 `status`, `next`, and `history` accept the same filters plus `--state`,
-repeatable to allow several values. `status` also reports the campaign header.
+repeatable to allow several values.
+
+The CLI prints the same response shapes the MCP tools return, so counts sit
+under `campaign` alongside the header fields. `status` and `history` omit or
+cap large unit lists the same way: `status` reports counts, in-flight units
+and problems, and lists every selected unit only with `--include-units`.
+
+`create` optionally records `--install-from` and `--max-lanes` for a runner to
+honour later; both are omitted from the file when not given. `--campaign-id`
+defaults to the campaign file's name.
 
 Splitting work across people happens out of band: each person creates their
 own campaign file with the slice they agreed to run.
@@ -152,7 +166,9 @@ Same hexagonal layering as [behave_mcp](../behave_mcp), one module per layer:
 - `discovery.py` -- builds units from the feature files via
   `behave_mcp.parser`.
 - `repo.py` -- reads the checkout state a campaign was built from.
-- `cli.py` -- the standalone front-end.
+- `cli.py` -- the standalone front-end. Wrappers only: read arguments, call
+  the service, print the response as JSON. Behaviour belongs in `service.py`
+  so the CLI and the MCP tools cannot drift apart.
 
 The run lock is an advisory `flock` on `<campaign_id>.lock`, held for as long
 as a campaign is actively scheduling, so a concurrent CLI fails cleanly

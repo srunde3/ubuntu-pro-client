@@ -9,10 +9,11 @@ fakes.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Callable, Sequence
+from typing import Any, Callable, Sequence
 
 from behave_campaign import domain
 from behave_campaign.domain import (
+    AttemptRecord,
     CampaignError,
     CampaignHeader,
     Filters,
@@ -24,13 +25,19 @@ from behave_campaign.domain import (
 from behave_campaign.messages import (
     DEFAULT_UNITS_LIMIT,
     MAX_UNITS_LIMIT,
+    AttemptView,
     CampaignRepo,
     CampaignScope,
     CampaignStatusResponse,
     CampaignSummary,
     CreateCampaignResponse,
+    DimensionsResponse,
+    DimensionValue,
     ListCampaignsResponse,
+    NextUnitsResponse,
     StateCounts,
+    UnitHistoryResponse,
+    UnitHistoryView,
     UnitView,
 )
 from behave_campaign.ports import CampaignStore, FeatureReader
@@ -45,6 +52,21 @@ def _unit_view(status: UnitStatus) -> UnitView:
         state=status.state,
         job_id=status.job_id,
         attempt_count=len(status.attempts),
+    )
+
+
+def _unit_history_view(status: UnitStatus) -> UnitHistoryView:
+    return UnitHistoryView(
+        **_unit_view(status).model_dump(),
+        attempts=[
+            AttemptView(
+                state=attempt.state,
+                job_id=attempt.job_id,
+                install_from=attempt.install_from,
+                at=attempt.at,
+            )
+            for attempt in status.attempts
+        ],
     )
 
 
@@ -87,7 +109,7 @@ class CampaignService:
         features: FeatureReader,
         now: Callable[[], str],
         repo_state: Callable[[Path], RepoState],
-        max_parallel_jobs: int,
+        max_parallel_jobs: int | None = None,
     ) -> None:
         self._store = store
         self._features = features
@@ -104,13 +126,20 @@ class CampaignService:
         machine_types: Sequence[str] = (),
         features: Sequence[str] = (),
         scenarios: Sequence[str] = (),
-        install_from: str = domain.INSTALL_SOURCES[0],
-        max_lanes: int = 1,
+        install_from: str | None = None,
+        max_lanes: int | None = None,
     ) -> CreateCampaignResponse:
-        """Plan a campaign and store it. Starts nothing."""
+        """Plan a campaign and store it. Starts nothing.
+
+        ``install_from`` and ``max_lanes`` are recorded only when given, so a
+        campaign created without them stays readable by anything that predates
+        those fields.
+        """
         domain.validate_campaign_id(campaign_id)
-        domain.validate_install_source(install_from)
-        self._validate_max_lanes(max_lanes)
+        if install_from is not None:
+            domain.validate_install_source(install_from)
+        if max_lanes is not None:
+            self._validate_max_lanes(max_lanes)
 
         filters = Filters(
             feature=tuple(features),
@@ -195,9 +224,136 @@ class CampaignService:
             limit_clamped=clamped,
         )
 
+    def dimensions(self, repo_root: Path) -> DimensionsResponse:
+        """Report the releases and machine types the feature files can run."""
+        raw = self._features.available_dimensions(repo_root)
+        return DimensionsResponse(
+            releases=[DimensionValue(**value) for value in raw["releases"]],
+            machine_types=[
+                DimensionValue(**value) for value in raw["machine_types"]
+            ],
+        )
+
+    def record_attempts(
+        self,
+        *,
+        campaign_id: str,
+        payload: Any,
+        install_from: str,
+        from_mcp: bool = False,
+        filters: Filters = Filters(),
+    ) -> CampaignStatusResponse:
+        """Append attempts to a campaign and report the resulting state.
+
+        ``payload`` is either a list of attempt objects or, with
+        ``from_mcp``, a list of ``{"unit": ..., "result": <MCP payload>}``
+        entries that the domain classifies. An attempt against a unit the
+        campaign never planned is rejected, because it means the scope and
+        the work have diverged.
+        """
+        domain.validate_install_source(install_from)
+        if from_mcp:
+            parsed = domain.attempts_from_mcp(payload)
+        else:
+            if not isinstance(payload, list) or not payload:
+                raise CampaignError("input must be a non-empty JSON array")
+            parsed = [domain.parse_attempt(raw) for raw in payload]
+
+        at = self._now()
+        attempts = [
+            AttemptRecord(
+                unit=attempt.unit,
+                state=attempt.state,
+                job_id=attempt.job_id,
+                install_from=install_from,
+                at=at,
+            )
+            for attempt in parsed
+        ]
+
+        existing = self._store.replay(campaign_id)
+        planned = {
+            record.unit
+            for record in existing
+            if isinstance(record, PlanRecord)
+        }
+        unplanned = {
+            attempt.unit for attempt in attempts if attempt.unit not in planned
+        }
+        if unplanned:
+            raise CampaignError(
+                "{} attempt(s) reference unplanned units: {}".format(
+                    len(unplanned), domain.describe_units(unplanned)
+                )
+            )
+
+        self._store.append(campaign_id, attempts)
+        statuses = [
+            status
+            for status in domain.reduce_units([*existing, *attempts])
+            if filters.matches(status)
+        ]
+        return CampaignStatusResponse(
+            campaign=_summary(campaign_id, _header_of(existing), statuses),
+            running=[
+                _unit_view(status) for status in domain.running(statuses)
+            ],
+            problems=[
+                _unit_view(status) for status in domain.problems(statuses)
+            ],
+        )
+
+    def next_units(
+        self,
+        *,
+        campaign_id: str,
+        filters: Filters = Filters(),
+        limit: int = 1,
+    ) -> NextUnitsResponse:
+        """Report the units to attempt next.
+
+        Never-attempted units come first, then retryable problems. Units
+        that passed, or that are already running, are never returned.
+        """
+        statuses = [
+            status
+            for status in domain.reduce_units(self._store.replay(campaign_id))
+            if filters.matches(status)
+        ]
+        return NextUnitsResponse(
+            units=[
+                _unit_view(status)
+                for status in domain.select_next(statuses, limit)
+            ]
+        )
+
+    def unit_history(
+        self,
+        *,
+        campaign_id: str,
+        filters: Filters = Filters(),
+        limit: int = DEFAULT_UNITS_LIMIT,
+    ) -> UnitHistoryResponse:
+        """Report every selected unit with all of its attempts."""
+        statuses = [
+            status
+            for status in domain.reduce_units(self._store.replay(campaign_id))
+            if filters.matches(status)
+        ]
+        capped, clamped = self._cap(limit)
+        return UnitHistoryResponse(
+            units=[_unit_history_view(status) for status in statuses[:capped]],
+            truncated=len(statuses) > capped,
+            limit_clamped=clamped,
+        )
+
     def _validate_max_lanes(self, max_lanes: int) -> None:
         if max_lanes < 1:
             raise CampaignError("max_lanes must be a positive integer")
+        # The CLI has no server to consult, so it sets no cap; the limit is
+        # enforced wherever a server actually has to honour the lanes.
+        if self._max_parallel_jobs is None:
+            return
         if max_lanes > self._max_parallel_jobs:
             raise CampaignError(
                 "max_lanes {} exceeds the server's concurrent job limit of "

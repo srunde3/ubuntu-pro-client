@@ -1,46 +1,40 @@
-"""Command line interface over the campaign record."""
+"""Command line interface over the campaign record.
+
+Every command is a wrapper: read arguments, call ``CampaignService``, print
+the response as JSON. Behaviour lives in the service, so the CLI and the MCP
+tools cannot drift apart. The only work done here is the work that is
+genuinely a command line's: parsing arguments and reading stdin.
+"""
 
 from __future__ import annotations
 
 import argparse
 import json
 import sys
-from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
-from .adapters import SingleFileCampaignStore, system_now
-from .discovery import available_dimensions, discover_units
-from .domain import (
-    INSTALL_SOURCES,
-    STATES,
-    AttemptRecord,
-    CampaignError,
-    CampaignHeader,
-    Filters,
-    PlanRecord,
-    Record,
-    UnitStatus,
-    attempts_from_mcp,
-    count_states,
-    describe_units,
-    encode_record,
-    parse_attempt,
-    problems,
-    reduce_units,
-    running,
-    select_next,
-)
-from .ports import CampaignExistsError
+from pydantic import BaseModel
+
+from .adapters import ParserFeatureReader, SingleFileCampaignStore, system_now
+from .domain import INSTALL_SOURCES, STATES, Filters
+from .messages import DEFAULT_UNITS_LIMIT
 from .repo import repo_state
+from .service import CampaignService
+
+# The CLI is pointed at one campaign file, so the id is implicit in the path.
+_IMPLICIT_ID = ""
 
 
-def _store(campaign_file: Path) -> SingleFileCampaignStore:
-    return SingleFileCampaignStore(campaign_file)
-
-
-def _read_records(campaign_file: Path) -> list[Record]:
-    return _store(campaign_file).replay("")
+def _service(campaign_file: Path) -> CampaignService:
+    return CampaignService(
+        store=SingleFileCampaignStore(campaign_file),
+        features=ParserFeatureReader(),
+        now=system_now,
+        repo_state=repo_state,
+        # No server is involved, so no lane cap applies here.
+        max_parallel_jobs=None,
+    )
 
 
 def _load_json(source: str) -> Any:
@@ -60,110 +54,58 @@ def _filters(args: argparse.Namespace) -> Filters:
     )
 
 
-def _status_payload(
-    statuses: Sequence[UnitStatus], campaign: CampaignHeader | None = None
-) -> dict[str, Any]:
-    payload: dict[str, Any] = {
-        "counts": count_states(statuses),
-        "running": [status.as_dict() for status in running(statuses)],
-        "problems": [status.as_dict() for status in problems(statuses)],
-    }
-    if campaign is not None:
-        payload["campaign"] = encode_record(campaign)
-    return payload
+def _command_dimensions(args: argparse.Namespace) -> BaseModel:
+    # dimensions reads feature files, not a campaign, so this command takes
+    # no --campaign and the store it is given is never touched.
+    return _service(Path()).dimensions(args.repo_root)
 
 
-def _campaign_of(records: Sequence[Record]) -> CampaignHeader | None:
-    for record in records:
-        if isinstance(record, CampaignHeader):
-            return record
-    return None
-
-
-def _selected(
-    statuses: Sequence[UnitStatus], filters: Filters
-) -> list[UnitStatus]:
-    return [status for status in statuses if filters.matches(status)]
-
-
-def _command_dimensions(args: argparse.Namespace) -> dict[str, Any]:
-    return available_dimensions(args.repo_root)
-
-
-def _command_create(args: argparse.Namespace) -> dict[str, Any]:
-    filters = _filters(args)
-    repo_root = args.repo_root.resolve()
-    units = discover_units(repo_root, filters)
-    if not units:
-        raise CampaignError("no test units matched the requested filters")
-
-    at = system_now()
-    campaign = CampaignHeader(
-        at=at,
-        campaign_id=args.campaign_id,
-        repo=repo_state(repo_root),
-        filters=filters,
-    )
-    plans = [PlanRecord(unit=unit, at=at) for unit in units]
-    try:
-        _store(args.campaign_file).create("", campaign, plans)
-    except CampaignExistsError as error:
-        raise CampaignError(str(error)) from error
-    records: list[Record] = [campaign, *plans]
-    return _status_payload(reduce_units(records), campaign)
-
-
-def _command_record(args: argparse.Namespace) -> dict[str, Any]:
-    payload = _load_json(args.input)
-    if args.from_mcp:
-        parsed: list[AttemptRecord] = list(attempts_from_mcp(payload))
-    else:
-        if not isinstance(payload, list) or not payload:
-            raise CampaignError("input must be a non-empty JSON array")
-        parsed = [parse_attempt(raw) for raw in payload]
-
-    at = system_now()
-    attempts: list[AttemptRecord] = [
-        replace(attempt, install_from=args.install_from, at=at)
-        for attempt in parsed
-    ]
-    existing = _read_records(args.campaign_file)
-    planned = {r.unit for r in existing if isinstance(r, PlanRecord)}
-    unplanned = {a.unit for a in attempts if a.unit not in planned}
-    if unplanned:
-        raise CampaignError(
-            "{} attempt(s) reference unplanned units: {}".format(
-                len(unplanned), describe_units(unplanned)
-            )
-        )
-
-    _store(args.campaign_file).append("", attempts)
-    statuses = reduce_units([*existing, *attempts])
-    return _status_payload(_selected(statuses, _filters(args)))
-
-
-def _command_status(args: argparse.Namespace) -> dict[str, Any]:
-    records = _read_records(args.campaign_file)
-    statuses = reduce_units(records)
-    return _status_payload(
-        _selected(statuses, _filters(args)), _campaign_of(records)
+def _command_create(args: argparse.Namespace) -> BaseModel:
+    return _service(args.campaign_file).create_campaign(
+        campaign_id=args.campaign_id or args.campaign_file.stem,
+        repo_root=args.repo_root.resolve(),
+        releases=args.release or (),
+        machine_types=args.machine_type or (),
+        features=args.feature or (),
+        scenarios=args.scenario or (),
+        install_from=args.install_from,
+        max_lanes=args.max_lanes,
     )
 
 
-def _command_next(args: argparse.Namespace) -> dict[str, Any]:
-    statuses = reduce_units(_read_records(args.campaign_file))
-    selected = select_next(_selected(statuses, _filters(args)), args.limit)
-    return {"units": [status.as_dict() for status in selected]}
+def _command_record(args: argparse.Namespace) -> BaseModel:
+    return _service(args.campaign_file).record_attempts(
+        campaign_id=_IMPLICIT_ID,
+        payload=_load_json(args.input),
+        install_from=args.install_from,
+        from_mcp=args.from_mcp,
+        filters=_filters(args),
+    )
 
 
-def _command_history(args: argparse.Namespace) -> dict[str, Any]:
-    statuses = reduce_units(_read_records(args.campaign_file))
-    return {
-        "units": [
-            status.as_dict(include_attempts=True)
-            for status in _selected(statuses, _filters(args))
-        ]
-    }
+def _command_status(args: argparse.Namespace) -> BaseModel:
+    return _service(args.campaign_file).campaign_status(
+        campaign_id=_IMPLICIT_ID,
+        filters=_filters(args),
+        include_units=args.include_units,
+        limit=args.limit,
+    )
+
+
+def _command_next(args: argparse.Namespace) -> BaseModel:
+    return _service(args.campaign_file).next_units(
+        campaign_id=_IMPLICIT_ID,
+        filters=_filters(args),
+        limit=args.limit,
+    )
+
+
+def _command_history(args: argparse.Namespace) -> BaseModel:
+    return _service(args.campaign_file).unit_history(
+        campaign_id=_IMPLICIT_ID,
+        filters=_filters(args),
+        limit=args.limit,
+    )
 
 
 def _add_filters(
@@ -181,7 +123,7 @@ def _add_command(
     subparsers: Any,
     name: str,
     help_text: str,
-    handler: Callable[[argparse.Namespace], dict[str, Any]],
+    handler: Callable[[argparse.Namespace], BaseModel],
     with_state: bool = True,
 ) -> argparse.ArgumentParser:
     parser = subparsers.add_parser(name, help=help_text)
@@ -193,6 +135,16 @@ def _add_command(
     return parser
 
 
+def _add_repo_root(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--repo-root",
+        required=True,
+        type=Path,
+        dest="repo_root",
+        help="ubuntu-pro-client checkout holding features/",
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Track behave test units and attempts."
@@ -202,13 +154,7 @@ def build_parser() -> argparse.ArgumentParser:
     dimensions = subparsers.add_parser(
         "dimensions", help="list the releases and machine types available"
     )
-    dimensions.add_argument(
-        "--repo-root",
-        required=True,
-        type=Path,
-        dest="repo_root",
-        help="ubuntu-pro-client checkout holding features/",
-    )
+    _add_repo_root(dimensions)
     dimensions.set_defaults(handler=_command_dimensions)
 
     create = _add_command(
@@ -218,18 +164,29 @@ def build_parser() -> argparse.ArgumentParser:
         _command_create,
         with_state=False,
     )
-    create.add_argument(
-        "--repo-root",
-        required=True,
-        type=Path,
-        dest="repo_root",
-        help="ubuntu-pro-client checkout holding features/",
-    )
+    _add_repo_root(create)
     create.add_argument(
         "--campaign-id",
         default=None,
         dest="campaign_id",
-        help="identifier for this campaign, such as an SRU bug number",
+        help=(
+            "identifier for this campaign, such as an SRU bug number. "
+            "Defaults to the campaign file's name."
+        ),
+    )
+    create.add_argument(
+        "--install-from",
+        default=None,
+        choices=INSTALL_SOURCES,
+        dest="install_from",
+        help="install source every job in this campaign should use",
+    )
+    create.add_argument(
+        "--max-lanes",
+        default=None,
+        type=int,
+        dest="max_lanes",
+        help="how many jobs a runner may keep in flight for this campaign",
     )
 
     record = _add_command(
@@ -252,18 +209,26 @@ def build_parser() -> argparse.ArgumentParser:
         help="where the job installed ubuntu-pro-client from",
     )
 
-    _add_command(
+    status = _add_command(
         subparsers, "status", "show current state per unit", _command_status
     )
+    status.add_argument(
+        "--include-units",
+        action="store_true",
+        dest="include_units",
+        help="list every selected unit, not just counts and problems",
+    )
+    status.add_argument("--limit", type=int, default=DEFAULT_UNITS_LIMIT)
 
     following = _add_command(
         subparsers, "next", "show the units to run next", _command_next
     )
     following.add_argument("--limit", type=int, default=1)
 
-    _add_command(
+    history = _add_command(
         subparsers, "history", "show every attempt per unit", _command_history
     )
+    history.add_argument("--limit", type=int, default=DEFAULT_UNITS_LIMIT)
     return parser
 
 
@@ -282,7 +247,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(str(error), file=sys.stderr)
         return 2
 
-    json.dump(result, sys.stdout, sort_keys=True)
+    json.dump(result.model_dump(), sys.stdout, sort_keys=True)
     sys.stdout.write("\n")
     return 0
 
