@@ -168,6 +168,25 @@ class CampaignControlResponse(BaseModel):
     counts: StateCounts = StateCounts()
 
 
+class ReopenCampaignResponse(BaseModel):
+    """State of a campaign after a cancellation was reversed.
+
+    ``abandoned`` lists units whose jobs nothing was watching any more:
+    reopening records them as errored, so they are retryable rather than
+    running for good. ``rescheduling`` says whether lanes start filling
+    again -- a campaign whose units were all attempted comes back complete,
+    and needs retry_units to give it work.
+    """
+
+    campaign_id: str = ""
+    lifecycle: str = ""
+    reason: str = ""
+    lanes_busy: int = 0
+    counts: StateCounts = StateCounts()
+    abandoned: list[UnitView] = []
+    rescheduling: bool = False
+
+
 class TickReport(BaseModel):
     """What one scheduler tick did.
 

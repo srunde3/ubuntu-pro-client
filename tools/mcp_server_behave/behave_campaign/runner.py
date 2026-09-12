@@ -20,6 +20,7 @@ from typing import Any, Callable, Sequence
 
 from behave_campaign import domain
 from behave_campaign.domain import (
+    AttemptFinished,
     AttemptStarted,
     CampaignError,
     Filters,
@@ -33,6 +34,7 @@ from behave_campaign.domain import (
 )
 from behave_campaign.messages import (
     CampaignControlResponse,
+    ReopenCampaignResponse,
     RetryUnitsResponse,
     StateCounts,
     TickReport,
@@ -51,6 +53,9 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_TICK_INTERVAL_SECONDS = 2.0
 RESTART_REASON = "server_restart"
+# Why a unit was recorded as errored while reopening a campaign: its job
+# outlived the server that was watching it, so nothing will ever report it.
+ABANDONED_REASON = "abandoned_on_reopen"
 
 
 class ThreadTicker:
@@ -148,8 +153,9 @@ class CampaignRunner:
             state = domain.lifecycle(records)
             if state == domain.Lifecycle.CANCELLED:
                 raise CampaignError(
-                    "campaign {!r} was cancelled; create a new one "
-                    "instead".format(campaign_id)
+                    "campaign {!r} was cancelled; reopen it first".format(
+                        campaign_id
+                    )
                 )
             if state == domain.Lifecycle.COMPLETE:
                 raise CampaignError(
@@ -208,7 +214,8 @@ class CampaignRunner:
         """Close the campaign to further scheduling. In-flight lanes drain.
 
         Allowed on a campaign that has already finished, because that is how
-        one is closed against ``retry_units`` reopening it.
+        one is closed against ``retry_units`` picking it up again. Use
+        ``reopen`` to take that back.
         """
         return self._transition(
             campaign_id,
@@ -220,6 +227,124 @@ class CampaignRunner:
                 domain.Lifecycle.COMPLETE,
             ),
         )
+
+    def reopen(
+        self,
+        campaign_id: str,
+        *,
+        reason: str = "",
+        abandon_in_flight: bool = False,
+    ) -> ReopenCampaignResponse:
+        """Take a cancellation back, and put the campaign where it stood.
+
+        The ``cancelled`` record stays where it is; this is appended after
+        it, so a campaign closed by mistake still reads as one that was
+        closed and reopened. A campaign with nothing left unattempted comes
+        back ``complete`` rather than ``running`` -- reopening it is what
+        lets ``retry_units`` reach its failed and skipped units again.
+
+        Units left in flight by a cancel this process is no longer watching
+        have to be dealt with first: ``abandon_in_flight`` records them as
+        errored, which is the only honest reading of a job nothing will
+        ever report on.
+        """
+        with self._guard:
+            records = self._store.replay(campaign_id)
+            state = domain.lifecycle(records)
+            if state != domain.Lifecycle.CANCELLED:
+                raise CampaignError(
+                    "campaign {!r} is {}, not cancelled".format(
+                        campaign_id, state
+                    )
+                )
+            if self._active and self._active != campaign_id:
+                raise CampaignError(
+                    "campaign {!r} is already running; only one campaign "
+                    "runs at a time".format(self._active)
+                )
+
+            # Lanes this process opened are still draining and will report
+            # themselves. Anything else in flight belongs to a job nobody
+            # is watching any more -- a cancel that outlived its server --
+            # and those units would sit running for good.
+            stranded: list[UnitStatus] = []
+            if self._active != campaign_id:
+                stranded = domain.running(domain.reduce_units(records))
+            if stranded and not abandon_in_flight:
+                raise CampaignError(
+                    "campaign {!r} has {} unit(s) in flight that nothing is "
+                    "watching: {}. Check those jobs, then reopen with "
+                    "abandon_in_flight to record them as errored".format(
+                        campaign_id,
+                        len(stranded),
+                        domain.describe_units(
+                            status.unit for status in stranded
+                        ),
+                    )
+                )
+
+            at = self._now()
+            abandoned = [
+                AttemptFinished(
+                    unit=status.unit,
+                    job_id=status.job_id or "",
+                    outcome=domain.Outcome.ERROR,
+                    at=at,
+                )
+                for status in stranded
+            ]
+            reopened = LifecycleRecord(
+                state=domain.Lifecycle.RUNNING, at=at, reason=reason
+            )
+            # Asked of the domain before anything is written, because the
+            # lock is only worth taking for a campaign that will schedule.
+            rescheduling = (
+                domain.lifecycle([*records, *abandoned, reopened])
+                == domain.Lifecycle.RUNNING
+            )
+            taking_lock = rescheduling and self._active != campaign_id
+            if taking_lock:
+                self._lock.acquire(campaign_id)
+            try:
+                self._store.append(campaign_id, [*abandoned, reopened])
+            except Exception:
+                if taking_lock:
+                    self._lock.release(campaign_id)
+                raise
+
+            self._events.append(
+                campaign_id,
+                [
+                    NewEvent(
+                        kind=domain.EventKind.UNIT_ERRORED,
+                        at=at,
+                        data={
+                            **record.unit.as_dict(),
+                            "job_id": record.job_id,
+                            "outcome": record.outcome,
+                            "problem": ABANDONED_REASON,
+                        },
+                    )
+                    for record in abandoned
+                ],
+            )
+            self._emit(
+                campaign_id,
+                domain.EventKind.CAMPAIGN_REOPENED,
+                reason=reason,
+                abandoned=len(abandoned),
+                rescheduling=rescheduling,
+            )
+            if rescheduling:
+                self._active = campaign_id
+                self._start_ticker(campaign_id)
+
+            control = self._control_response(campaign_id)
+            return ReopenCampaignResponse(
+                **control.model_dump(),
+                abandoned=[_unit_view(status) for status in stranded],
+                rescheduling=rescheduling,
+            )
 
     def retry_units(
         self,
@@ -244,8 +369,9 @@ class CampaignRunner:
             state = domain.lifecycle(records)
             if state == domain.Lifecycle.CANCELLED:
                 raise CampaignError(
-                    "campaign {!r} was cancelled; create a new one "
-                    "instead".format(campaign_id)
+                    "campaign {!r} was cancelled; reopen it first".format(
+                        campaign_id
+                    )
                 )
 
             selected = self._select_for_retry(records, filters)
@@ -279,8 +405,10 @@ class CampaignRunner:
             lifecycle = domain.lifecycle(self._store.replay(campaign_id))
             rescheduling = lifecycle == domain.Lifecycle.RUNNING
             if rescheduling:
-                # The ticker stops when a campaign finishes, so a retry on
-                # a completed campaign has to start it again.
+                # The ticker stops when a campaign finishes, and the lock
+                # goes with it, so a retry on a completed campaign has to
+                # take both again.
+                self._lock.acquire(campaign_id)
                 self._active = campaign_id
                 self._start_ticker(campaign_id)
 

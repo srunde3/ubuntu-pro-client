@@ -28,6 +28,7 @@ from behave_campaign.messages import (
     CampaignStatusResponse,
     CreateCampaignResponse,
     ListCampaignsResponse,
+    ReopenCampaignResponse,
     RetryUnitsResponse,
 )
 from behave_campaign.repo import repo_state as read_repo_state
@@ -693,9 +694,9 @@ def campaign_status(
         "Start scheduling a campaign. The server then keeps up to the "
         "campaign's max_lanes behave jobs in flight, records every outcome, "
         "and fills a lane as soon as one frees -- no further calls are "
-        "needed to keep it moving. Only one campaign runs at a time, and a "
-        "cancelled or finished one cannot be started again. Poll "
-        "campaign_status to follow progress."
+        "needed to keep it moving. Only one campaign runs at a time. A "
+        "finished campaign has no work to start, and a cancelled one must "
+        "be reopened first. Poll campaign_status to follow progress."
     )
 )
 def start_campaign(
@@ -733,16 +734,57 @@ def resume_campaign(
 @mcp.tool(
     description=(
         "Close a campaign to further scheduling. Like pause, jobs already "
-        "in flight run to completion and are recorded; unlike pause, this "
-        "cannot be reversed. The campaign's record stays readable. Use it "
-        "when a campaign is not worth continuing -- a broken checkout, or "
-        "infrastructure that is not going to recover."
+        "in flight run to completion and are recorded; unlike pause, it "
+        "also closes a campaign that has already finished, so retry_units "
+        "no longer reaches its failed and skipped units. The campaign's "
+        "record stays readable, and reopen_campaign takes the cancellation "
+        "back. Use it when a campaign is not worth continuing -- a broken "
+        "checkout, or infrastructure that is not going to recover."
     )
 )
 def cancel_campaign(
     campaign_id: CampaignIdArg, repo_root: RepoRoot = ""
 ) -> CampaignControlResponse:
     return campaign_runner(repo_root).cancel(campaign_id)
+
+
+@mcp.tool(
+    description=(
+        "Take a cancellation back, for a campaign cancelled by mistake. "
+        "The cancel stays in the record and this is appended after it. A "
+        "campaign with units still unattempted starts scheduling again; "
+        "one whose units were all attempted comes back complete, which is "
+        "what lets retry_units reach its failed and skipped units -- so "
+        "reopening is usually followed by retry_units, not start_campaign. "
+        "If a cancel left jobs in flight that no running server is "
+        "watching any more, this refuses and names those units; pass "
+        "abandon_in_flight to record them as errored and reopen anyway."
+    )
+)
+def reopen_campaign(
+    campaign_id: CampaignIdArg,
+    reason: Annotated[
+        str,
+        Field(
+            default="",
+            description="Why the cancellation is being taken back.",
+        ),
+    ] = "",
+    abandon_in_flight: Annotated[
+        bool,
+        Field(
+            default=False,
+            description=(
+                "Record units left in flight as errored instead of "
+                "refusing to reopen."
+            ),
+        ),
+    ] = False,
+    repo_root: RepoRoot = "",
+) -> ReopenCampaignResponse:
+    return campaign_runner(repo_root).reopen(
+        campaign_id, reason=reason, abandon_in_flight=abandon_in_flight
+    )
 
 
 @mcp.tool(

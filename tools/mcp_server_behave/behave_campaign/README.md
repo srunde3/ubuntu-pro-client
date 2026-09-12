@@ -19,7 +19,7 @@ current state. Six record types:
 | `plan` | once per unit, at creation | this unit is in scope |
 | `started` | a lane opens | a job began for this unit, and what it installs from |
 | `finished` | that job ends | what it established: `passed`, `failed`, `skipped` or `error` |
-| `lifecycle` | a control verb | the campaign was started, paused or cancelled, and why |
+| `lifecycle` | a control verb | the campaign was started, paused, cancelled or reopened, and why |
 | `retry` | `retry_units` | someone asked for another go at a unit |
 
 One try at a unit is one job, written as two records. Both are needed: the
@@ -177,7 +177,9 @@ write the same files the CLI does, under the directory named by
   `max_lanes` jobs in flight and fills a lane as soon as one frees, with no
   further calls needed to keep it moving.
 - `pause_campaign` / `resume_campaign` -- stop and restart lane opening.
-- `cancel_campaign` -- close a campaign to further scheduling, for good.
+- `cancel_campaign` -- close a campaign to further scheduling, including
+  one that has already finished.
+- `reopen_campaign` -- take a cancellation back, for one made by mistake.
 - `await_campaign_events` -- wait for news, with a cursor.
 - `retry_units` -- ask for another attempt at units that already had one.
 - `kill_job` -- terminate a job that has hung.
@@ -189,7 +191,7 @@ is how a watcher hears about it promptly.
 
 | Family | Kinds |
 | --- | --- |
-| `campaign.*` | `created`, `started`, `paused`, `resumed`, `cancelled`, `complete` |
+| `campaign.*` | `created`, `started`, `paused`, `resumed`, `cancelled`, `reopened`, `complete` |
 | `lane.*` | `started`, `released`, `overdue` |
 | `unit.*` | `passed`, `failed`, `skipped`, `errored`, `unclassifiable`, `retried` |
 | `anomaly.*` | `repeated_scenario_failure`, `repeated_skips`, `capacity_starved` |
@@ -226,6 +228,11 @@ once nothing is unattempted or in flight. `paused` and `cancelled` are asked
 for; `complete` is derived from the counts, so it can never disagree with the
 units.
 
+The latest `lifecycle` record is the current state, so a state is a position
+rather than a door that locks behind you. `reopen_campaign` uses that: it
+appends a `running` record after a `cancelled` one, leaving both in the file,
+so a campaign closed by mistake reads as one that was closed and reopened.
+
 Both `pause` and `cancel` **drain**: they stop opening lanes, but jobs already
 in flight run to completion and their results are still recorded. `lanes_busy`
 in the response says how many are still draining. Nothing kills a job.
@@ -239,7 +246,22 @@ becomes schedulable again when it carries one newer than its last attempt --
 the file still says who asked and when, and running it appends a `running`
 attempt that clears the request. Retrying a campaign that had finished starts
 it scheduling again; a paused one accepts the request and stays paused.
-Cancelling is what closes a campaign against being reopened this way.
+
+Cancelling is what closes a campaign against being picked up this way, which
+is the only thing `cancel` does that `pause` cannot -- a finished campaign
+cannot be paused. So cancel a run to say it is over, not to stop it for now.
+A campaign cancelled by mistake is not lost: `reopen_campaign` puts it back
+where it stood. One with units still unattempted starts scheduling again; one
+whose units were all attempted comes back `complete`, and `retry_units` then
+reaches its failed and skipped units as before.
+
+Reopening does not recover jobs, only the campaign. A cancel that left lanes
+in flight and then outlived its server leaves units `running` against jobs
+nothing will ever report on, and `reopen_campaign` refuses while it can see
+them rather than scheduling around units that can never resolve. Naming
+`abandon_in_flight` records them as `error`, with `abandoned_on_reopen` on
+the `unit.errored` event, which makes them retryable like any other
+failure.
 
 Lane state lives in the record, not in memory: a unit in flight is one whose
 latest attempt is `running`, written before the lane is released. That is what

@@ -371,6 +371,38 @@ async def test_cancel_closes_the_campaign(repo, runner):
 
 
 @pytest.mark.asyncio
+async def test_reopen_takes_a_cancellation_back(repo, runner):
+    async with create_connected_server_and_client_session(mcp) as client:
+        await client.call_tool("create_campaign", {"campaign_id": "1234567"})
+        await client.call_tool("start_campaign", {"campaign_id": "1234567"})
+        await client.call_tool("cancel_campaign", {"campaign_id": "1234567"})
+        reopened = await client.call_tool(
+            "reopen_campaign",
+            {"campaign_id": "1234567", "reason": "cancelled by mistake"},
+        )
+        restarted = await client.call_tool(
+            "start_campaign", {"campaign_id": "1234567"}
+        )
+
+    assert result_json(reopened)["lifecycle"] == "running"
+    assert result_json(reopened)["reason"] == "cancelled by mistake"
+    assert result_json(reopened)["abandoned"] == []
+    assert result_json(restarted)["lifecycle"] == "running"
+
+
+@pytest.mark.asyncio
+async def test_reopening_a_live_campaign_is_an_error(repo, runner):
+    async with create_connected_server_and_client_session(mcp) as client:
+        await client.call_tool("create_campaign", {"campaign_id": "1234567"})
+        await client.call_tool("start_campaign", {"campaign_id": "1234567"})
+        result = await client.call_tool(
+            "reopen_campaign", {"campaign_id": "1234567"}
+        )
+
+    assert "not cancelled" in result_error_text(result)
+
+
+@pytest.mark.asyncio
 async def test_a_started_campaign_fills_lanes_on_its_tick(repo, runner):
     async with create_connected_server_and_client_session(mcp) as client:
         await client.call_tool(

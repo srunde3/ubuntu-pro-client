@@ -68,7 +68,8 @@ schedules it: the server keeps up to the campaign's `max_lanes` behave jobs in
 flight, records every outcome, and fills a lane as soon as one frees, with no
 further calls needed to keep it moving. `pause_campaign`, `resume_campaign`
 and `cancel_campaign` control it; pause and cancel both let in-flight jobs
-finish rather than killing them.
+finish rather than killing them. `reopen_campaign` takes a cancellation back,
+for one made by mistake.
 
 Only one campaign schedules at a time, held by an advisory lock so a
 concurrent CLI fails cleanly instead of interleaving writes.

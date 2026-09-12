@@ -15,6 +15,7 @@ from behave_campaign.domain import (
     CampaignHeader,
     Filters,
     Lifecycle,
+    LifecycleRecord,
     PlanRecord,
     RepoState,
     Unit,
@@ -514,6 +515,148 @@ class TestCancel:
             runner.cancel("1234567")
 
 
+class TestReopen:
+    """Taking a cancellation back, for one made by mistake."""
+
+    @staticmethod
+    def _restarted(store, lanes, lock, events):
+        """A second runner over the same files: a server that came back."""
+        return CampaignRunner(
+            store=store,
+            lanes=lanes,
+            lock=lock,
+            events=events,
+            now=lambda: AT,
+            ticker=FakeTicker(),
+        )
+
+    def test_it_puts_a_cancelled_campaign_back_to_work(
+        self, runner, store, lanes
+    ):
+        create(store, max_lanes=1)
+        runner.start("1234567")
+        runner.cancel("1234567")
+
+        response = runner.reopen("1234567", reason="cancelled by mistake")
+        report = runner.tick("1234567")
+
+        assert response.lifecycle == Lifecycle.RUNNING
+        assert response.rescheduling
+        assert report.started == 1
+
+    def test_the_cancellation_stays_in_the_record(self, runner, store):
+        create(store)
+        runner.start("1234567")
+        runner.cancel("1234567")
+
+        runner.reopen("1234567", reason="cancelled by mistake")
+
+        assert [
+            record.state
+            for record in store.replay("1234567")
+            if isinstance(record, LifecycleRecord)
+        ] == [Lifecycle.RUNNING, Lifecycle.CANCELLED, Lifecycle.RUNNING]
+
+    def test_the_reason_is_what_the_campaign_now_reports(self, runner, store):
+        create(store)
+        runner.start("1234567")
+        runner.cancel("1234567")
+
+        response = runner.reopen("1234567", reason="cancelled by mistake")
+
+        assert response.reason == "cancelled by mistake"
+
+    def test_it_takes_the_lock_again(self, runner, store, lock):
+        create(store)
+        runner.start("1234567")
+        runner.cancel("1234567")
+        assert "1234567" not in lock.held
+
+        runner.reopen("1234567")
+
+        assert "1234567" in lock.held
+
+    def test_a_finished_campaign_comes_back_complete_and_retryable(
+        self, runner, store, lanes
+    ):
+        create(store, units=[UNITS[0]], max_lanes=1)
+        runner.start("1234567")
+        runner.tick("1234567")
+        lanes.finish("job1", passed=0, failed=1)
+        runner.tick("1234567")
+        runner.cancel("1234567")
+
+        response = runner.reopen("1234567")
+
+        # Nothing to schedule until someone asks for the failure again,
+        # which is exactly what reopening it was for.
+        assert response.lifecycle == Lifecycle.COMPLETE
+        assert not response.rescheduling
+        assert runner.retry_units("1234567").requeued == 1
+
+    def test_reopening_a_campaign_that_was_not_cancelled_is_rejected(
+        self, runner, store
+    ):
+        create(store)
+        runner.start("1234567")
+
+        with pytest.raises(CampaignError) as error:
+            runner.reopen("1234567")
+
+        assert "not cancelled" in str(error.value)
+
+    def test_lanes_still_draining_are_left_to_report_themselves(
+        self, runner, store, lanes
+    ):
+        create(store, max_lanes=1)
+        runner.start("1234567")
+        runner.tick("1234567")
+        runner.cancel("1234567")
+
+        response = runner.reopen("1234567")
+        lanes.finish("job1")
+        report = runner.tick("1234567")
+
+        assert response.abandoned == []
+        assert response.lanes_busy == 1
+        assert report.recorded == 1
+
+    def test_jobs_nothing_is_watching_stop_a_reopen(
+        self, runner, store, lanes, lock, events
+    ):
+        create(store, max_lanes=1)
+        runner.start("1234567")
+        runner.tick("1234567")
+        runner.cancel("1234567")
+        restarted = self._restarted(store, lanes, lock, events)
+
+        with pytest.raises(CampaignError) as error:
+            restarted.reopen("1234567")
+
+        assert "nothing is watching" in str(error.value)
+        assert UNITS[0].scenario in str(error.value)
+
+    def test_abandoning_them_records_them_as_errored(
+        self, runner, store, lanes, lock, events
+    ):
+        create(store, units=[UNITS[0]], max_lanes=1)
+        runner.start("1234567")
+        runner.tick("1234567")
+        runner.cancel("1234567")
+        restarted = self._restarted(store, lanes, lock, events)
+
+        response = restarted.reopen("1234567", abandon_in_flight=True)
+
+        assert [unit.scenario for unit in response.abandoned] == [
+            UNITS[0].scenario
+        ]
+        assert response.counts.running == 0
+        assert response.counts.error == 1
+        assert [
+            status.state for status in reduce_units(store.replay("1234567"))
+        ] == ["error"]
+
+
 class TestRecover:
     def test_a_campaign_left_running_comes_back_paused(self, runner, store):
         create(store)
@@ -779,6 +922,41 @@ class TestEvents:
             "campaign.resumed",
             "campaign.cancelled",
         ]
+
+    def test_reopening_is_announced_with_its_reason(
+        self, runner, store, events
+    ):
+        create(store)
+        runner.start("1234567")
+        runner.cancel("1234567")
+        runner.reopen("1234567", reason="cancelled by mistake")
+
+        reopened = events.read(
+            "1234567", since_seq=0, kinds=["campaign.reopened"], limit=10
+        )
+
+        assert len(reopened) == 1
+        assert reopened[0].data["reason"] == "cancelled by mistake"
+        assert reopened[0].data["abandoned"] == 0
+
+    def test_an_abandoned_unit_is_announced_as_errored(
+        self, runner, store, lanes, lock, events
+    ):
+        create(store, units=[UNITS[0]], max_lanes=1)
+        runner.start("1234567")
+        runner.tick("1234567")
+        runner.cancel("1234567")
+        restarted = TestReopen._restarted(store, lanes, lock, events)
+
+        restarted.reopen("1234567", abandon_in_flight=True)
+
+        errored = events.read(
+            "1234567", since_seq=0, kinds=["unit.errored"], limit=10
+        )
+
+        assert len(errored) == 1
+        assert errored[0].data["job_id"] == "job1"
+        assert errored[0].data["problem"] == "abandoned_on_reopen"
 
     def test_an_opened_lane_is_announced_with_its_job(
         self, runner, store, events, lanes

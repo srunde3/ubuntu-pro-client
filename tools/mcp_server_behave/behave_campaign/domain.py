@@ -844,6 +844,11 @@ def lifecycle(records: Sequence[Record]) -> str:
     nothing left unattempted and nothing in flight is finished, whether or
     not anyone noticed. Problem units do not count as remaining work,
     because a non-passing unit is only ever retried when asked for.
+
+    The latest lifecycle record wins, which is what lets a cancellation be
+    reversed: the ``cancelled`` record stays where it is and a ``running``
+    one is appended after it, so the campaign goes back to work with both
+    still readable.
     """
     current = Lifecycle.CREATED
     for record in records:
@@ -1017,6 +1022,7 @@ class EventKind(_StringEnum):
     CAMPAIGN_PAUSED = "campaign.paused"
     CAMPAIGN_RESUMED = "campaign.resumed"
     CAMPAIGN_CANCELLED = "campaign.cancelled"
+    CAMPAIGN_REOPENED = "campaign.reopened"
     CAMPAIGN_COMPLETE = "campaign.complete"
     LANE_STARTED = "lane.started"
     LANE_RELEASED = "lane.released"
