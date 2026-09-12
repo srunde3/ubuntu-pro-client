@@ -196,15 +196,16 @@ def campaign_runner(repo_root: str) -> CampaignRunner:
     """
     global _runner
     campaign_dir = _campaign_dir(repo_root)
+    # Resolved before the guard, which is not reentrant, and so that the
+    # runner shares the one log rather than quietly making a second.
+    events = campaign_events(campaign_dir)
     with _runner_guard:
         if _runner is None:
             _runner = CampaignRunner(
                 store=JsonlCampaignStore(campaign_dir),
                 lanes=ServiceLaneRunner(_service),
                 lock=FileCampaignRunLock(campaign_dir),
-                events=(
-                    JsonlEventLog(campaign_dir) if _events is None else _events
-                ),
+                events=events,
                 now=system_now,
             )
         return _runner
