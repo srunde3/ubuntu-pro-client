@@ -1,8 +1,8 @@
 """Build a campaign of test units directly from behave feature files.
 
-Discovery parses the corpus with ``behave_mcp.parser``, the same parser that
-selects scenarios at run time, so a campaign covers exactly the combinations
-each scenario supports rather than a Cartesian product.
+Discovery parses the feature files with ``behave_mcp.parser``, the same
+parser that selects scenarios at run time, so a campaign covers exactly the
+combinations each scenario supports rather than a Cartesian product.
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ def _feature_details(repo_root: Path) -> list[Any]:
 
 
 def available_dimensions(repo_root: Path) -> dict[str, Any]:
-    """Return the releases and machine types the corpus can run."""
+    """Return the releases and machine types the feature files can run."""
     dimensions = parser.aggregate_dimensions(_feature_details(repo_root))
     return {
         "releases": [
@@ -68,7 +68,7 @@ def _reject_unknown(
 
 
 def discover_units(repo_root: Path, filters: Filters) -> list[Unit]:
-    """Return every unit in the feature corpus matching the filters."""
+    """Return every unit in the feature files matching the filters."""
     details = _feature_details(repo_root)
 
     dimensions = parser.aggregate_dimensions(details)

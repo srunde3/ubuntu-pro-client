@@ -46,14 +46,14 @@ It also exposes a health endpoint at `/healthz` for basic checks.
 
 ## Campaigns
 
-This project also ships a `campaign` package: the durable record of which test
+This project also ships a `behave_campaign` package: the durable record of which test
 units are in scope for a verification run, what has been attempted, and what to
 run next. The server's job history is a bounded window, so an SRU campaign that
 runs for days is recorded there instead.
 
 It is usable on its own through the `behave-campaign` CLI, and shares this
 project's `pyproject.toml`, virtualenv, and CI job. See
-[campaign/README.md](campaign/README.md) for the record format, the CLI, and
+[behave_campaign/README.md](behave_campaign/README.md) for the record format, the CLI, and
 how MCP job results map onto attempts. No MCP tool drives a campaign yet -- see
 [Introduce test campaign APIs](#introduce-test-campaign-apis) below.
 

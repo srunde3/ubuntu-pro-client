@@ -1,9 +1,9 @@
 import pytest
 
-from campaign.domain import (
+from behave_campaign.domain import (
     AttemptRecord,
     CampaignError,
-    CampaignRecord,
+    CampaignHeader,
     Filters,
     PlanRecord,
     RepoState,
@@ -108,7 +108,7 @@ class TestSelectNext:
 class TestRecordRoundTrip:
     def test_every_record_type_survives_encoding(self):
         records = [
-            CampaignRecord(
+            CampaignHeader(
                 at=AT,
                 campaign_id="1234567",
                 repo=RepoState(
@@ -130,7 +130,7 @@ class TestRecordRoundTrip:
         ] == records
 
     def test_campaign_without_an_id_survives_encoding(self):
-        campaign = CampaignRecord(at=AT, repo=RepoState(root="/repo"))
+        campaign = CampaignHeader(at=AT, repo=RepoState(root="/repo"))
 
         assert parse_record(encode_record(campaign)) == campaign
 

@@ -18,7 +18,7 @@ from .domain import (
     STATES,
     AttemptRecord,
     CampaignError,
-    CampaignRecord,
+    CampaignHeader,
     Filters,
     PlanRecord,
     Record,
@@ -41,12 +41,12 @@ def _now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _read_records(tracker: Path) -> list[Record]:
-    if not tracker.exists():
+def _read_records(campaign_file: Path) -> list[Record]:
+    if not campaign_file.exists():
         return []
 
     records: list[Record] = []
-    with tracker.open("r") as stream:
+    with campaign_file.open("r") as stream:
         for number, line in enumerate(stream, 1):
             if not line.strip():
                 continue
@@ -54,15 +54,15 @@ def _read_records(tracker: Path) -> list[Record]:
                 records.append(parse_record(json.loads(line)))
             except ValueError as error:
                 raise CampaignError(
-                    "invalid tracker record on line {}: {}".format(
+                    "invalid campaign record on line {}: {}".format(
                         number, error
                     )
                 ) from error
     return records
 
 
-def _append_records(tracker: Path, records: Sequence[Record]) -> None:
-    tracker.parent.mkdir(parents=True, exist_ok=True)
+def _append_records(campaign_file: Path, records: Sequence[Record]) -> None:
+    campaign_file.parent.mkdir(parents=True, exist_ok=True)
     payload = "".join(
         json.dumps(
             encode_record(record), sort_keys=True, separators=(",", ":")
@@ -70,7 +70,7 @@ def _append_records(tracker: Path, records: Sequence[Record]) -> None:
         + "\n"
         for record in records
     )
-    with tracker.open("a") as stream:
+    with campaign_file.open("a") as stream:
         fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
         try:
             stream.write(payload)
@@ -98,7 +98,7 @@ def _filters(args: argparse.Namespace) -> Filters:
 
 
 def _status_payload(
-    statuses: Sequence[UnitStatus], campaign: CampaignRecord | None = None
+    statuses: Sequence[UnitStatus], campaign: CampaignHeader | None = None
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "counts": count_states(statuses),
@@ -110,9 +110,9 @@ def _status_payload(
     return payload
 
 
-def _campaign_of(records: Sequence[Record]) -> CampaignRecord | None:
+def _campaign_of(records: Sequence[Record]) -> CampaignHeader | None:
     for record in records:
-        if isinstance(record, CampaignRecord):
+        if isinstance(record, CampaignHeader):
             return record
     return None
 
@@ -127,11 +127,11 @@ def _command_dimensions(args: argparse.Namespace) -> dict[str, Any]:
     return available_dimensions(args.repo_root)
 
 
-def _command_init(args: argparse.Namespace) -> dict[str, Any]:
-    existing = _read_records(args.tracker)
+def _command_create(args: argparse.Namespace) -> dict[str, Any]:
+    existing = _read_records(args.campaign_file)
     if existing:
         raise CampaignError(
-            "tracker already holds a campaign; start a new tracker instead"
+            "this file already holds a campaign; create a new one instead"
         )
 
     filters = _filters(args)
@@ -141,7 +141,7 @@ def _command_init(args: argparse.Namespace) -> dict[str, Any]:
         raise CampaignError("no test units matched the requested filters")
 
     at = _now()
-    campaign = CampaignRecord(
+    campaign = CampaignHeader(
         at=at,
         campaign_id=args.campaign_id,
         repo=repo_state(repo_root),
@@ -151,7 +151,7 @@ def _command_init(args: argparse.Namespace) -> dict[str, Any]:
         campaign,
         *(PlanRecord(unit=unit, at=at) for unit in units),
     ]
-    _append_records(args.tracker, records)
+    _append_records(args.campaign_file, records)
     return _status_payload(reduce_units(records), campaign)
 
 
@@ -169,7 +169,7 @@ def _command_record(args: argparse.Namespace) -> dict[str, Any]:
         replace(attempt, install_from=args.install_from, at=at)
         for attempt in parsed
     ]
-    existing = _read_records(args.tracker)
+    existing = _read_records(args.campaign_file)
     planned = {r.unit for r in existing if isinstance(r, PlanRecord)}
     unplanned = {a.unit for a in attempts if a.unit not in planned}
     if unplanned:
@@ -179,13 +179,13 @@ def _command_record(args: argparse.Namespace) -> dict[str, Any]:
             )
         )
 
-    _append_records(args.tracker, attempts)
+    _append_records(args.campaign_file, attempts)
     statuses = reduce_units([*existing, *attempts])
     return _status_payload(_selected(statuses, _filters(args)))
 
 
 def _command_status(args: argparse.Namespace) -> dict[str, Any]:
-    records = _read_records(args.tracker)
+    records = _read_records(args.campaign_file)
     statuses = reduce_units(records)
     return _status_payload(
         _selected(statuses, _filters(args)), _campaign_of(records)
@@ -193,13 +193,13 @@ def _command_status(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def _command_next(args: argparse.Namespace) -> dict[str, Any]:
-    statuses = reduce_units(_read_records(args.tracker))
+    statuses = reduce_units(_read_records(args.campaign_file))
     selected = select_next(_selected(statuses, _filters(args)), args.limit)
     return {"units": [status.as_dict() for status in selected]}
 
 
 def _command_history(args: argparse.Namespace) -> dict[str, Any]:
-    statuses = reduce_units(_read_records(args.tracker))
+    statuses = reduce_units(_read_records(args.campaign_file))
     return {
         "units": [
             status.as_dict(include_attempts=True)
@@ -227,7 +227,9 @@ def _add_command(
     with_state: bool = True,
 ) -> argparse.ArgumentParser:
     parser = subparsers.add_parser(name, help=help_text)
-    parser.add_argument("--tracker", required=True, type=Path)
+    parser.add_argument(
+        "--campaign", required=True, type=Path, dest="campaign_file"
+    )
     _add_filters(parser, with_state=with_state)
     parser.set_defaults(handler=handler)
     return parser
@@ -251,21 +253,21 @@ def build_parser() -> argparse.ArgumentParser:
     )
     dimensions.set_defaults(handler=_command_dimensions)
 
-    init = _add_command(
+    create = _add_command(
         subparsers,
-        "init",
-        "create the campaign from the feature corpus",
-        _command_init,
+        "create",
+        "create the campaign from the feature files",
+        _command_create,
         with_state=False,
     )
-    init.add_argument(
+    create.add_argument(
         "--repo-root",
         required=True,
         type=Path,
         dest="repo_root",
         help="ubuntu-pro-client checkout holding features/",
     )
-    init.add_argument(
+    create.add_argument(
         "--campaign-id",
         default=None,
         dest="campaign_id",

@@ -146,7 +146,7 @@ class Filters:
 
 
 @dataclass(frozen=True)
-class CampaignRecord:
+class CampaignHeader:
     """How a campaign was created, so it can be recreated and audited."""
 
     at: str = ""
@@ -155,7 +155,7 @@ class CampaignRecord:
     filters: Filters = Filters()
 
 
-Record = CampaignRecord | PlanRecord | AttemptRecord
+Record = CampaignHeader | PlanRecord | AttemptRecord
 
 
 def _require_fields(
@@ -240,7 +240,7 @@ def _parse_stored_attempt(body: dict[str, Any]) -> AttemptRecord:
     )
 
 
-def _parse_campaign(body: dict[str, Any]) -> CampaignRecord:
+def _parse_campaign(body: dict[str, Any]) -> CampaignHeader:
     _require_fields(body, CAMPAIGN_FIELDS, "campaign")
     repo = _require_fields(body["repo"], REPO_FIELDS, "campaign repo")
     scope = _require_fields(body["filters"], SCOPE_FIELDS, "campaign filters")
@@ -268,7 +268,7 @@ def _parse_campaign(body: dict[str, Any]) -> CampaignRecord:
             )
         values[field] = tuple(scope[field])
 
-    return CampaignRecord(
+    return CampaignHeader(
         at=_text(body, "at", "campaign"),
         campaign_id=campaign_id,
         repo=RepoState(
@@ -304,7 +304,7 @@ def parse_record(raw: Any) -> Record:
 
 
 def encode_record(record: Record) -> dict[str, Any]:
-    if isinstance(record, CampaignRecord):
+    if isinstance(record, CampaignHeader):
         return {
             "type": CAMPAIGN,
             "at": record.at,
@@ -340,7 +340,7 @@ def reduce_units(records: Iterable[Record]) -> list[UnitStatus]:
     seen: set[Unit] = set()
     attempts: dict[Unit, list[AttemptRecord]] = {}
     for record in records:
-        if isinstance(record, CampaignRecord):
+        if isinstance(record, CampaignHeader):
             continue
         if isinstance(record, PlanRecord):
             if record.unit not in seen:

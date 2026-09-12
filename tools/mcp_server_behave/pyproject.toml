@@ -25,7 +25,7 @@ lint = [
 
 [project.scripts]
 mcp-server-behave = "behave_mcp.server:main"
-behave-campaign = "campaign.cli:main"
+behave-campaign = "behave_campaign.cli:main"
 
 [build-system]
 requires = ["setuptools>=68"]
@@ -35,7 +35,7 @@ build-backend = "setuptools.build_meta"
 # campaign record it drives. Listed explicitly so setuptools' flat-layout
 # auto-discovery can't quietly drop one when another directory appears here.
 [tool.setuptools.packages.find]
-include = ["behave_mcp*", "campaign*"]
+include = ["behave_mcp*", "behave_campaign*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -57,7 +57,7 @@ line_length = 79
 # Both packages ship from this project. Without this, isort groups them by
 # whether they happen to be installed in the running environment, so the
 # same file passes in one checkout and fails in another.
-known_first_party = ["behave_mcp", "campaign"]
+known_first_party = ["behave_mcp", "behave_campaign"]
 
 [tool.mypy]
 check_untyped_defs = true

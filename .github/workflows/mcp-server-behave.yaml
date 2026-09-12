@@ -32,12 +32,12 @@ jobs:
         run: uv sync --locked --extra lint
       - name: Formatting
         run: |
-          uv run black --check behave_mcp campaign tests
-          uv run isort --check-only behave_mcp campaign tests
+          uv run black --check behave_mcp behave_campaign tests
+          uv run isort --check-only behave_mcp behave_campaign tests
       - name: Style
-        run: uv run flake8 behave_mcp campaign tests
+        run: uv run flake8 behave_mcp behave_campaign tests
       - name: Mypy
-        run: uv run mypy behave_mcp campaign
+        run: uv run mypy behave_mcp behave_campaign
   unit-tests:
     name: Unit Tests
     runs-on: ubuntu-22.04

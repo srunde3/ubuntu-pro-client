@@ -1,7 +1,7 @@
 import pytest
 
-from campaign.discovery import available_dimensions, discover_units
-from campaign.domain import CampaignError, Filters, Unit
+from behave_campaign.discovery import available_dimensions, discover_units
+from behave_campaign.domain import CampaignError, Filters, Unit
 
 FEATURE = """@uses.config.contract_token
 Feature: Example feature

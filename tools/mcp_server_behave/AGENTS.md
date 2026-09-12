@@ -5,12 +5,12 @@ This subproject is a standalone `uv`-managed project with its own
 It ships two top-level packages:
 
 - `behave_mcp` -- a host-side MCP server for running behave scenarios.
-- `campaign` -- the durable record of test units and attempts a campaign runs
-  through. See [campaign/README.md](campaign/README.md).
+- `behave_campaign` -- the durable record of test units and attempts a campaign runs
+  through. See [behave_campaign/README.md](behave_campaign/README.md).
 
-`campaign` imports `behave_mcp.parser`; nothing in `behave_mcp` imports
-`campaign` except the tool wrappers in `server.py`. Keep that direction so the
-module graph stays acyclic and `campaign` remains extractable.
+`behave_campaign` imports `behave_mcp.parser`; nothing in `behave_mcp`
+imports `behave_campaign` except the tool wrappers in `server.py`. Keep that direction so the
+module graph stays acyclic and `behave_campaign` remains extractable.
 
 The root [AGENTS.md](../../AGENTS.md) still applies (terminology, safety
 rules), **except**: this package targets modern Python (>=3.10) and is not
@@ -18,8 +18,8 @@ constrained by the root's Python 3.5/Xenial compatibility requirement.
 
 ## Architecture
 
-Hexagonal/ports-and-adapters, one module per layer. `campaign` follows the
-same layering; its modules are listed in its own README.
+Hexagonal/ports-and-adapters, one module per layer. `behave_campaign` follows
+the same layering; its modules are listed in its own README.
 
 `behave_mcp`:
 
@@ -43,10 +43,10 @@ When adding behavior, prefer changing `domain.py`/`service.py` over `server.py`.
 ```bash
 uv sync --extra test          # or --extra lint
 uv run pytest -q -m "not e2e" # fast tests; e2e need real LXD + a contract token
-uv run black --check behave_mcp campaign tests
-uv run isort --check-only behave_mcp campaign tests
-uv run flake8 behave_mcp campaign tests
-uv run mypy behave_mcp campaign
+uv run black --check behave_mcp behave_campaign tests
+uv run isort --check-only behave_mcp behave_campaign tests
+uv run flake8 behave_mcp behave_campaign tests
+uv run mypy behave_mcp behave_campaign
 ```
 
 CI (`.github/workflows/mcp-server-behave.yaml`) runs these on changes under
@@ -65,7 +65,7 @@ Shared fixtures/test doubles live in `tests/conftest.py`
   tool wrappers over the real MCP protocol (in-process / real subprocess).
 - `test_golden.py` -- byte-shape tests for on-disk serialization; treat
   failures here as a deliberate format change, not a bug to silence.
-- `test_campaign_*.py` -- unit tests for the `campaign` package's layers. The
+- `test_campaign_*.py` -- unit tests for the `behave_campaign` package's layers. The
   `campaign_` prefix is what keeps them from colliding with the `behave_mcp`
   test module of the same layer name (`test_domain.py`).
 

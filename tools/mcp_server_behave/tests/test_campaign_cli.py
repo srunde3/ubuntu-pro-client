@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from campaign.cli import main
+from behave_campaign.cli import main
 
 UNIT_A_JAMMY = ["features/a.feature", "A", "jammy", "lxd-container"]
 UNIT_A_NOBLE = ["features/a.feature", "A", "noble", "lxd-vm"]
@@ -54,7 +54,7 @@ def unit_of(reported):
 
 
 @pytest.fixture
-def tracker(tmp_path):
+def campaign_file(tmp_path):
     return tmp_path / "records.jsonl"
 
 
@@ -68,17 +68,17 @@ def repo(tmp_path):
 
 
 @pytest.fixture
-def run(tmp_path, tracker, repo, capsys):
+def run(tmp_path, campaign_file, repo, capsys):
     def _run(args, payload=None, expect=0):
         if payload is not None:
             source = tmp_path / "input.json"
             source.write_text(json.dumps(payload))
             args = [*args, "--input", str(source)]
-        if args[0] == "init":
+        if args[0] == "create":
             args = [*args, "--repo-root", str(repo)]
         if args[0] == "record" and "--install-from" not in args:
             args = [*args, "--install-from", "proposed"]
-        code = main([*args, "--tracker", str(tracker)])
+        code = main([*args, "--campaign", str(campaign_file)])
         captured = capsys.readouterr()
         assert code == expect, captured.err
         return json.loads(captured.out) if code == 0 else captured.err
@@ -88,7 +88,7 @@ def run(tmp_path, tracker, repo, capsys):
 
 @pytest.fixture
 def planned(run):
-    return run(["init"])
+    return run(["create"])
 
 
 class TestInit:
@@ -104,24 +104,24 @@ class TestInit:
         ]
 
     def test_filters_define_the_campaign(self, run):
-        result = run(["init", "--machine-type", "lxd-vm"])
+        result = run(["create", "--machine-type", "lxd-vm"])
 
         assert result["counts"]["unattempted"] == 1
         history = run(["history"])
         assert [unit_of(unit) for unit in history["units"]] == [UNIT_A_NOBLE]
 
     def test_initialising_twice_is_rejected(self, planned, run):
-        error = run(["init"], expect=2)
+        error = run(["create"], expect=2)
 
         assert "already holds a campaign" in error
 
     def test_unknown_filter_value_is_rejected(self, run):
-        error = run(["init", "--release", "bogus"], expect=2)
+        error = run(["create", "--release", "bogus"], expect=2)
 
         assert "unknown release: bogus" in error
 
-    def test_full_campaign_needs_no_filters(self, run, tracker):
-        result = run(["init", "--campaign-id", "1234567"])
+    def test_full_campaign_needs_no_filters(self, run, campaign_file):
+        result = run(["create", "--campaign-id", "1234567"])
 
         assert result["counts"]["unattempted"] == 3
         assert result["campaign"]["filters"] == {
@@ -133,7 +133,7 @@ class TestInit:
 
     def test_campaign_header_records_how_it_was_built(self, run, repo):
         result = run(
-            ["init", "--campaign-id", "1234567", "--release", "jammy"]
+            ["create", "--campaign-id", "1234567", "--release", "jammy"]
         )
         campaign = result["campaign"]
 
@@ -142,8 +142,8 @@ class TestInit:
         assert campaign["repo"]["root"] == str(repo)
         assert campaign["at"].endswith("Z")
 
-    def test_campaign_header_is_the_first_record(self, planned, tracker):
-        first = json.loads(tracker.read_text().splitlines()[0])
+    def test_campaign_header_is_the_first_record(self, planned, campaign_file):
+        first = json.loads(campaign_file.read_text().splitlines()[0])
 
         assert first["type"] == "campaign"
 
@@ -155,9 +155,9 @@ class TestInit:
 
 class TestRecord:
     def test_attempt_for_unplanned_unit_is_rejected(
-        self, planned, run, tracker
+        self, planned, run, campaign_file
     ):
-        original = tracker.read_text()
+        original = campaign_file.read_text()
         unplanned = attempt(
             ["features/a.feature", "A", "xenial", "lxd-vm"], "failed", "job-1"
         )
@@ -165,7 +165,7 @@ class TestRecord:
         error = run(["record"], [unplanned], expect=2)
 
         assert "unplanned units" in error
-        assert tracker.read_text() == original
+        assert campaign_file.read_text() == original
 
     def test_recorded_pass_supersedes_earlier_failure(self, planned, run):
         run(["record"], [attempt(UNIT_A_JAMMY, "failed", "job-1")])
@@ -187,19 +187,19 @@ class TestRecord:
         assert result["counts"]["running"] == 2
 
     def test_attempts_store_install_source_and_timestamp(
-        self, planned, run, tracker
+        self, planned, run, campaign_file
     ):
         run(
             ["record", "--install-from", "proposed"],
             [attempt(UNIT_A_JAMMY, "passed", "job-1")],
         )
-        stored = json.loads(tracker.read_text().splitlines()[-1])
+        stored = json.loads(campaign_file.read_text().splitlines()[-1])
 
         assert stored["install_from"] == "proposed"
         assert stored["at"].endswith("Z")
 
     def test_unknown_install_source_is_rejected(
-        self, planned, tmp_path, tracker
+        self, planned, tmp_path, campaign_file
     ):
         source = tmp_path / "attempts.json"
         source.write_text(
@@ -210,8 +210,8 @@ class TestRecord:
             main(
                 [
                     "record",
-                    "--tracker",
-                    str(tracker),
+                    "--campaign",
+                    str(campaign_file),
                     "--input",
                     str(source),
                     "--install-from",
@@ -341,7 +341,7 @@ class TestQueries:
             {"state": "passed", "job_id": "job-2"},
         ]
 
-    def test_status_on_missing_tracker_is_empty(self, run):
+    def test_status_on_missing_campaign_file_is_empty(self, run):
         result = run(["status"])
 
         assert result["running"] == []
