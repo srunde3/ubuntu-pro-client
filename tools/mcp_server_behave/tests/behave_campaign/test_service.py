@@ -83,8 +83,8 @@ class TestCreateCampaign:
         result = create(service)
 
         assert result.campaign.total_units == 3
-        assert result.campaign.counts.unattempted == 3
-        assert result.campaign.counts.passed == 0
+        assert result.state.counts.unattempted == 3
+        assert result.state.counts.passed == 0
 
     def test_it_records_how_the_campaign_was_built(self, service):
         result = create(
@@ -173,6 +173,10 @@ class TestListCampaigns:
 
         assert [c.campaign_id for c in result.campaigns] == ["111", "222"]
         assert [c.total_units for c in result.campaigns] == [3, 2]
+        assert [c.lifecycle for c in result.campaigns] == ["created"] * 2
+        # A row says how wide the scope is, not what is in it.
+        assert [c.scope_size.releases for c in result.campaigns] == [0, 1]
+        assert not hasattr(result.campaigns[0], "scope")
 
     def test_it_reports_where_campaigns_live(self, service, store):
         create(service)
@@ -193,7 +197,7 @@ class TestCampaignStatus:
 
         status = service.campaign_status(campaign_id="1234567")
 
-        assert status.campaign.counts.unattempted == 3
+        assert status.state.counts.unattempted == 3
         assert status.running == []
         assert status.problems == []
 
@@ -233,7 +237,7 @@ class TestCampaignStatus:
         status = service.campaign_status(campaign_id="1234567", units_limit=0)
 
         assert status.units is None
-        assert status.campaign.counts.unattempted == 3
+        assert status.state.counts.unattempted == 3
 
     def test_a_negative_units_limit_is_rejected(self, service):
         create(service)
@@ -264,9 +268,9 @@ class TestCampaignStatus:
 
         assert [u.job_id for u in status.running] == ["job1"]
         assert [u.job_id for u in status.problems] == ["job2"]
-        assert status.campaign.counts.running == 1
-        assert status.campaign.counts.failed == 1
-        assert status.campaign.counts.unattempted == 1
+        assert status.state.counts.running == 1
+        assert status.state.counts.failed == 1
+        assert status.state.counts.unattempted == 1
 
     def test_filters_narrow_the_counts(self, service):
         create(service)
@@ -275,7 +279,7 @@ class TestCampaignStatus:
             campaign_id="1234567", filters=Filters(release=("noble",))
         )
 
-        assert status.campaign.counts.unattempted == 1
+        assert status.state.counts.unattempted == 1
 
     def test_a_state_filter_selects_units(self, service, store):
         create(service)
@@ -344,7 +348,7 @@ class TestRecordAttempts:
         result = record(service, UNITS[0], "failed", "job1")
 
         assert result.recorded == 1
-        assert result.campaign.counts.failed == 1
+        assert result.counts.failed == 1
         assert [u.job_id for u in result.problems] == ["job1"]
 
     def test_it_stamps_the_install_source_and_time(self, service, store):
@@ -366,8 +370,8 @@ class TestRecordAttempts:
 
         result = record(service, UNITS[0], "passed", "job2")
 
-        assert result.campaign.counts.passed == 1
-        assert result.campaign.counts.failed == 0
+        assert result.counts.passed == 1
+        assert result.counts.failed == 0
 
     def test_an_unplanned_unit_is_rejected(self, service, store):
         create(service)
@@ -425,7 +429,7 @@ class TestRecordAttempts:
             from_mcp=True,
         )
 
-        assert result.campaign.counts.passed == 1
+        assert result.counts.passed == 1
 
 
 class TestNextUnits:
@@ -542,7 +546,7 @@ class TestAwaitEvents:
 
         assert result.events == []
         assert result.timed_out
-        assert result.campaign.counts.unattempted == 3
+        assert result.counts.unattempted == 3
         assert result.lifecycle == "created"
         assert result.lanes_busy == 0
 

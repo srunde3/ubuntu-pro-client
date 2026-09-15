@@ -39,12 +39,13 @@ async def test_create_campaign_plans_units_without_starting_them(repo):
             "create_campaign", {"campaign_id": "1234567"}
         )
 
-    campaign = result_json(result)["campaign"]
+    payload = result_json(result)
 
-    assert campaign["campaign_id"] == "1234567"
-    assert campaign["total_units"] == 2
-    assert campaign["counts"]["unattempted"] == 2
-    assert campaign["counts"]["running"] == 0
+    assert payload["campaign"]["campaign_id"] == "1234567"
+    assert payload["campaign"]["total_units"] == 2
+    assert payload["state"]["counts"]["unattempted"] == 2
+    assert payload["state"]["counts"]["running"] == 0
+    assert payload["state"]["lifecycle"] == "created"
 
 
 @pytest.mark.asyncio
@@ -136,7 +137,7 @@ async def test_campaign_status_omits_units_by_default(repo):
     assert payload["units"] is None
     assert payload["running"] == []
     assert payload["problems"] == []
-    assert payload["campaign"]["counts"]["unattempted"] == 2
+    assert payload["state"]["counts"]["unattempted"] == 2
 
 
 @pytest.mark.asyncio
@@ -170,7 +171,7 @@ async def test_campaign_status_filters_by_release(repo):
 
     payload = result_json(result)
 
-    assert payload["campaign"]["counts"]["unattempted"] == 1
+    assert payload["state"]["counts"]["unattempted"] == 1
     assert [unit["release"] for unit in payload["units"]] == ["noble"]
 
 
@@ -419,7 +420,7 @@ async def test_a_started_campaign_fills_lanes_on_its_tick(repo, runner):
     payload = result_json(status)
 
     assert len(runner.lanes.started) == 1
-    assert payload["campaign"]["counts"]["running"] == 1
+    assert payload["state"]["counts"]["running"] == 1
     assert len(payload["running"]) == 1
 
 
@@ -459,8 +460,8 @@ async def test_await_events_follows_a_campaign_through_a_lane(repo, runner):
         "unit.passed",
         "unit.passed",
     ]
-    assert payload["campaign"]["counts"]["passed"] == 2
-    assert payload["campaign"]["counts"]["unattempted"] == 0
+    assert payload["counts"]["passed"] == 2
+    assert payload["counts"]["unattempted"] == 0
     assert payload["lifecycle"] == "complete"
 
 
@@ -503,7 +504,7 @@ async def test_an_empty_batch_still_says_where_things_stand(repo, runner):
 
     # This is why there is no heartbeat event: a quiet poll is informative.
     assert payload["events"] == []
-    assert payload["campaign"]["counts"]["unattempted"] == 2
+    assert payload["counts"]["unattempted"] == 2
     assert payload["lifecycle"] == "created"
 
 
@@ -568,7 +569,7 @@ async def test_retry_units_requeues_a_failure(repo, runner, monkeypatch):
                 "campaign_status", {"campaign_id": "1234567"}
             )
         )
-        assert status["campaign"]["counts"]["failed"] == 2
+        assert status["state"]["counts"]["failed"] == 2
 
         retried = result_json(
             await client.call_tool(

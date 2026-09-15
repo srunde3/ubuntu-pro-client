@@ -34,11 +34,10 @@ from behave_campaign.domain import (
 )
 from behave_campaign.messages import (
     CampaignControlResponse,
+    CampaignState,
     ReopenCampaignResponse,
     RetryUnitsResponse,
-    StateCounts,
     TickReport,
-    UnitView,
 )
 from behave_campaign.ports import (
     CampaignRunLock,
@@ -48,6 +47,7 @@ from behave_campaign.ports import (
     LaneStartError,
     Ticker,
 )
+from behave_campaign.views import campaign_state, unit_view
 
 logger = logging.getLogger(__name__)
 
@@ -342,7 +342,7 @@ class CampaignRunner:
             control = self._control_response(campaign_id)
             return ReopenCampaignResponse(
                 **control.model_dump(),
-                abandoned=[_unit_view(status) for status in stranded],
+                abandoned=[unit_view(status) for status in stranded],
                 rescheduling=rescheduling,
             )
 
@@ -413,10 +413,9 @@ class CampaignRunner:
                 self._start_ticker(campaign_id)
 
             return RetryUnitsResponse(
-                campaign_id=campaign_id,
+                **self._state(campaign_id).model_dump(),
                 requeued=len(selected),
-                units=[_unit_view(status) for status in selected],
-                lifecycle=lifecycle,
+                units=[unit_view(status) for status in selected],
                 rescheduling=rescheduling,
             )
 
@@ -732,15 +731,14 @@ class CampaignRunner:
             [LifecycleRecord(state=state, at=self._now(), reason=reason)],
         )
 
+    def _state(self, campaign_id: str) -> CampaignState:
+        return campaign_state(campaign_id, self._store.replay(campaign_id))
+
     def _control_response(self, campaign_id: str) -> CampaignControlResponse:
         records = self._store.replay(campaign_id)
-        statuses = domain.reduce_units(records)
         return CampaignControlResponse(
-            campaign_id=campaign_id,
-            lifecycle=domain.lifecycle(records),
+            **campaign_state(campaign_id, records).model_dump(),
             reason=domain.last_state_reason(records),
-            lanes_busy=len(domain.running(statuses)),
-            counts=StateCounts(**domain.count_states(statuses)),
         )
 
     def _start_ticker(self, campaign_id: str) -> None:
@@ -760,15 +758,6 @@ class CampaignRunner:
         self._lock.release(campaign_id)
         if self._active == campaign_id:
             self._active = None
-
-
-def _unit_view(status: UnitStatus) -> UnitView:
-    return UnitView(
-        **status.unit.as_dict(),
-        state=status.state,
-        job_id=status.job_id,
-        attempt_count=len(status.attempts),
-    )
 
 
 def _is_finished(lifecycle: str, lanes_busy: int) -> bool:

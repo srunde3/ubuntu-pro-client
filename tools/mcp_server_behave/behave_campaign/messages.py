@@ -55,37 +55,68 @@ class CampaignScope(BaseModel):
     machine_type: list[str] = []
 
 
-class CampaignSummary(BaseModel):
-    """A campaign's header plus its current counts."""
+class CampaignHeader(BaseModel):
+    """How a campaign was built. Fixed at creation."""
 
     campaign_id: str = ""
     created_at: str = ""
     install_from: str = ""
     max_lanes: int = 0
     total_units: int = 0
-    counts: StateCounts = StateCounts()
     repo: CampaignRepo = CampaignRepo()
     scope: CampaignScope = CampaignScope()
+
+
+class CampaignState(BaseModel):
+    """Where a campaign stands now.
+
+    Every response that changes or follows a campaign carries this and no
+    more; the header is one ``campaign_status`` away.
+    """
+
+    campaign_id: str = ""
+    lifecycle: str = ""
+    lanes_busy: int = 0
+    counts: StateCounts = StateCounts()
+
+
+class ScopeSize(BaseModel):
+    """How many values each scope filter names. Zero means unrestricted."""
+
+    features: int = 0
+    scenarios: int = 0
+    releases: int = 0
+    machine_types: int = 0
+
+
+class CampaignListing(CampaignState):
+    """One row of ``list_campaigns``: enough to tell campaigns apart."""
+
+    created_at: str = ""
+    install_from: str = ""
+    max_lanes: int = 0
+    total_units: int = 0
+    scope_size: ScopeSize = ScopeSize()
 
 
 class CreateCampaignResponse(BaseModel):
     """Result of creating a campaign. Nothing is running yet."""
 
-    campaign: CampaignSummary = CampaignSummary()
+    campaign: CampaignHeader = CampaignHeader()
+    state: CampaignState = CampaignState()
 
 
 class ListCampaignsResponse(BaseModel):
     """Every stored campaign, oldest id first."""
 
     campaign_dir: str = ""
-    campaigns: list[CampaignSummary] = []
+    campaigns: list[CampaignListing] = []
 
 
-class RecordAttemptsResponse(BaseModel):
+class RecordAttemptsResponse(CampaignState):
     """Result of appending attempts: how many landed, and the state after."""
 
     recorded: int = 0
-    campaign: CampaignSummary = CampaignSummary()
     running: list[UnitView] = []
     problems: list[UnitView] = []
 
@@ -98,7 +129,8 @@ class CampaignStatusResponse(BaseModel):
     and is capped at it, with ``truncated`` saying whether any were dropped.
     """
 
-    campaign: CampaignSummary = CampaignSummary()
+    campaign: CampaignHeader = CampaignHeader()
+    state: CampaignState = CampaignState()
     running: list[UnitView] = []
     problems: list[UnitView] = []
     units: list[UnitView] | None = None
@@ -153,7 +185,7 @@ class UnitHistoryResponse(BaseModel):
     limit_clamped: bool = False
 
 
-class CampaignControlResponse(BaseModel):
+class CampaignControlResponse(CampaignState):
     """State of a campaign after a control verb.
 
     ``lanes_busy`` is what tells a caller whether a pause or cancel has
@@ -161,14 +193,10 @@ class CampaignControlResponse(BaseModel):
     run to completion and are still recorded.
     """
 
-    campaign_id: str = ""
-    lifecycle: str = ""
     reason: str = ""
-    lanes_busy: int = 0
-    counts: StateCounts = StateCounts()
 
 
-class ReopenCampaignResponse(BaseModel):
+class ReopenCampaignResponse(CampaignControlResponse):
     """State of a campaign after a cancellation was reversed.
 
     ``abandoned`` lists units whose jobs nothing was watching any more:
@@ -178,11 +206,6 @@ class ReopenCampaignResponse(BaseModel):
     and needs retry_units to give it work.
     """
 
-    campaign_id: str = ""
-    lifecycle: str = ""
-    reason: str = ""
-    lanes_busy: int = 0
-    counts: StateCounts = StateCounts()
     abandoned: list[UnitView] = []
     rescheduling: bool = False
 
@@ -212,32 +235,27 @@ class EventView(BaseModel):
     data: dict = {}
 
 
-class AwaitEventsResponse(BaseModel):
+class AwaitEventsResponse(CampaignState):
     """A batch of events, plus where the campaign stands.
 
-    ``next_seq`` is the cursor to pass back. The campaign summary is always
-    present, so a batch that came back empty on timeout still says what is
+    ``next_seq`` is the cursor to pass back. The state is always present,
+    so a batch that came back empty on timeout still says what is
     happening -- which is why there is no separate heartbeat event.
     """
 
-    campaign: CampaignSummary = CampaignSummary()
     events: list[EventView] = []
     next_seq: int = 0
     latest_seq: int = 0
-    lanes_busy: int = 0
-    lifecycle: str = ""
     timed_out: bool = False
 
 
-class RetryUnitsResponse(BaseModel):
+class RetryUnitsResponse(CampaignState):
     """Which units were re-queued, and what the campaign is doing now.
 
     ``rescheduling`` says whether lanes will actually start filling: a
     paused campaign accepts retries but stays paused until it is resumed.
     """
 
-    campaign_id: str = ""
     requeued: int = 0
     units: list[UnitView] = []
-    lifecycle: str = ""
     rescheduling: bool = False

@@ -76,8 +76,8 @@ concurrent CLI fails cleanly instead of interleaving writes.
 
 `await_campaign_events` is how a caller follows a running campaign: it blocks
 until something happens, returns every event after a cursor, and always
-reports the campaign's counts and lifecycle -- so an empty batch is still
-informative. Events are filtered by kind (`unit.failed`) or family
+reports the campaign's state -- lifecycle, lanes in flight, counts by unit
+state -- so an empty batch is still informative. Events are filtered by kind (`unit.failed`) or family
 (`unit.*`), and a `unit.failed` event carries the failing steps so a failure
 can be judged without fetching the job's report. `anomaly.*` events and
 `lane.overdue` are derived signals offered for judgement -- repeated skips,

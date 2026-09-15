@@ -118,9 +118,12 @@ seconds, and returns once the campaign is complete or cancelled with no
 lane in flight. Control verbs have no CLI form: the scheduler and its run
 lock live in the server process.
 
-The CLI prints the same response shapes the MCP tools return, so counts sit
-under `campaign` alongside the header fields. `status` and `history` omit or
-cap large unit lists the same way: `status` reports counts, in-flight units
+The CLI prints the same response shapes the MCP tools return. `create` and
+`status` carry the campaign's header (how it was built: scope, checkout,
+install source, lanes) under `campaign` and its state (lifecycle, lanes in
+flight, counts by unit state) under `state`; every other response carries
+the state fields alone, since the header never changes. `status` and
+`history` omit or cap large unit lists the same way: `status` reports counts, in-flight units
 and problems, and lists every selected unit only with `--include-units`.
 
 `create` optionally records `--install-from` and `--max-lanes` for a runner to
@@ -180,7 +183,8 @@ write the same files the CLI does, under the directory named by
   Returns the unit count so scope can be confirmed first. `max_lanes` may
   not exceed `MCP_MAX_PARALLEL_JOBS`; a campaign that would silently run
   serially is rejected instead.
-- `list_campaigns` -- every stored campaign with its counts by state.
+- `list_campaigns` -- every stored campaign: its state, the header fields
+  that identify it, and how many values each scope filter names.
 - `campaign_status` -- one campaign's counts, the units in flight, and the
   units needing action. Individual units are opt-in via `units_limit`
   because a full campaign is over a thousand of them.

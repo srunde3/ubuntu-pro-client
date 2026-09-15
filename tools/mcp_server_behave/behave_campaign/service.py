@@ -31,12 +31,8 @@ from behave_campaign.messages import (
     DEFAULT_UNITS_LIMIT,
     MAX_EVENTS_LIMIT,
     MAX_UNITS_LIMIT,
-    AttemptView,
     AwaitEventsResponse,
-    CampaignRepo,
-    CampaignScope,
     CampaignStatusResponse,
-    CampaignSummary,
     CreateCampaignResponse,
     DimensionsResponse,
     DimensionValue,
@@ -44,58 +40,16 @@ from behave_campaign.messages import (
     ListCampaignsResponse,
     NextUnitsResponse,
     RecordAttemptsResponse,
-    StateCounts,
     UnitHistoryResponse,
-    UnitHistoryView,
-    UnitView,
 )
 from behave_campaign.ports import CampaignStore, EventLog, FeatureReader
-
-
-def _unit_view(status: UnitStatus) -> UnitView:
-    return UnitView(
-        feature=status.unit.feature,
-        scenario=status.unit.scenario,
-        release=status.unit.release,
-        machine_type=status.unit.machine_type,
-        state=status.state,
-        job_id=status.job_id,
-        attempt_count=len(status.attempts),
-    )
-
-
-def _unit_history_view(status: UnitStatus) -> UnitHistoryView:
-    return UnitHistoryView(
-        **_unit_view(status).model_dump(),
-        attempts=[
-            AttemptView(**attempt.as_dict()) for attempt in status.attempts
-        ],
-    )
-
-
-def _summary(
-    campaign_id: str,
-    header: CampaignHeader | None,
-    statuses: Sequence[UnitStatus],
-) -> CampaignSummary:
-    header = header or CampaignHeader()
-    return CampaignSummary(
-        campaign_id=campaign_id,
-        created_at=header.at,
-        install_from=header.install_from,
-        max_lanes=header.max_lanes,
-        total_units=len(statuses),
-        counts=StateCounts(**domain.count_states(statuses)),
-        repo=CampaignRepo(**header.repo.as_dict()),
-        scope=CampaignScope(**header.filters.scope_as_dict()),
-    )
-
-
-def _header_of(records: Sequence[Record]) -> CampaignHeader | None:
-    for record in records:
-        if isinstance(record, CampaignHeader):
-            return record
-    return None
+from behave_campaign.views import (
+    campaign_header,
+    campaign_listing,
+    campaign_state,
+    unit_history_view,
+    unit_view,
+)
 
 
 class CampaignService:
@@ -186,10 +140,10 @@ class CampaignService:
             ],
         )
 
+        records: list[Record] = [header, *plans]
         return CreateCampaignResponse(
-            campaign=_summary(
-                campaign_id, header, domain.reduce_units([header, *plans])
-            )
+            campaign=campaign_header(campaign_id, records),
+            state=campaign_state(campaign_id, records),
         )
 
     # -- recording --------------------------------------------------------
@@ -249,15 +203,14 @@ class CampaignService:
         self._reject_unplanned(existing, parsed)
         self._store.append(campaign_id, records)
 
-        statuses = domain.reduce_units([*existing, *records])
+        settled = [*existing, *records]
+        statuses = domain.reduce_units(settled)
         return RecordAttemptsResponse(
+            **campaign_state(campaign_id, settled).model_dump(),
             recorded=len(parsed),
-            campaign=_summary(campaign_id, _header_of(existing), statuses),
-            running=[
-                _unit_view(status) for status in domain.running(statuses)
-            ],
+            running=[unit_view(status) for status in domain.running(statuses)],
             problems=[
-                _unit_view(status) for status in domain.problems(statuses)
+                unit_view(status) for status in domain.problems(statuses)
             ],
         )
 
@@ -265,18 +218,12 @@ class CampaignService:
 
     def list_campaigns(self) -> ListCampaignsResponse:
         """Summarise every stored campaign."""
-        summaries = []
-        for campaign_id in self._store.list_ids():
-            records = self._store.replay(campaign_id)
-            summaries.append(
-                _summary(
-                    campaign_id,
-                    _header_of(records),
-                    domain.reduce_units(records),
-                )
-            )
         return ListCampaignsResponse(
-            campaign_dir=str(self._store.root), campaigns=summaries
+            campaign_dir=str(self._store.root),
+            campaigns=[
+                campaign_listing(campaign_id, self._store.replay(campaign_id))
+                for campaign_id in self._store.list_ids()
+            ],
         )
 
     def campaign_status(
@@ -306,16 +253,15 @@ class CampaignService:
         clamped = False
         if units_limit:
             capped, clamped = self._cap(units_limit)
-            units = [_unit_view(status) for status in statuses[:capped]]
+            units = [unit_view(status) for status in statuses[:capped]]
             truncated = len(statuses) > capped
 
         return CampaignStatusResponse(
-            campaign=_summary(campaign_id, _header_of(records), statuses),
-            running=[
-                _unit_view(status) for status in domain.running(statuses)
-            ],
+            campaign=campaign_header(campaign_id, records),
+            state=campaign_state(campaign_id, records, statuses),
+            running=[unit_view(status) for status in domain.running(statuses)],
             problems=[
-                _unit_view(status) for status in domain.problems(statuses)
+                unit_view(status) for status in domain.problems(statuses)
             ],
             units=units,
             truncated=truncated,
@@ -336,7 +282,7 @@ class CampaignService:
         """
         return NextUnitsResponse(
             units=[
-                _unit_view(status)
+                unit_view(status)
                 for status in domain.select_next(
                     self._selected(campaign_id, filters), limit
                 )
@@ -354,7 +300,7 @@ class CampaignService:
         statuses = self._selected(campaign_id, filters)
         capped, clamped = self._cap(limit)
         return UnitHistoryResponse(
-            units=[_unit_history_view(status) for status in statuses[:capped]],
+            units=[unit_history_view(status) for status in statuses[:capped]],
             truncated=len(statuses) > capped,
             limit_clamped=clamped,
         )
@@ -395,9 +341,8 @@ class CampaignService:
             )
 
         records = self._store.replay(campaign_id)
-        statuses = domain.reduce_units(records)
         return AwaitEventsResponse(
-            campaign=_summary(campaign_id, _header_of(records), statuses),
+            **campaign_state(campaign_id, records).model_dump(),
             events=[
                 EventView(
                     seq=event.seq,
@@ -409,8 +354,6 @@ class CampaignService:
             ],
             next_seq=(events[-1].seq if events else max(since_seq, 0)),
             latest_seq=self._events.latest_seq(campaign_id),
-            lanes_busy=len(domain.running(statuses)),
-            lifecycle=domain.lifecycle(records),
             timed_out=not events,
         )
 

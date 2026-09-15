@@ -94,7 +94,7 @@ def planned(run):
 
 class TestInit:
     def test_campaign_covers_every_discovered_unit(self, planned, run):
-        assert planned["campaign"]["counts"]["unattempted"] == 3
+        assert planned["state"]["counts"]["unattempted"] == 3
         assert planned["campaign"]["total_units"] == 3
         history = run(["history"])
         assert [unit_of(unit) for unit in history["units"]] == [
@@ -106,7 +106,7 @@ class TestInit:
     def test_filters_define_the_campaign(self, run):
         result = run(["create", "--machine-type", "lxd-vm"])
 
-        assert result["campaign"]["counts"]["unattempted"] == 1
+        assert result["state"]["counts"]["unattempted"] == 1
         history = run(["history"])
         assert [unit_of(unit) for unit in history["units"]] == [UNIT_A_NOBLE]
 
@@ -123,7 +123,7 @@ class TestInit:
     def test_full_campaign_needs_no_filters(self, run, campaign_file):
         result = run(["create", "--campaign-id", "1234567"])
 
-        assert result["campaign"]["counts"]["unattempted"] == 3
+        assert result["state"]["counts"]["unattempted"] == 3
         assert result["campaign"]["scope"] == {
             "feature": [],
             "scenario": [],
@@ -171,8 +171,8 @@ class TestRecord:
         run(["record"], [attempt(UNIT_A_JAMMY, "failed", "job-1")])
         result = run(["record"], [attempt(UNIT_A_JAMMY, "passed", "job-2")])
 
-        assert result["campaign"]["counts"]["passed"] == 1
-        assert result["campaign"]["counts"]["failed"] == 0
+        assert result["counts"]["passed"] == 1
+        assert result["counts"]["failed"] == 0
         assert result["problems"] == []
 
     def test_batches_record_every_attempt(self, planned, run):
@@ -185,8 +185,8 @@ class TestRecord:
         )
 
         assert result["recorded"] == 2
-        assert result["campaign"]["counts"]["failed"] == 1
-        assert result["campaign"]["counts"]["passed"] == 1
+        assert result["counts"]["failed"] == 1
+        assert result["counts"]["passed"] == 1
 
     def test_a_job_still_in_flight_cannot_be_recorded(self, planned, run):
         # The scheduler owns unfinished jobs: it wrote the start and will
@@ -265,7 +265,7 @@ class TestRecord:
             ],
         )
 
-        assert result["campaign"]["counts"]["passed"] == 1
+        assert result["counts"]["passed"] == 1
         history = run(["history"])
         assert history["units"][0]["job_id"] == "job-abc"
 
@@ -326,7 +326,7 @@ class TestQueries:
     def test_status_filters_narrow_units_and_counts(self, planned, run):
         result = run(["status", "--machine-type", "lxd-vm"])
 
-        assert result["campaign"]["counts"]["unattempted"] == 1
+        assert result["state"]["counts"]["unattempted"] == 1
         assert result["running"] == []
         assert result["problems"] == []
 
@@ -341,8 +341,8 @@ class TestQueries:
 
         result = run(["status"])
 
-        assert result["campaign"]["counts"]["failed"] == 1
-        assert result["campaign"]["counts"]["skipped"] == 1
+        assert result["state"]["counts"]["failed"] == 1
+        assert result["state"]["counts"]["skipped"] == 1
         assert result["running"] == []
         assert {u["job_id"] for u in result["problems"]} == {"job-1", "job-2"}
         assert {u["state"] for u in result["problems"]} == {
@@ -372,7 +372,7 @@ class TestQueries:
 
         assert result["running"] == []
         assert result["problems"] == []
-        assert result["campaign"]["counts"]["unattempted"] == 0
+        assert result["state"]["counts"]["unattempted"] == 0
 
 
 class TestEvents:
