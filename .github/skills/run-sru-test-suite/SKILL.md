@@ -9,8 +9,7 @@ argument-hint: 'Describe the SRU verification run'
 ## Scope
 
 SRU verification of the Behave integration tests in `features/`, using the
-`behave` MCP server's campaign tools. For running one scenario ad hoc, use
-[feature-test-runs](../feature-test-runs/SKILL.md) instead.
+`behave` MCP server's campaign tools.
 
 ## The split
 
@@ -51,40 +50,98 @@ to resolve with the user, not an error to work around.
 
 ## Run it
 
-Call `start_campaign`, then follow the campaign with `await_campaign_events`,
-passing back the `next_seq` it returns so the stream has no gaps. Between
-batches you have nothing to do: lanes refill without you.
+Call `start_campaign`, then immediately delegate campaign monitoring to a
+subagent (`runSubagent`). The human should not be required to check in or prompt
+repeatedly; an extended monitoring subagent watches the event stream, triages
+failures, and reports back.
 
-Every response also carries the campaign's counts and lifecycle, so an empty
-batch still tells you where things stand. There is no heartbeat to wait for.
+### Subagent Delegation
 
-Subscribe to what you will act on. `unit.*` and `anomaly.*` is usually right;
-add `campaign.*` to notice a pause you did not ask for.
+Dispatch a subagent with a prompt instructing it to:
+1. Long-poll `await_campaign_events` in a loop using `timeout_seconds: 60` and
+   passing back `next_seq` on every cycle.
+2. Filter strictly to actionable event kinds:
+   ```json
+   {
+     "kinds": [
+       "unit.failed",
+       "unit.errored",
+       "unit.unclassifiable",
+       "anomaly.*",
+       "lane.overdue",
+       "campaign.*"
+     ]
+   }
+   ```
+   Do NOT subscribe to `unit.*` or leave `kinds` empty—pass events and lane churn
+   bloat context. Aggregate counts (`passed`, `failed`, `running`, `unattempted`)
+   and `lanes_busy` are already present in every response.
+3. Triage failures directly from `data.failures` inline without reading logs
+   unless `failures` is empty (indicating a harness/hook crash).
+4. Run for an extended window (e.g. 10–15 polling cycles) or stop early if:
+   - The campaign finishes (`running == 0` and `unattempted == 0`), OR
+   - A systemic defect appears (host harness crash, environment misconfiguration,
+     repeated hook failure across all lanes), OR
+   - A lane is overdue and needs a kill/drain decision.
+5. Return a concise, structured report back to the main agent:
+   - Current campaign counts (`passed`, `failed`, `error`, `unattempted`, `running`)
+   - Triaged failure summary (harness/flake/bug)
+   - Specific decision points requiring human input, if any
+
+When the subagent returns:
+- If the campaign finished, proceed to `## Finish`.
+- If an action was needed (e.g. host fix, retry), take the action with user confirmation.
+- If the campaign is still healthy and running, report the progress update to the user and dispatch the next extended monitoring subagent.
 
 ## Judgement
 
-- `unit.failed` carries the failing steps and their messages. Judge from
-  those. Only fetch `get_scenario_logs` or `get_scenario_artifacts` if they
-  are not enough.
+### Failure Triage (Zero-Log Overhead)
+
+- `unit.failed` carries `data.failures` with the failing `step` and
+  `error_message`. Judge directly from those step assertions without calling
+  `get_scenario_logs`.
+- Only fetch `get_scenario_logs` if `data.failures` is empty (typically
+  indicates a Behave hook error such as `after_step` or a test harness crash).
+- Classify failures promptly:
+  1. **Host/Harness Defect** (e.g. hook crash, file encoding, permission
+     denial): Actionable immediately. Fix the harness or host environment, then
+     use `retry_units` to re-queue affected units.
+  2. **External Flake** (e.g. HTTP 503 from backend/CVE endpoints, network
+     timeout): Note the transient failure; let it accumulate until the pass
+     completes, then retry in batch.
+  3. **Genuine Code Bug** (client regression or release incompatibility):
+     Record it for the SRU record. Do not retry real defects.
 - `unit.skipped` means configuration the host does not have. Report the
   missing variable names. Never ask the user for a secret value in chat.
 - `unit.unclassifiable` is a finding to report, not an error to work around:
   the job produced something the classifier could not read.
-- `anomaly.*` events are offered for judgement and nothing acts on them.
-  Repeated skips usually mean missing config. One scenario failing across
-  every release usually means a real defect rather than flake.
+- `anomaly.*` events are offered for judgement and nothing acts on them:
+  - `anomaly.repeated_scenario_failure` (same scenario failing across multiple
+    releases) usually signals external service degradation (e.g. 503 on
+    security endpoints) or a host hook issue rather than a release-specific bug.
 - `lane.overdue` means a job has run far longer than expected. Decide whether
-  to `kill_job` it; the campaign then records that unit and frees the lane.
+  to `kill_job` it; the campaign then records that unit as errored and frees the lane.
 
 Let plain failures accumulate and keep going. The point of a first pass is a
-complete picture, not a green one.
+complete picture, not a green one. If an environmental bug breaks all lanes,
+call `pause_campaign`, fix the root cause, and batch-retry.
 
 ## Stop, retry, resume
 
 `pause_campaign` and `cancel_campaign` both drain: jobs already running finish
 and are recorded. Neither kills anything. `lanes_busy` in the response says how
 many are still draining. Cancel when the run is not worth continuing -- a
-broken checkout, infrastructure that will not recover -- and say why.
+broken checkout, infrastructure that will not recover -- and say why. Pause a
+run you mean to come back to: cancelling also closes the campaign to
+`retry_units`, which is the whole difference between the two.
+
+`reopen_campaign` takes a cancellation back, for one you made in error. The
+cancel stays in the record and the reopen is appended after it. A campaign
+with units left unattempted starts scheduling again; one whose units were all
+attempted comes back `complete`, so reopening it is followed by `retry_units`,
+not `start_campaign`. If the cancel left jobs in flight that no server is
+watching any more, it names those units and refuses; check them, then reopen
+with `abandon_in_flight` to record them as errored.
 
 Nothing re-runs a non-passing unit on its own. `retry_units` is the only way,
 and it selects failed, skipped and errored units unless you name a state.
@@ -104,10 +161,3 @@ without giving an overall verdict:
 - counts by state
 - the failed, skipped and errored units with their `job_id`s
 - the campaign id
-
-## TODOs
-
-If you are an agent, do not consider this section.
-
-- Once the MCP exposes a config endpoint, say how to check for a contract
-  token and cloud credentials up front instead of inferring from skips.
