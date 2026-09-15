@@ -1025,7 +1025,6 @@ class EventKind(_StringEnum):
     CAMPAIGN_REOPENED = "campaign.reopened"
     CAMPAIGN_COMPLETE = "campaign.complete"
     LANE_STARTED = "lane.started"
-    LANE_RELEASED = "lane.released"
     LANE_OVERDUE = "lane.overdue"
     UNIT_PASSED = "unit.passed"
     UNIT_FAILED = "unit.failed"

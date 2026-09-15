@@ -192,7 +192,7 @@ is how a watcher hears about it promptly.
 | Family | Kinds |
 | --- | --- |
 | `campaign.*` | `created`, `started`, `paused`, `resumed`, `cancelled`, `reopened`, `complete` |
-| `lane.*` | `started`, `released`, `overdue` |
+| `lane.*` | `started`, `overdue` |
 | `unit.*` | `passed`, `failed`, `skipped`, `errored`, `unclassifiable`, `retried` |
 | `anomaly.*` | `repeated_scenario_failure`, `repeated_skips`, `capacity_starved` |
 

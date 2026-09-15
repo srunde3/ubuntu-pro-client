@@ -209,7 +209,6 @@ class EventView(BaseModel):
     seq: int = 0
     kind: str = ""
     at: str = ""
-    campaign_id: str = ""
     data: dict = {}
 
 

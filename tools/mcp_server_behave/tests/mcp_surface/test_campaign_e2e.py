@@ -158,7 +158,6 @@ def test_a_campaign_runs_its_lanes_concurrently(monkeypatch, tmp_path):
     assert "campaign.started" in kinds
     assert kinds[-1] == "campaign.complete"
     assert kinds.count("lane.started") == len(RELEASES)
-    assert kinds.count("lane.released") == len(RELEASES)
     assert sum(1 for kind in kinds if kind.startswith("unit.")) == len(
         RELEASES
     )

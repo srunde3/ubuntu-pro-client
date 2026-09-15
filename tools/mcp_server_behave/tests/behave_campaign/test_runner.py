@@ -982,7 +982,6 @@ class TestEvents:
         runner.tick("1234567")
 
         assert "unit.passed" in self.kinds(events)
-        assert "lane.released" in self.kinds(events)
 
     def test_a_failing_unit_carries_its_failing_steps(
         self, runner, store, events, lanes

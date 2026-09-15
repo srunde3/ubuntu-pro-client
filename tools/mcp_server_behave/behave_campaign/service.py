@@ -398,7 +398,15 @@ class CampaignService:
         statuses = domain.reduce_units(records)
         return AwaitEventsResponse(
             campaign=_summary(campaign_id, _header_of(records), statuses),
-            events=[EventView(**event.as_dict()) for event in events],
+            events=[
+                EventView(
+                    seq=event.seq,
+                    kind=event.kind,
+                    at=event.at,
+                    data=dict(event.data),
+                )
+                for event in events
+            ],
             next_seq=(events[-1].seq if events else max(since_seq, 0)),
             latest_seq=self._events.latest_seq(campaign_id),
             lanes_busy=len(domain.running(statuses)),

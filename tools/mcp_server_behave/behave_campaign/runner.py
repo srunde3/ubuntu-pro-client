@@ -673,7 +673,7 @@ class CampaignRunner:
         classified: Sequence[domain.Classification],
         lanes: Sequence[Lane],
     ) -> list[NewEvent]:
-        """A released-lane event and an outcome event per finished lane."""
+        """One outcome event per finished lane; the kind is the outcome."""
         results = {lane.unit: lane.result for lane in lanes if lane.finished}
         events: list[NewEvent] = []
         for item in classified:
@@ -681,15 +681,7 @@ class CampaignRunner:
             body: dict[str, Any] = {
                 **finished.unit.as_dict(),
                 "job_id": finished.job_id,
-                "outcome": finished.outcome,
             }
-            events.append(
-                NewEvent(
-                    kind=domain.EventKind.LANE_RELEASED,
-                    at=finished.at,
-                    data=dict(body),
-                )
-            )
             if item.problem:
                 body["problem"] = item.problem
             if finished.outcome == domain.Outcome.FAILED:
