@@ -103,9 +103,20 @@ uv run behave-campaign history --campaign T.jsonl \
   --feature features/cli/attach.feature
 ```
 
+# Follow a campaign a server is running, from a terminal.
+uv run behave-campaign events --campaign T.jsonl --kinds 'unit.*' --follow
+
 All commands read `--input` from stdin by default and print JSON to stdout.
 `status`, `next`, and `history` accept the same filters plus `--state`,
 repeatable to allow several values.
+
+`events` reads the log a server writes beside the campaign file
+(`T.events.jsonl`); it needs no server of its own. `--since-seq` and
+`--kinds` work as they do for `await_campaign_events`. With `--follow` it
+prints one batch per line as events arrive, polling every `--interval`
+seconds, and returns once the campaign is complete or cancelled with no
+lane in flight. Control verbs have no CLI form: the scheduler and its run
+lock live in the server process.
 
 The CLI prints the same response shapes the MCP tools return, so counts sit
 under `campaign` alongside the header fields. `status` and `history` omit or

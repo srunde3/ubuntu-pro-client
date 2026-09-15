@@ -373,3 +373,102 @@ class TestQueries:
         assert result["running"] == []
         assert result["problems"] == []
         assert result["campaign"]["counts"]["unattempted"] == 0
+
+
+class TestEvents:
+    """``events`` reads the log a server wrote beside the campaign file."""
+
+    @pytest.fixture
+    def log(self, campaign_file):
+        from behave_campaign.adapters import JsonlEventLog
+
+        return JsonlEventLog(campaign_file.parent)
+
+    @staticmethod
+    def new(kind, **data):
+        from behave_campaign.domain import NewEvent
+
+        return NewEvent(kind=kind, at="2026-01-01T00:00:00Z", data=data)
+
+    def test_reads_the_servers_events(self, planned, run, log):
+        log.append(
+            "records",
+            [self.new("campaign.started"), self.new("unit.failed", x=1)],
+        )
+
+        result = run(["events"])
+
+        assert [e["kind"] for e in result["events"]] == [
+            "campaign.started",
+            "unit.failed",
+        ]
+        assert result["events"][1]["data"] == {"x": 1}
+        assert result["next_seq"] == 2
+        assert "campaign_id" not in result["events"][0]
+
+    def test_cursor_and_kinds_narrow_the_batch(self, planned, run, log):
+        log.append(
+            "records",
+            [
+                self.new("campaign.started"),
+                self.new("lane.started"),
+                self.new("unit.failed"),
+                self.new("unit.passed"),
+            ],
+        )
+
+        result = run(["events", "--since-seq", "1", "--kinds", "unit.*"])
+
+        assert [e["seq"] for e in result["events"]] == [3, 4]
+
+    def test_unknown_kind_is_rejected(self, planned, run):
+        error = run(["events", "--kinds", "unit.exploded"], expect=2)
+
+        assert "unit.exploded" in error
+
+    def test_follow_stops_once_the_campaign_is_settled(
+        self, planned, run, log, capsys, campaign_file
+    ):
+        from behave_campaign.adapters import SingleFileCampaignStore
+        from behave_campaign.domain import Lifecycle, LifecycleRecord
+
+        # Started, every unit attempted, nothing in flight: complete, so a
+        # follower prints what there is and returns.
+        SingleFileCampaignStore(campaign_file).append(
+            "records",
+            [
+                LifecycleRecord(
+                    state=Lifecycle.RUNNING, at="2026-01-01T00:00:00Z"
+                )
+            ],
+        )
+        run(
+            ["record"],
+            payload=[
+                attempt(UNIT_A_JAMMY, "passed", "j1"),
+                attempt(UNIT_A_NOBLE, "passed", "j2"),
+                attempt(UNIT_B_JAMMY, "passed", "j3"),
+            ],
+        )
+        log.append(
+            "records", [self.new("unit.passed"), self.new("unit.passed")]
+        )
+
+        code = main(
+            [
+                "events",
+                "--campaign",
+                str(campaign_file),
+                "--follow",
+                "--limit",
+                "1",
+                "--interval",
+                "0",
+            ]
+        )
+        out = capsys.readouterr().out
+
+        assert code == 0
+        batches = [json.loads(line) for line in out.splitlines()]
+        assert [b["events"][0]["seq"] for b in batches] == [1, 2]
+        assert batches[-1]["lifecycle"] == "complete"

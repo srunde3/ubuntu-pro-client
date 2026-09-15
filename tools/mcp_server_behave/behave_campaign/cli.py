@@ -11,35 +11,62 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from pathlib import Path
-from typing import Any, Callable, Sequence
+from typing import Any, Callable, Iterator, Sequence
 
 from pydantic import BaseModel
 
 from .adapters import (
+    JsonlEventLog,
     NullEventLog,
     ParserFeatureReader,
     SingleFileCampaignStore,
     system_now,
 )
-from .domain import DEFAULT_INSTALL_SOURCE, INSTALL_SOURCES, STATES, Filters
-from .messages import DEFAULT_UNITS_LIMIT
+from .domain import (
+    DEFAULT_INSTALL_SOURCE,
+    EVENT_FAMILIES,
+    INSTALL_SOURCES,
+    STATES,
+    Filters,
+    Lifecycle,
+)
+from .messages import (
+    DEFAULT_EVENTS_LIMIT,
+    DEFAULT_UNITS_LIMIT,
+    AwaitEventsResponse,
+)
+from .ports import EventLog
 from .repo import repo_state
 from .service import CampaignService
 
+Output = BaseModel | Iterator[BaseModel]
 
-def _service(campaign_file: Path) -> CampaignService:
+
+def _service(
+    campaign_file: Path, events: EventLog | None = None
+) -> CampaignService:
     return CampaignService(
         store=SingleFileCampaignStore(campaign_file),
         features=ParserFeatureReader(),
-        # The CLI reports to someone already reading its output, so it has
-        # no use for a notification channel.
-        events=NullEventLog(),
+        # The CLI reports to someone already reading its output, so it
+        # writes to no notification channel; only ``events`` reads one.
+        events=events or NullEventLog(),
         now=system_now,
         repo_state=repo_state,
         # Nothing here runs tests, so no lane ceiling applies.
         max_lane_ceiling=None,
     )
+
+
+def _event_log(campaign_file: Path) -> JsonlEventLog:
+    """The log a server writes beside the campaign file.
+
+    Built fresh per read: the log caches its file, and the process
+    appending to it is not this one.
+    """
+    return JsonlEventLog(campaign_file.parent)
 
 
 def _campaign_id(args: argparse.Namespace) -> str:
@@ -114,6 +141,43 @@ def _command_history(args: argparse.Namespace) -> BaseModel:
         filters=_filters(args),
         limit=args.limit,
     )
+
+
+def _read_events(
+    args: argparse.Namespace, since_seq: int
+) -> AwaitEventsResponse:
+    return _service(
+        args.campaign_file, events=_event_log(args.campaign_file)
+    ).await_events(
+        campaign_id=_campaign_id(args),
+        since_seq=since_seq,
+        kinds=args.kinds or (),
+        limit=args.limit,
+    )
+
+
+def _command_events(args: argparse.Namespace) -> Output:
+    if not args.follow:
+        return _read_events(args, args.since_seq)
+    return _follow_events(args)
+
+
+def _follow_events(args: argparse.Namespace) -> Iterator[BaseModel]:
+    """Print each new batch until the campaign has nothing more to say."""
+    since_seq = args.since_seq
+    while True:
+        batch = _read_events(args, since_seq)
+        if batch.events:
+            yield batch
+            since_seq = batch.next_seq
+            continue
+        settled = batch.lifecycle in (
+            Lifecycle.COMPLETE,
+            Lifecycle.CANCELLED,
+        )
+        if settled and batch.lanes_busy == 0:
+            return
+        time.sleep(args.interval)
 
 
 def _add_filters(
@@ -247,6 +311,45 @@ def build_parser() -> argparse.ArgumentParser:
         subparsers, "history", "show every attempt per unit", _command_history
     )
     history.add_argument("--limit", type=int, default=DEFAULT_UNITS_LIMIT)
+
+    events = subparsers.add_parser(
+        "events", help="read the events a running server has announced"
+    )
+    events.add_argument(
+        "--campaign", required=True, type=Path, dest="campaign_file"
+    )
+    events.add_argument(
+        "--since-seq",
+        type=int,
+        default=0,
+        dest="since_seq",
+        help="return events numbered above this (default: all)",
+    )
+    events.add_argument(
+        "--kinds",
+        action="append",
+        metavar="KIND",
+        help=(
+            "an event kind or family to return, repeatable; omit for all. "
+            "Families: {}".format(", ".join(EVENT_FAMILIES))
+        ),
+    )
+    events.add_argument("--limit", type=int, default=DEFAULT_EVENTS_LIMIT)
+    events.add_argument(
+        "--follow",
+        action="store_true",
+        help=(
+            "keep printing batches, one JSON document per line, until the "
+            "campaign is complete or cancelled with no lane in flight"
+        ),
+    )
+    events.add_argument(
+        "--interval",
+        type=float,
+        default=5.0,
+        help="seconds between polls with --follow (default: 5)",
+    )
+    events.set_defaults(handler=_command_events)
     return parser
 
 
@@ -261,12 +364,14 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     try:
         result = handler(args)
+        outputs = [result] if isinstance(result, BaseModel) else result
+        for output in outputs:
+            json.dump(output.model_dump(), sys.stdout, sort_keys=True)
+            sys.stdout.write("\n")
+            sys.stdout.flush()
     except (ValueError, OSError) as error:
         print(str(error), file=sys.stderr)
         return 2
-
-    json.dump(result.model_dump(), sys.stdout, sort_keys=True)
-    sys.stdout.write("\n")
     return 0
 
 
