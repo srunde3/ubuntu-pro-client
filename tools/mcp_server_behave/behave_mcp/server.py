@@ -1,3 +1,4 @@
+import functools
 import os
 import sys
 import threading
@@ -5,10 +6,11 @@ import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any, Callable
 
 from mcp.server import FastMCP
 from mcp.server.fastmcp.server import Settings as FastMCPSettings
+from mcp.types import TextContent
 from pydantic import Field
 from starlette.responses import JSONResponse
 
@@ -82,6 +84,28 @@ mcp = FastMCP(
     host=_settings.host,
     port=_settings.port,
 )
+
+
+def tool(**kwargs: Any) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+    """Register a tool that answers with one compact JSON text block.
+
+    FastMCP would otherwise send every result twice -- pretty-printed text
+    plus structuredContent -- and publish an outputSchema per tool that
+    clients do not use. The compact form is a quarter smaller than the
+    pretty one.
+    """
+
+    def register(fn: Callable[..., Any]) -> Callable[..., Any]:
+        @functools.wraps(fn)
+        def as_text(*args: Any, **kw: Any) -> TextContent:
+            return TextContent(
+                type="text", text=fn(*args, **kw).model_dump_json()
+            )
+
+        return mcp.tool(structured_output=False, **kwargs)(as_text)
+
+    return register
+
 
 RepoRoot = Annotated[
     str,
@@ -243,7 +267,7 @@ async def healthcheck(request):
     return JSONResponse({"status": "ok"})
 
 
-@mcp.tool(
+@tool(
     description=(
         "List feature files available in the repository so an agent can "
         "choose an allowed behave scenario. Returns a lightweight catalog "
@@ -270,7 +294,7 @@ def list_features(
     )
 
 
-@mcp.tool(
+@tool(
     description=(
         "Return full detail for a single feature file: its title, tags, "
         "required config, and every scenario with name, type, tags, required "
@@ -288,7 +312,7 @@ def describe_feature(
     return _service.describe_feature(feature_file, repo_root)
 
 
-@mcp.tool(
+@tool(
     description=(
         "List every distinct release and machine_type (substrate) used across "
         "the whole suite, each with a count of scenarios that reference it. "
@@ -300,7 +324,7 @@ def list_dimensions(repo_root: RepoRoot = "") -> ListDimensionsResponse:
     return _service.list_dimensions(repo_root)
 
 
-@mcp.tool(
+@tool(
     description=(
         "Find scenarios across all features matching optional release, "
         "machine_type, tag, and text (scenario-name substring) filters. "
@@ -336,7 +360,7 @@ def find_scenarios(
     )
 
 
-@mcp.tool(
+@tool(
     description=(
         "Start a listed behave scenario through tox in the background and "
         "return a job_id immediately. feature_file must be a path returned "
@@ -397,7 +421,7 @@ def start_scenario(
     )
 
 
-@mcp.tool(
+@tool(
     description=(
         "List behave jobs. Returns every currently active job plus a "
         "bounded window of recently completed ones (most recent first, "
@@ -426,7 +450,7 @@ def list_scenario_jobs(
     return _service.list_jobs(repo_root, limit)
 
 
-@mcp.tool(
+@tool(
     description=(
         "What came of each behave job: what it ran, its status and ok, "
         "behave's own counts, and every failing step with its message. "
@@ -487,7 +511,7 @@ def get_scenario_results(
     )
 
 
-@mcp.tool(
+@tool(
     description=(
         "Wait for a running behave job to complete by polling internally. "
         "job_id must come from start_scenario or list_scenario_jobs. "
@@ -516,7 +540,7 @@ def wait_for_scenario_completion(
     )
 
 
-@mcp.tool(
+@tool(
     description=(
         "What went wrong in a behave job, from its log: every traceback, "
         "hook error and failed assertion in the order they happened, each "
@@ -535,7 +559,7 @@ def get_scenario_errors(
     return _service.get_errors(job_id, repo_root)
 
 
-@mcp.tool(
+@tool(
     description=(
         "Read part of a behave job's stdout log; every returned line is "
         "prefixed 'N: ' with its 1-based line number. With pattern (a "
@@ -595,7 +619,7 @@ def get_scenario_logs(
     )
 
 
-@mcp.tool(
+@tool(
     description=(
         "Return artifact paths and metadata for a behave job so agents can "
         "parse full logs and reports from disk. job_id must come from "
@@ -608,7 +632,7 @@ def get_scenario_artifacts(
     return _service.get_artifacts(job_id, repo_root)
 
 
-@mcp.tool(
+@tool(
     description=(
         "Plan a test campaign and store it, without starting anything. A "
         "campaign is the durable record of which test units -- one scenario "
@@ -678,7 +702,7 @@ def create_campaign(
     )
 
 
-@mcp.tool(
+@tool(
     description=(
         "List every stored campaign with its current counts by unit state. "
         "Use it to find a campaign id to inspect, or to see what work is "
@@ -689,7 +713,7 @@ def list_campaigns(repo_root: RepoRoot = "") -> ListCampaignsResponse:
     return campaign_service(repo_root).list_campaigns()
 
 
-@mcp.tool(
+@tool(
     description=(
         "Report one campaign's current state: counts by unit state, the "
         "units in flight, and the units needing action (failed, skipped or "
@@ -770,7 +794,7 @@ def campaign_status(
     )
 
 
-@mcp.tool(
+@tool(
     description=(
         "Every attempt at each selected unit, oldest first: the job it "
         "ran as, what it installed from, when, and its outcome. This is "
@@ -822,7 +846,7 @@ def unit_history(
     )
 
 
-@mcp.tool(
+@tool(
     description=(
         "Start scheduling a campaign. The server then keeps up to the "
         "campaign's max_lanes behave jobs in flight, records every outcome, "
@@ -838,7 +862,7 @@ def start_campaign(
     return campaign_runner(repo_root).start(campaign_id)
 
 
-@mcp.tool(
+@tool(
     description=(
         "Stop opening new lanes, and let the jobs already in flight run to "
         "completion -- their results are still recorded. lanes_busy in the "
@@ -852,7 +876,7 @@ def pause_campaign(
     return campaign_runner(repo_root).pause(campaign_id)
 
 
-@mcp.tool(
+@tool(
     description=(
         "Resume a paused campaign, including one the server paused by "
         "itself after a restart. Lanes begin filling again immediately."
@@ -864,7 +888,7 @@ def resume_campaign(
     return campaign_runner(repo_root).resume(campaign_id)
 
 
-@mcp.tool(
+@tool(
     description=(
         "Close a campaign to further scheduling. Like pause, jobs already "
         "in flight run to completion and are recorded; unlike pause, it "
@@ -881,7 +905,7 @@ def cancel_campaign(
     return campaign_runner(repo_root).cancel(campaign_id)
 
 
-@mcp.tool(
+@tool(
     description=(
         "Take a cancellation back, for a campaign cancelled by mistake. "
         "The cancel stays in the record and this is appended after it. A "
@@ -920,7 +944,7 @@ def reopen_campaign(
     )
 
 
-@mcp.tool(
+@tool(
     description=(
         "Wait for news about a campaign. Returns every event after "
         "since_seq, blocking up to timeout_seconds for something to happen, "
@@ -994,7 +1018,7 @@ def await_campaign_events(
     )
 
 
-@mcp.tool(
+@tool(
     description=(
         "Ask for another attempt at units that already had one. Nothing "
         "re-runs a non-passing unit on its own, so this is the only way a "
@@ -1049,7 +1073,7 @@ def retry_units(
     )
 
 
-@mcp.tool(
+@tool(
     description=(
         "Terminate a running behave job. Use it for a job that has hung: a "
         "campaign's next tick then sees it finish and records the unit as "

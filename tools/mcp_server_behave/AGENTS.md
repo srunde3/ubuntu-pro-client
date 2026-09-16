@@ -31,8 +31,10 @@ the same layering; its modules are listed in its own README.
   filesystem, in-memory registry). Tests inject fakes instead of these.
 - `service.py` -- `BehaveService`, orchestrates domain + ports into the actual
   tool behaviors. This is where most business logic changes belong.
-- `server.py` -- the FastMCP tool-decorated wrappers; thin, just
-  parses/serializes and calls into `_service`.
+- `server.py` -- the tool wrappers; thin, just parses/serializes and
+  calls into `_service`. Register them with the local `@tool`, not
+  `@mcp.tool`: it answers with one compact JSON text block and publishes
+  no outputSchema, which is what keeps results and the tool list small.
 - `config.py` -- startup env var parsing into a validated `Settings` dataclass.
 - `messages.py` -- pydantic DTOs returned across the MCP boundary.
 
