@@ -15,18 +15,6 @@ Every command prints one JSON document to stdout and exits `0`. An invalid
 argument, an unknown value, or an unreadable file prints a message to stderr
 and exits `2`. Response shapes match the `behave` MCP server's campaign tools.
 
-## Common options
-
-| Option                   | Applies to                                   | Meaning                                              |
-| ------------------------ | -------------------------------------------- | ---------------------------------------------------- |
-| `--campaign FILE`        | all but `dimensions`                         | The campaign's JSON Lines file. Required.            |
-| `--repo-root DIR`        | `dimensions`, `create`                       | An `ubuntu-pro-client` checkout holding `features/`. |
-| `--feature PATH`         | `create`, `status`, `next`, `history`        | Only this feature file. Repeatable.                  |
-| `--scenario NAME`        | same                                         | Only this exact scenario name. Repeatable.           |
-| `--release NAME`         | same                                         | Only this release. Repeatable.                       |
-| `--machine-type NAME`    | same                                         | Only this machine type. Repeatable.                  |
-| `--state STATE`          | `status`, `next`, `history`                  | Only units in this state. Repeatable.                |
-
 Unit states: `unattempted`, `running`, `passed`, `failed`, `skipped`,
 `error`.
 
@@ -40,7 +28,7 @@ scenario count.
 
 Required arguments:
 
-* `--repo-root`
+* `--repo-root DIR`: An `ubuntu-pro-client` checkout holding `features/`.
 
 ```bash
 uv run behave-campaign dimensions --repo-root ../..
@@ -54,8 +42,8 @@ can be created only once.
 
 Required arguments:
 
-* `--campaign`
-* `--repo-root`
+* `--campaign FILE`: The campaign's JSON Lines file to create.
+* `--repo-root DIR`: An `ubuntu-pro-client` checkout holding `features/`.
 
 Optional arguments:
 
@@ -64,8 +52,12 @@ Optional arguments:
 * `--install-from SOURCE`: Install source every job in the campaign uses.
   Defaults to `local`.
 * `--max-lanes N`: Jobs a runner may keep in flight. Defaults to `1`.
-* Unit filters (`--feature`, `--scenario`, `--release`, `--machine-type`).
-  Omit all of them to cover every feature file.
+* `--feature PATH`: Only this feature file. Repeatable.
+* `--scenario NAME`: Only this exact scenario name. Repeatable.
+* `--release NAME`: Only this release. Repeatable.
+* `--machine-type NAME`: Only this machine type. Repeatable.
+
+Omit every filter to cover every feature file.
 
 ```bash
 uv run behave-campaign create --campaign 1234567.jsonl --repo-root ../.. \
@@ -82,7 +74,7 @@ Append completed attempts.
 
 Required arguments:
 
-* `--campaign`
+* `--campaign FILE`: The campaign's JSON Lines file.
 * `--install-from SOURCE`: Where the jobs installed `ubuntu-pro-client` from.
 
 Optional arguments:
@@ -122,7 +114,7 @@ Report a campaign's header, state, in-flight units, and problem units.
 
 Required arguments:
 
-* `--campaign`
+* `--campaign FILE`: The campaign's JSON Lines file.
 
 Optional arguments:
 
@@ -130,7 +122,13 @@ Optional arguments:
 * `--problems N`: List at most `N` problem rows. Defaults to all.
 * `--group-by unit|scenario`: List problems one unit per row, or one
   scenario per row with its units by state. Defaults to `unit`.
-* Unit filters and `--state`. Narrow which units are counted and listed.
+* `--feature PATH`: Only this feature file. Repeatable.
+* `--scenario NAME`: Only this exact scenario name. Repeatable.
+* `--release NAME`: Only this release. Repeatable.
+* `--machine-type NAME`: Only this machine type. Repeatable.
+* `--state STATE`: Only units in this state. Repeatable.
+
+Filters narrow which units are counted and listed.
 
 ```bash
 uv run behave-campaign status --campaign 1234567.jsonl --group-by scenario
@@ -144,12 +142,16 @@ skipped and errored units.
 
 Required arguments:
 
-* `--campaign`
+* `--campaign FILE`: The campaign's JSON Lines file.
 
 Optional arguments:
 
-* `--limit N`: Defaults to `1`.
-* Unit filters and `--state`.
+* `--limit N`: Most units to list. Defaults to `1`.
+* `--feature PATH`: Only this feature file. Repeatable.
+* `--scenario NAME`: Only this exact scenario name. Repeatable.
+* `--release NAME`: Only this release. Repeatable.
+* `--machine-type NAME`: Only this machine type. Repeatable.
+* `--state STATE`: Only units in this state. Repeatable.
 
 ```bash
 uv run behave-campaign next --campaign 1234567.jsonl --limit 4
@@ -162,12 +164,16 @@ List every attempt at each selected unit, oldest first: `job_id`,
 
 Required arguments:
 
-* `--campaign`
+* `--campaign FILE`: The campaign's JSON Lines file.
 
 Optional arguments:
 
 * `--limit N`: Most units to list. Defaults to `200`; the maximum is `2000`.
-* Unit filters and `--state`.
+* `--feature PATH`: Only this feature file. Repeatable.
+* `--scenario NAME`: Only this exact scenario name. Repeatable.
+* `--release NAME`: Only this release. Repeatable.
+* `--machine-type NAME`: Only this machine type. Repeatable.
+* `--state STATE`: Only units in this state. Repeatable.
 
 ```bash
 uv run behave-campaign history --campaign 1234567.jsonl \
@@ -182,7 +188,8 @@ well as the events.
 
 Required arguments:
 
-* `--campaign`
+* `--campaign FILE`: The campaign's JSON Lines file; the events file sits
+  beside it.
 
 Optional arguments:
 
