@@ -25,6 +25,7 @@ from behave_campaign.domain import Filters
 from behave_campaign.messages import (
     DEFAULT_EVENTS_LIMIT,
     DEFAULT_HISTORY_LIMIT,
+    DEFAULT_PROBLEMS_LIMIT,
     AwaitEventsResponse,
     CampaignControlResponse,
     CampaignStatusResponse,
@@ -743,6 +744,15 @@ def campaign_status(
             ),
         ),
     ] = campaign_domain.GroupBy.UNIT,
+    problems_limit: Annotated[
+        int,
+        Field(
+            default=DEFAULT_PROBLEMS_LIMIT,
+            description=(
+                "Most problem rows to list; problems_total counts them all."
+            ),
+        ),
+    ] = DEFAULT_PROBLEMS_LIMIT,
     repo_root: RepoRoot = "",
 ) -> CampaignStatusResponse:
     return campaign_service(repo_root).campaign_status(
@@ -756,6 +766,7 @@ def campaign_status(
         ),
         units_limit=units_limit,
         group_by=group_by.value,
+        problems_limit=problems_limit,
     )
 
 

@@ -10,6 +10,7 @@ MAX_UNITS_LIMIT = 2000
 DEFAULT_HISTORY_LIMIT = 50
 DEFAULT_EVENTS_LIMIT = 100
 MAX_EVENTS_LIMIT = 1000
+DEFAULT_PROBLEMS_LIMIT = 50
 
 
 class UnitView(BaseModel):
@@ -151,10 +152,11 @@ class CampaignStatusResponse(BaseModel):
 
     ``running`` and the problems are always present because they are what
     a caller acts on: ``problems`` lists them one unit per row, or
-    ``problem_scenarios`` one scenario per row when grouped that way;
-    the other is None. ``units`` is None unless a ``units_limit`` was
-    asked for, and is capped at it, with ``truncated`` saying whether any
-    were dropped.
+    ``problem_scenarios`` one scenario per row when grouped that way; the
+    other is None. Either list is capped at ``problems_limit`` (units, or
+    scenario rows) and ``problems_total`` counts every problem unit.
+    ``units`` is None unless a ``units_limit`` was asked for, and is
+    capped at it, with ``truncated`` saying whether any were dropped.
     """
 
     campaign: CampaignHeader = CampaignHeader()
@@ -162,6 +164,7 @@ class CampaignStatusResponse(BaseModel):
     running: list[UnitView] = []
     problems: list[UnitView] | None = None
     problem_scenarios: list[ScenarioProblems] | None = None
+    problems_total: int = 0
     units: list[UnitView] | None = None
     truncated: bool = False
     limit_clamped: bool = False

@@ -189,9 +189,10 @@ write the same files the CLI does, under the directory named by
 - `campaign_status` -- one campaign's counts, the units in flight, and the
   units needing action, one unit per row or -- with `group_by=scenario` --
   one scenario per row with its units bucketed by state, which is how a
-  scenario failing on every release reads at a glance. Individual units are
-  opt-in via `units_limit` because a full campaign is over a thousand of
-  them.
+  scenario failing on every release reads at a glance. Either list is capped
+  at `problems_limit` (50 over MCP; the CLI lists all) with `problems_total`
+  alongside. Individual units are opt-in via `units_limit` because a full
+  campaign is over a thousand of them.
 - `start_campaign` -- begin scheduling. The server then keeps up to
   `max_lanes` jobs in flight and fills a lane as soon as one frees, with no
   further calls needed to keep it moving.

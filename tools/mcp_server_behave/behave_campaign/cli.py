@@ -38,6 +38,7 @@ from .domain import (
 from .messages import (
     DEFAULT_EVENTS_LIMIT,
     DEFAULT_UNITS_LIMIT,
+    MAX_UNITS_LIMIT,
     AwaitEventsResponse,
 )
 from .ports import EventLog
@@ -128,6 +129,7 @@ def _command_status(args: argparse.Namespace) -> BaseModel:
         filters=_filters(args),
         units_limit=args.units_limit,
         group_by=args.group_by,
+        problems_limit=args.problems_limit,
     )
 
 
@@ -304,6 +306,14 @@ def build_parser() -> argparse.ArgumentParser:
             "list up to N individual units as well as the counts. "
             "Omit to report counts, in-flight units and problems only."
         ),
+    )
+    status.add_argument(
+        "--problems",
+        type=int,
+        default=MAX_UNITS_LIMIT,
+        dest="problems_limit",
+        metavar="N",
+        help="list at most N problem rows (default: all)",
     )
     status.add_argument(
         "--group-by",

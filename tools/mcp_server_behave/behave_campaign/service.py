@@ -28,6 +28,7 @@ from behave_campaign.domain import (
 )
 from behave_campaign.messages import (
     DEFAULT_EVENTS_LIMIT,
+    DEFAULT_PROBLEMS_LIMIT,
     DEFAULT_UNITS_LIMIT,
     MAX_EVENTS_LIMIT,
     MAX_UNITS_LIMIT,
@@ -234,6 +235,7 @@ class CampaignService:
         filters: Filters = Filters(),
         units_limit: int = 0,
         group_by: str = domain.GroupBy.UNIT,
+        problems_limit: int = DEFAULT_PROBLEMS_LIMIT,
     ) -> CampaignStatusResponse:
         """Report counts, the units in flight, and the units needing action.
 
@@ -259,6 +261,7 @@ class CampaignService:
         ]
 
         problem_units = domain.problems(statuses)
+        problems_cap, _ = self._cap(problems_limit)
         units = None
         truncated = False
         clamped = False
@@ -272,15 +275,16 @@ class CampaignService:
             state=campaign_state(campaign_id, records, statuses),
             running=[unit_view(status) for status in domain.running(statuses)],
             problems=(
-                [unit_view(status) for status in problem_units]
+                [unit_view(status) for status in problem_units[:problems_cap]]
                 if group_by == domain.GroupBy.UNIT
                 else None
             ),
             problem_scenarios=(
-                scenario_problems(problem_units)
+                scenario_problems(problem_units)[:problems_cap]
                 if group_by == domain.GroupBy.SCENARIO
                 else None
             ),
+            problems_total=len(problem_units),
             units=units,
             truncated=truncated,
             limit_clamped=clamped,

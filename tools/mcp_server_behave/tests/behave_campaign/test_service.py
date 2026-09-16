@@ -311,6 +311,31 @@ class TestCampaignStatus:
         ]
         assert row.skipped == []
 
+    def test_problems_are_capped_but_counted(self, service, store):
+        create(service)
+        store.append(
+            "1234567",
+            [
+                AttemptFinished(
+                    unit=unit, job_id="job%d" % i, outcome="failed", at=AT
+                )
+                for i, unit in enumerate(UNITS)
+            ],
+        )
+
+        status = service.campaign_status(
+            campaign_id="1234567", problems_limit=2
+        )
+        grouped = service.campaign_status(
+            campaign_id="1234567", problems_limit=1, group_by="scenario"
+        )
+
+        assert len(status.problems or []) == 2
+        assert status.problems_total == 3
+        # Grouped, the cap is on scenario rows; the total is still units.
+        assert len(grouped.problem_scenarios or []) == 1
+        assert grouped.problems_total == 3
+
     def test_an_unknown_grouping_is_rejected(self, service):
         create(service)
 
