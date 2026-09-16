@@ -130,13 +130,17 @@ def test_completed_with_summary_key_order(tmp_path):
     )
 
     assert list(payload.keys()) == [
+        "job_id",
         "status",
         "ok",
-        "job_id",
-        "returncode",
-        "artifacts",
+        "feature_file",
+        "scenario_name",
+        "machine_types",
+        "releases",
         "summary",
         "failures",
+        "returncode",
+        "artifacts",
         "recent_output",
     ]
     assert payload["recent_output"] is None
@@ -157,13 +161,17 @@ def test_completed_fallback_key_order(tmp_path):
     )
 
     assert list(payload.keys()) == [
+        "job_id",
         "status",
         "ok",
-        "job_id",
-        "returncode",
-        "artifacts",
+        "feature_file",
+        "scenario_name",
+        "machine_types",
+        "releases",
         "summary",
         "failures",
+        "returncode",
+        "artifacts",
         "recent_output",
     ]
 

@@ -142,21 +142,12 @@ class Capacity(BaseModel):
 
 
 class Failure(BaseModel):
-    """A single failing step extracted from a behave report.
+    """A single failing step extracted from a behave report."""
 
-    ``job_id``/``releases``/``machine_types`` are only populated by
-    ``summarize_scenario_results``; ``wait_for_completion`` and
-    ``get_scenario_artifacts`` leave them at their defaults.
-    """
-
-    feature: str
     scenario: str
     step: str
     status: str
     error_message: str
-    job_id: str | None = None
-    releases: list[str] = []
-    machine_types: list[str] = []
 
 
 class ReportSummary(BaseModel):
@@ -235,21 +226,33 @@ class RunningResponse(BaseModel):
     artifacts: Artifacts | None = None
 
 
-class CompletedResponse(BaseModel):
-    """Completed job. ``ok`` reflects the behave return code, not call success.
+class JobResult(BaseModel):
+    """What came of one job: what ran, how it ended, and what failed.
 
-    ``summary`` is ``None`` when no parseable JSON report was produced;
-    ``recent_output`` is populated only in that same fallback case, and is
-    ``None`` (present, but null) otherwise.
+    ``ok`` reflects the behave return code, not call success. ``summary``
+    is behave's own counts (features, scenarios, steps by status) and is
+    None while the job runs or when no parseable report was produced.
     """
+
+    job_id: str = ""
+    status: str = RunStatus.UNKNOWN.value
+    ok: bool | None = None
+    feature_file: str = ""
+    scenario_name: str = ""
+    machine_types: list[str] = []
+    releases: list[str] = []
+    summary: dict[str, dict[str, int]] | None = None
+    failures: list[Failure] = []
+
+
+class CompletedResponse(JobResult):
+    """A job that has finished. ``recent_output`` is populated only when no
+    parseable report was produced, and is None otherwise."""
 
     status: Literal["completed"] = "completed"
     ok: bool
-    job_id: str
     returncode: int | None
     artifacts: Artifacts
-    summary: dict[str, dict[str, int]] | None
-    failures: list[Failure]
     recent_output: str | None = None
 
 
@@ -371,41 +374,14 @@ class ListScenarioJobsResponse(BaseModel):
     limit_clamped: bool = False
 
 
-class GroupedCount(BaseModel):
-    """Scenario-level status counts for one release or machine_type value.
+class ResultsResponse(BaseModel):
+    """One result per matching job, most recently started first."""
 
-    Every scenario in a job's report is attributed to all of that job's
-    declared releases/machine_types -- a job isn't broken down per
-    Examples row.
-    """
-
-    name: str = ""
-    total: int = 0
-    passed: int = 0
-    failed: int = 0
-    skipped: int = 0
-    unknown: int = 0
-
-
-class JobCounts(BaseModel):
-    """Job-level status totals -- the "how far into it" progress signal."""
-
-    total: int = 0
-    running: int = 0
-    completed_passed: int = 0
-    completed_failed: int = 0
-    unknown: int = 0
-
-
-class SummarizeScenarioResultsResponse(BaseModel):
     repo_root: str = ""
-    job_counts: JobCounts = JobCounts()
-    by_release: list[GroupedCount] = []
-    by_machine_type: list[GroupedCount] = []
-    failures: list[Failure] = []
+    results: list[JobResult] = []
+    total: int = 0
     truncated: bool = False
     limit_clamped: bool = False
-    matched_job_ids: list[str] = []
 
 
 class KillJobResponse(BaseModel):

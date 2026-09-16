@@ -18,7 +18,6 @@ from behave_mcp.messages import (
     ExamplesBlock,
     Failure,
     FeatureCatalogEntry,
-    GroupedCount,
     JobRecord,
     ReportSummary,
     RunStatus,
@@ -92,8 +91,8 @@ METADATA_SUFFIX = "_meta.json"
 DEFAULT_MAX_PARALLEL_JOBS = 1
 DEFAULT_JOB_LIST_LIMIT = 20
 MAX_JOB_LIST_LIMIT = 500
-DEFAULT_SUMMARIZE_FAILURES_LIMIT = 200
-MAX_SUMMARIZE_FAILURES_LIMIT = 2000
+DEFAULT_RESULTS_LIMIT = 20
+MAX_RESULTS_LIMIT = 500
 
 
 def to_combo(combo: parser.Combo) -> Combo:
@@ -428,7 +427,6 @@ def summarize_report(report_data: list[Any]) -> ReportSummary:
     failures: list[Failure] = []
 
     for feature in report_data:
-        feature_name = str(feature.get("name", "unknown-feature"))
         scenarios = feature.get("elements", [])
         if not isinstance(scenarios, list):
             scenarios = []
@@ -465,7 +463,6 @@ def summarize_report(report_data: list[Any]) -> ReportSummary:
                     ).strip()
                     failures.append(
                         Failure(
-                            feature=feature_name,
                             scenario=scenario_name,
                             step=step_name,
                             status=step_status,
@@ -531,122 +528,6 @@ def _empty_grouped_count() -> dict[str, Any]:
         "skipped": 0,
         "unknown": 0,
     }
-
-
-def grouped_counts_from_report(
-    report_data: list[Any],
-    releases: list[str],
-    machine_types: list[str],
-) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
-    """Return one job's per-release and per-machine_type scenario counts.
-
-    Every scenario in the report is attributed to all of the job's declared
-    ``releases``/``machine_types`` -- a single job's Examples rows aren't
-    mapped back to which specific row produced which scenario.
-    """
-    by_release: dict[str, dict[str, Any]] = {}
-    by_machine_type: dict[str, dict[str, Any]] = {}
-
-    for feature in report_data:
-        scenarios = feature.get("elements", [])
-        if not isinstance(scenarios, list):
-            scenarios = []
-        for scenario in scenarios:
-            status = scenario_status_from_element(scenario)
-
-            for name in releases:
-                entry = by_release.setdefault(name, _empty_grouped_count())
-                entry["total"] += 1
-                entry[status] += 1
-            for name in machine_types:
-                entry = by_machine_type.setdefault(
-                    name, _empty_grouped_count()
-                )
-                entry["total"] += 1
-                entry[status] += 1
-
-    return by_release, by_machine_type
-
-
-def merge_grouped_counts(
-    target: dict[str, dict[str, Any]], source: dict[str, dict[str, Any]]
-) -> None:
-    """Merge one job's ``grouped_counts_from_report`` output into a running
-    total."""
-    for name, counts in source.items():
-        entry = target.setdefault(name, _empty_grouped_count())
-        for key in ("total", "passed", "failed", "skipped", "unknown"):
-            entry[key] += counts.get(key, 0)
-
-
-def grouped_counts_from_dict(
-    counts: dict[str, dict[str, Any]],
-) -> list[GroupedCount]:
-    """Project a merged ``grouped_counts_from_report`` dict into sorted
-    DTOs."""
-    return [
-        GroupedCount(
-            name=name,
-            total=data["total"],
-            passed=data["passed"],
-            failed=data["failed"],
-            skipped=data["skipped"],
-            unknown=data["unknown"],
-        )
-        for name, data in sorted(counts.items())
-    ]
-
-
-def job_failures_from_report(
-    report_data: list[Any],
-    job_id: str,
-    releases: list[str],
-    machine_types: list[str],
-) -> list[Failure]:
-    """Extract failing steps tagged with job/release/machine_type context.
-
-    Mirrors ``summarize_report``'s failure extraction but attaches
-    ``job_id`` and the job's declared releases/machine_types to each
-    failure. Used only by ``summarize_scenario_results``;
-    ``wait_for_completion``/``get_scenario_artifacts`` don't need this
-    extra context.
-    """
-    failures: list[Failure] = []
-
-    for feature in report_data:
-        feature_name = str(feature.get("name", "unknown-feature"))
-        scenarios = feature.get("elements", [])
-        if not isinstance(scenarios, list):
-            scenarios = []
-        for scenario in scenarios:
-            scenario_name = str(scenario.get("name", "unknown-scenario"))
-            steps = scenario.get("steps", [])
-            if not isinstance(steps, list):
-                steps = []
-
-            for step in steps:
-                step_name = str(step.get("name", "unknown-step"))
-                result = step.get("result", {})
-                step_status = str(result.get("status", "unknown"))
-                if _behave_step_status(step_status) not in (
-                    _FAILING_STEP_STATUSES
-                ):
-                    continue
-                error_message = str(result.get("error_message", "")).strip()
-                failures.append(
-                    Failure(
-                        feature=feature_name,
-                        scenario=scenario_name,
-                        step=step_name,
-                        status=step_status,
-                        error_message=error_message[:2000],
-                        job_id=job_id,
-                        releases=list(releases),
-                        machine_types=list(machine_types),
-                    )
-                )
-
-    return failures
 
 
 class LogSelection(NamedTuple):

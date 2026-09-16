@@ -24,12 +24,11 @@ The server exposes these MCP tools:
   - No known `job_id` or access to system processes required.
   - Merges in-memory state with jobs recovered from disk, including jobs still running after a server restart.
   - Optional `limit` caps how many completed jobs are returned (most recent first). `total_completed` and `truncated` in the response tell you if older jobs were dropped. `limit` must be positive; values above the server max are silently capped, with `limit_clamped` set when that happens.
-- `summarize_scenario_results` -- aggregates results across jobs.
-  - Optional `job_ids`, `feature_file`, `scenario_name` (substring), `release`, `machine_type`, and `status` filters.
-  - Returns `job_counts` (status totals), scenario-level pass/fail counts grouped `by_release` and `by_machine_type` (each job's scenarios are attributed to all of that job's declared releases/machine_types), and a flattened `failures` list tagged with `job_id` and release/machine_type context (capped at `limit`, with `truncated` set when more exist). `limit` must be positive; values above the server max are silently capped, with `limit_clamped` set when that happens.
-  - Provides raw status/data only -- rerunning failed scenarios and judging flaky-vs-real failures is left to the caller.
+- `get_scenario_results` -- what came of each job: what it ran, `status` and `ok`, behave's own counts, and every failing step with its message.
+  - One `JobResult` per job, most recently started first -- the same shape `wait_for_scenario_completion` returns for one job.
+  - Optional `job_ids`, `feature_file`, `scenario_name` (substring), `release`, `machine_type`, and `status` filters; `limit` caps the jobs listed, with `total` and `truncated` alongside. `limit` must be positive; values above the server max are capped, with `limit_clamped` set.
 - `wait_for_scenario_completion` -- waits for completion.
-  - Returns a compact completion summary, or a timeout payload.
+  - Returns the job's `JobResult` (plus `returncode` and artifact paths), or a timeout payload.
 - `get_scenario_errors` -- what went wrong in a job, from its log: every traceback, hook error and failed assertion in the order they happened, each with its line range, the failing step above it, and the exception raised.
   - The first region is usually the cause and later ones its consequences; `errors` is capped with `errors_total` alongside, long regions and lines are elided.
   - `finished` says whether behave reached its summary; `summary` is that block; `tail` and `log_path` are there when the parser has nothing to say (a tox or pip failure before behave, a killed job).
@@ -230,7 +229,6 @@ One more variable is read per call rather than at startup, because it follows
 
 - Add way to kill jobs if they are known to be hanging
 - Improve the job recovery mechanism; it's a little verbose on logs.
-- Precise per-scenario release/machine_type attribution in `summarize_scenario_results` (currently every scenario in a job is attributed to all of that job's declared releases/machine_types) -- deferred to a future change.
 
 Known limitation: job liveness after a server restart is determined by checking whether the recorded PID is still alive (`os.kill(pid, 0)`). If that PID has since been reused by an unrelated process, a dead job can be misreported as still running. This is considered an acceptable tradeoff for a local dev tool.
 

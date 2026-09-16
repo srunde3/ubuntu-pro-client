@@ -1,7 +1,7 @@
 """Application service orchestrating behave jobs via injected ports."""
 
 import logging
-from typing import Any, Callable
+from typing import Callable
 
 from behave_mcp import domain, parser
 from behave_mcp.config import Settings
@@ -12,10 +12,9 @@ from behave_mcp.messages import (
     CompletedResponse,
     DescribeFeatureResponse,
     ErrorsResponse,
-    Failure,
     FindScenariosResponse,
-    JobCounts,
     JobRecord,
+    JobResult,
     JobStatus,
     JobSummary,
     KillJobResponse,
@@ -25,13 +24,13 @@ from behave_mcp.messages import (
     LogRegionView,
     LogsResponse,
     LogSummaryView,
+    ResultsResponse,
     RunningResponse,
     RunStatus,
     ScenarioMatch,
     StartScenarioResponse,
     StartScenarioResult,
     StepView,
-    SummarizeScenarioResultsResponse,
     TimeoutResponse,
     WaitForCompletionResult,
 )
@@ -691,7 +690,7 @@ class BehaveService:
             limit_clamped=limit_clamped,
         )
 
-    def summarize_scenario_results(
+    def get_results(
         self,
         job_ids: list[str] | None = None,
         feature_file: str = "",
@@ -699,9 +698,9 @@ class BehaveService:
         release: str = "",
         machine_type: str = "",
         status: str = "",
-        limit: int = domain.DEFAULT_SUMMARIZE_FAILURES_LIMIT,
+        limit: int = domain.DEFAULT_RESULTS_LIMIT,
         repo_root: str = "",
-    ) -> SummarizeScenarioResultsResponse:
+    ) -> ResultsResponse:
         status_filter: RunStatus | None = None
         if status:
             try:
@@ -730,30 +729,23 @@ class BehaveService:
             raise BehaveServiceError(
                 f"limit must be a positive integer, got {limit}"
             )
-        limit_clamped = limit > domain.MAX_SUMMARIZE_FAILURES_LIMIT
-        limit = min(limit, domain.MAX_SUMMARIZE_FAILURES_LIMIT)
+        limit_clamped = limit > domain.MAX_RESULTS_LIMIT
+        limit = min(limit, domain.MAX_RESULTS_LIMIT)
 
         log_dir = self._workspace.resolve_log_dir(resolved_repo_root)
         results = self._results.bind(log_dir)
         in_memory_jobs = {job.job_id: job for job in self._registry.snapshot()}
         disk_job_ids = set(results.list_job_ids())
 
-        job_counts = JobCounts()
-        by_release: dict[str, dict[str, Any]] = {}
-        by_machine_type: dict[str, dict[str, Any]] = {}
-        failures: list[Failure] = []
-        matched_job_ids: list[str] = []
-
+        matched: list[tuple[str, JobSummary, Job]] = []
         for job_id in sorted(set(in_memory_jobs) | disk_job_ids):
             job = in_memory_jobs.get(job_id)
             if job is None:
                 job = self._recover_job(job_id, repo_root or None)
                 if job is None:
                     continue
-
-            metadata_record = results.read_record(job_id)
             if not domain.job_matches_result_filters(
-                metadata_record,
+                results.read_record(job_id),
                 job_id=job_id,
                 job_ids=job_ids_filter,
                 feature_file=normalized_feature_file,
@@ -762,62 +754,41 @@ class BehaveService:
                 machine_type=machine_type or None,
             ):
                 continue
-
             summary = self._job_summary(job_id, job)
             if status_filter is not None and summary.status != status_filter:
                 continue
+            matched.append((job_id, summary, job))
 
-            matched_job_ids.append(job_id)
-            job_counts.total += 1
-            if summary.status == RunStatus.RUNNING:
-                job_counts.running += 1
-            elif summary.status == RunStatus.COMPLETED:
-                if summary.ok:
-                    job_counts.completed_passed += 1
-                else:
-                    job_counts.completed_failed += 1
-            else:
-                job_counts.unknown += 1
-
-            if summary.status != RunStatus.COMPLETED:
-                continue
-
-            report_data = results.read_report(job_id)
-            if report_data is None:
-                continue
-
-            fallback_releases = metadata_record.releases
-            fallback_machine_types = metadata_record.machine_types
-
-            job_by_release, job_by_machine_type = (
-                domain.grouped_counts_from_report(
-                    report_data,
-                    fallback_releases,
-                    fallback_machine_types,
-                )
-            )
-            domain.merge_grouped_counts(by_release, job_by_release)
-            domain.merge_grouped_counts(by_machine_type, job_by_machine_type)
-            failures.extend(
-                domain.job_failures_from_report(
-                    report_data,
-                    job_id,
-                    fallback_releases,
-                    fallback_machine_types,
-                )
-            )
-
-        truncated = len(failures) > limit
-
-        return SummarizeScenarioResultsResponse(
+        matched.sort(key=lambda item: item[1].started_at or "", reverse=True)
+        return ResultsResponse(
             repo_root=str(resolved_repo_root),
-            job_counts=job_counts,
-            by_release=domain.grouped_counts_from_dict(by_release),
-            by_machine_type=domain.grouped_counts_from_dict(by_machine_type),
-            failures=failures[:limit],
-            truncated=truncated,
+            results=[
+                self._job_result(job_id, summary, job)
+                for job_id, summary, job in matched[:limit]
+            ],
+            total=len(matched),
+            truncated=len(matched) > limit,
             limit_clamped=limit_clamped,
-            matched_job_ids=matched_job_ids,
+        )
+
+    def _job_result(
+        self, job_id: str, summary: JobSummary, job: Job
+    ) -> JobResult:
+        report = None
+        if summary.status == RunStatus.COMPLETED:
+            report_data = self._results.bind(job.log_dir).read_report(job_id)
+            if report_data is not None:
+                report = domain.summarize_report(report_data)
+        return JobResult(
+            job_id=job_id,
+            status=summary.status.value,
+            ok=summary.ok,
+            feature_file=summary.feature_file,
+            scenario_name=summary.scenario_name,
+            machine_types=summary.machine_types,
+            releases=summary.releases,
+            summary=None if report is None else report.summary,
+            failures=[] if report is None else report.failures,
         )
 
     def _job_summary(self, job_id: str, job: Job) -> JobSummary:
@@ -938,30 +909,26 @@ class BehaveService:
 
         ok_value = bool(classification.ok)
         artifacts = results.artifacts(job_id)
-        if report is None:
-            response = CompletedResponse(
-                ok=ok_value,
-                job_id=job_id,
-                returncode=returncode,
-                artifacts=artifacts,
-                summary=None,
-                failures=[],
-                recent_output=results.log_tail(
-                    job_id, domain.DEFAULT_RUNNING_TAIL_LINES
-                ),
-            )
-        else:
-            response = CompletedResponse(
-                ok=ok_value,
-                job_id=job_id,
-                returncode=returncode,
-                artifacts=artifacts,
-                summary=report.summary,
-                failures=report.failures,
-            )
+        record = results.read_record(job_id)
+        response = CompletedResponse(
+            ok=ok_value,
+            job_id=job_id,
+            returncode=returncode,
+            artifacts=artifacts,
+            feature_file=record.feature_file,
+            scenario_name=record.scenario_name,
+            machine_types=record.machine_types,
+            releases=record.releases,
+            summary=None if report is None else report.summary,
+            failures=[] if report is None else report.failures,
+            recent_output=(
+                results.log_tail(job_id, domain.DEFAULT_RUNNING_TAIL_LINES)
+                if report is None
+                else None
+            ),
+        )
 
         artifacts_dict = artifacts.model_dump(mode="json")
-        record = results.read_record(job_id)
         record.job_id = job_id
         record.status = JobStatus.COMPLETED
         record.completed_at = self._now_utc()

@@ -1128,9 +1128,7 @@ def test_list_jobs_rejects_invalid_repo_root():
 # ---- summarize_scenario_results ----
 
 
-def test_summarize_scenario_results_groups_by_release_and_machine_type(
-    tmp_path,
-):
+def test_get_results_reports_one_result_per_job(tmp_path):
     repo_root = _make_repo_with_outline(tmp_path)
     handle = FakeProcessHandle(returncode=0)
     launcher = FakeLauncher(handle=handle)
@@ -1185,95 +1183,71 @@ def test_summarize_scenario_results_groups_by_release_and_machine_type(
         encoding="utf-8",
     )
 
-    result = service.summarize_scenario_results(job_ids=[job_id]).model_dump(
-        mode="json"
-    )
+    result = service.get_results(job_ids=[job_id]).model_dump(mode="json")
 
-    assert result["job_counts"] == {
-        "total": 1,
-        "running": 0,
-        "completed_passed": 1,
-        "completed_failed": 0,
-        "unknown": 0,
-    }
-    by_release = {g["name"]: g for g in result["by_release"]}
-    assert by_release["jammy"] == {
-        "name": "jammy",
-        "total": 2,
-        "passed": 1,
-        "failed": 1,
-        "skipped": 0,
-        "unknown": 0,
-    }
-    assert by_release["resolute"] == {
-        "name": "resolute",
-        "total": 2,
-        "passed": 1,
-        "failed": 1,
-        "skipped": 0,
-        "unknown": 0,
-    }
-    by_machine_type = {g["name"]: g for g in result["by_machine_type"]}
-    assert by_machine_type["lxd-container"]["passed"] == 1
-    assert by_machine_type["lxd-vm"]["failed"] == 1
-    assert len(result["failures"]) == 1
-    failure = result["failures"][0]
-    assert failure["job_id"] == job_id
-    assert failure["releases"] == ["jammy", "resolute"]
-    assert failure["machine_types"] == ["lxd-container", "lxd-vm"]
-    assert result["matched_job_ids"] == [job_id]
+    assert result["total"] == 1
     assert result["truncated"] is False
+    (job,) = result["results"]
+    assert job["job_id"] == job_id
+    assert job["status"] == "completed"
+    assert job["ok"] is True
+    assert job["feature_file"] == "features/cli/attach.feature"
+    assert job["releases"] == ["jammy", "resolute"]
+    assert job["machine_types"] == ["lxd-container", "lxd-vm"]
+    assert job["summary"]["scenarios"] == {
+        "total": 2,
+        "passed": 1,
+        "failed": 1,
+        "skipped": 0,
+        "unknown": 0,
+    }
+    assert job["failures"] == [
+        {
+            "scenario": "Attach on a machine -- @1.2",
+            "step": "step2",
+            "status": "failed",
+            "error_message": "boom",
+        }
+    ]
 
 
-def test_summarize_scenario_results_filters_by_feature_file(tmp_path):
-    (tmp_path / "jobmatch_meta.json").write_text(
+def _write_meta(tmp_path, job_id, feature_file, started_at, **extra):
+    (tmp_path / f"{job_id}_meta.json").write_text(
         json.dumps(
             {
-                "feature_file": "features/a.feature",
-                "started_at": "T1",
-                "releases": [],
-                "machine_types": [],
+                "feature_file": feature_file,
+                "started_at": started_at,
+                "releases": extra.get("releases", []),
+                "machine_types": extra.get("machine_types", []),
             }
         ),
         encoding="utf-8",
     )
-    (tmp_path / "jobother_meta.json").write_text(
-        json.dumps(
-            {
-                "feature_file": "features/b.feature",
-                "started_at": "T2",
-                "releases": [],
-                "machine_types": [],
-            }
-        ),
-        encoding="utf-8",
-    )
 
+
+def test_get_results_filters_by_feature_file_newest_first(tmp_path):
+    _write_meta(tmp_path, "jobmatch", "features/a.feature", "T1")
+    _write_meta(tmp_path, "jobnewer", "features/a.feature", "T2")
+    _write_meta(tmp_path, "jobother", "features/b.feature", "T3")
     service = _make_service(
         FakeWorkspace(repo_root=tmp_path, log_dir=tmp_path),
     )
 
-    result = service.summarize_scenario_results(
-        feature_file="features/a.feature"
-    ).model_dump(mode="json")
+    result = service.get_results(feature_file="features/a.feature")
 
-    assert result["matched_job_ids"] == ["jobmatch"]
+    assert [r.job_id for r in result.results] == ["jobnewer", "jobmatch"]
+    assert result.total == 2
 
 
-def test_summarize_scenario_results_recovers_disk_only_job(
-    tmp_path,
-):
+def test_get_results_recovers_disk_only_job(tmp_path):
     job_id = "joblegacy"
-    (tmp_path / f"{job_id}_meta.json").write_text(
-        json.dumps(
-            {
-                "feature_file": "features/a.feature",
-                "started_at": "T1",
-                "releases": ["jammy"],
-                "machine_types": ["lxd-container"],
-            }
-        ),
-        encoding="utf-8",
+    _write_meta(
+        tmp_path,
+        job_id,
+        "features/a.feature",
+        "T1",
+        releases=["jammy"],
+        machine_types=["lxd-container"],
     )
     (tmp_path / f"{job_id}_report.json").write_text(
         json.dumps(
@@ -1297,88 +1271,51 @@ def test_summarize_scenario_results_recovers_disk_only_job(
         ),
         encoding="utf-8",
     )
-
     service = _make_service(
         FakeWorkspace(repo_root=tmp_path, log_dir=tmp_path),
     )
 
-    result = service.summarize_scenario_results().model_dump(mode="json")
+    (job,) = service.get_results().results
 
-    by_release = {g["name"]: g for g in result["by_release"]}
-    assert by_release["jammy"]["passed"] == 1
+    assert job.status == "completed"
+    assert job.summary is not None
+    assert job.summary["scenarios"]["passed"] == 1
+    assert job.releases == ["jammy"]
 
 
-def test_summarize_scenario_results_rejects_invalid_status(tmp_path):
+def test_get_results_rejects_invalid_status(tmp_path):
     service = _make_service(
         FakeWorkspace(repo_root=tmp_path, log_dir=tmp_path),
     )
-
     with pytest.raises(BehaveServiceError, match="Invalid status filter"):
-        service.summarize_scenario_results(status="bogus")
+        service.get_results(status="bogus")
 
 
-def test_summarize_scenario_results_rejects_non_positive_limit(tmp_path):
+def test_get_results_rejects_non_positive_limit(tmp_path):
+    service = _make_service(
+        FakeWorkspace(repo_root=tmp_path, log_dir=tmp_path),
+    )
+    with pytest.raises(BehaveServiceError, match="limit must be"):
+        service.get_results(limit=0)
+
+
+def test_get_results_caps_and_truncates(tmp_path):
+    for number in range(3):
+        _write_meta(
+            tmp_path, f"job{number}", "features/a.feature", f"T{number}"
+        )
     service = _make_service(
         FakeWorkspace(repo_root=tmp_path, log_dir=tmp_path),
     )
 
-    with pytest.raises(BehaveServiceError, match="limit must be a positive"):
-        service.summarize_scenario_results(limit=0)
+    result = service.get_results(limit=2)
+    assert [r.job_id for r in result.results] == ["job2", "job1"]
+    assert result.total == 3
+    assert result.truncated is True
 
-
-def test_summarize_scenario_results_clamps_limit_above_max(tmp_path):
-    service = _make_service(
-        FakeWorkspace(repo_root=tmp_path, log_dir=tmp_path),
-    )
-
-    result = service.summarize_scenario_results(
-        limit=domain.MAX_SUMMARIZE_FAILURES_LIMIT + 1000
-    ).model_dump(mode="json")
-
-    assert result["limit_clamped"] is True
-
-
-def test_summarize_scenario_results_truncates_failures(tmp_path):
-    job_id = "jobtrunc"
-    (tmp_path / f"{job_id}_meta.json").write_text(
-        json.dumps(
-            {
-                "feature_file": "features/a.feature",
-                "started_at": "T1",
-                "releases": [],
-                "machine_types": [],
-            }
-        ),
-        encoding="utf-8",
-    )
-    elements = [
-        {
-            "name": f"scenario{i}",
-            "location": f"features/a.feature:{i}",
-            "steps": [
-                {
-                    "name": "step",
-                    "result": {"status": "failed", "error_message": "boom"},
-                }
-            ],
-        }
-        for i in range(3)
-    ]
-    (tmp_path / f"{job_id}_report.json").write_text(
-        json.dumps([{"name": "feature", "elements": elements}]),
-        encoding="utf-8",
-    )
-
-    service = _make_service(
-        FakeWorkspace(repo_root=tmp_path, log_dir=tmp_path),
-    )
-
-    result = service.summarize_scenario_results(limit=2).model_dump(
-        mode="json"
-    )
-
-    assert len(result["failures"]) == 2
-    assert result["truncated"] is True
+    clamped = service.get_results(limit=domain.MAX_RESULTS_LIMIT + 1)
+    assert clamped.limit_clamped is True
+    assert clamped.truncated is False
 
 
 class TestKillJob:

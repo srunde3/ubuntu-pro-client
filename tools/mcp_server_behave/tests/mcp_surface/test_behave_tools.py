@@ -30,7 +30,7 @@ async def test_mcp_lists_expected_tools():
     assert "find_scenarios" in tools
     assert "start_scenario" in tools
     assert "list_scenario_jobs" in tools
-    assert "summarize_scenario_results" in tools
+    assert "get_scenario_results" in tools
     assert "wait_for_scenario_completion" in tools
     assert "get_scenario_logs" in tools
     assert "get_scenario_errors" in tools
@@ -193,18 +193,19 @@ async def test_mcp_start_wait_and_log_flow(monkeypatch, tmp_path):
         jobs_payload = result_json(jobs_result)
         assert job_id in {job["job_id"] for job in jobs_payload["jobs"]}
 
-        summary_result = await client.call_tool(
-            "summarize_scenario_results", {"job_ids": [job_id]}
+        results_result = await client.call_tool(
+            "get_scenario_results", {"job_ids": [job_id]}
         )
-        summary_payload = result_json(summary_result)
-        assert summary_payload["matched_job_ids"] == [job_id]
-        assert summary_payload["job_counts"]["completed_passed"] == 1
-        assert summary_payload["job_counts"]["total"] == 1
-        total_passed = sum(
-            group["passed"] for group in summary_payload["by_release"]
-        )
-        assert total_passed == 1
-        assert summary_payload["failures"] == []
+        results_payload = result_json(results_result)
+        assert results_payload["total"] == 1
+        (result,) = results_payload["results"]
+        assert result["job_id"] == job_id
+        assert result["ok"] is True
+        assert result["summary"]["steps"]["passed"] == 1
+        assert result["failures"] == []
+        # One shape for one job's outcome, however it is asked for.
+        for key in ("status", "ok", "summary", "failures", "releases"):
+            assert result[key] == completed_payload[key]
 
 
 @pytest.mark.asyncio

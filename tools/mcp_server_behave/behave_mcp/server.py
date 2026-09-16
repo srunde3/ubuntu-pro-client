@@ -56,8 +56,8 @@ from behave_mcp.messages import (
     ListFeaturesResponse,
     ListScenarioJobsResponse,
     LogsResponse,
+    ResultsResponse,
     StartScenarioResult,
-    SummarizeScenarioResultsResponse,
     WaitForCompletionResult,
 )
 from behave_mcp.ports import JobRegistry
@@ -415,40 +415,30 @@ def list_scenario_jobs(
 
 @mcp.tool(
     description=(
-        "Summarize results across multiple behave jobs matching optional "
-        "filters (job_ids, feature_file, scenario_name substring, release, "
-        "machine_type, status). Returns job_counts (status totals -- how "
-        "far into a set of runs you are), scenario-level pass/fail counts "
-        "grouped by_release and by_machine_type (each job's scenarios are "
-        "attributed to all of that job's declared releases/machine_types, "
-        "not a specific Examples row), a flattened failures list tagged "
-        "with job_id and release/machine_type context (capped at limit, "
-        "with truncated set when more exist), and matched_job_ids for "
-        "pivoting to get_scenario_logs/get_scenario_artifacts. limit must "
-        "be positive (rejected otherwise); values above the server max "
-        "are silently capped, with limit_clamped set to true when that "
-        "happens. Provides raw status/data only -- rerunning failed "
-        "scenarios and judging flaky-vs-real failures is left to the "
-        "caller."
+        "What came of each behave job: what it ran, its status and ok, "
+        "behave's own counts, and every failing step with its message. "
+        "One result per job, most recently started first, the same shape "
+        "wait_for_scenario_completion returns for one job. Filter by "
+        "job_ids, feature_file, scenario_name (substring), release, "
+        "machine_type and status (running, completed, unknown); limit "
+        "caps the jobs listed, with total and truncated alongside. For "
+        "the cause behind an empty error_message, get_scenario_errors."
     )
 )
-def summarize_scenario_results(
+def get_scenario_results(
     job_ids: Annotated[
         list[str] | None,
-        Field(default=None, description="Only include these specific jobs."),
+        Field(default=None, description="Only these jobs."),
     ] = None,
     feature_file: Annotated[
         str,
-        Field(default="", description="Only include jobs for this feature."),
+        Field(default="", description="Only jobs for this feature."),
     ] = "",
     scenario_name: Annotated[
         str,
         Field(
             default="",
-            description=(
-                "Only include jobs whose scenario_name contains this "
-                "substring."
-            ),
+            description="Only jobs whose scenario_name contains this.",
         ),
     ] = "",
     release: ReleaseFilter = "",
@@ -457,24 +447,22 @@ def summarize_scenario_results(
         str,
         Field(
             default="",
-            description=(
-                "Only include jobs with this status: running, "
-                "completed, or unknown."
-            ),
+            description="Only jobs with this status: running, completed "
+            "or unknown.",
         ),
     ] = "",
     limit: Annotated[
         int,
         Field(
             description=(
-                "Max number of failures to return. Must be positive; "
-                "values above the server max are silently capped."
+                "Most jobs to return. Must be positive; values above the "
+                "server max are capped, with limit_clamped set."
             )
         ),
-    ] = domain.DEFAULT_SUMMARIZE_FAILURES_LIMIT,
+    ] = domain.DEFAULT_RESULTS_LIMIT,
     repo_root: RepoRoot = "",
-) -> SummarizeScenarioResultsResponse:
-    return _service.summarize_scenario_results(
+) -> ResultsResponse:
+    return _service.get_results(
         job_ids=job_ids,
         feature_file=feature_file,
         scenario_name=scenario_name,

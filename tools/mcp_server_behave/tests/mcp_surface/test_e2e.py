@@ -111,73 +111,30 @@ async def test_mcp_e2e_long_running_attach_flow(monkeypatch):
         assert artifacts_payload["metadata"]["repo_state"] == repo_state
         assert finished_jobs[job_id]["ok"] == completed_payload["ok"]
 
-        summary_by_job_id = result_json(
+        results = result_json(
             await client.call_tool(
-                "summarize_scenario_results", {"job_ids": [job_id]}
+                "get_scenario_results", {"job_ids": [job_id]}
             )
         )
-        assert summary_by_job_id["matched_job_ids"] == [job_id]
-        assert summary_by_job_id["job_counts"]["total"] == 1
-        assert summary_by_job_id["by_release"]
-        assert summary_by_job_id["by_machine_type"]
+        (result,) = results["results"]
+        assert result["job_id"] == job_id
+        assert result["status"] == "completed"
+        assert result["summary"]["scenarios"]["total"] >= 1
+        assert result["releases"] == ["noble"]
 
-        summary_by_feature_file = result_json(
-            await client.call_tool(
-                "summarize_scenario_results",
-                {"feature_file": "features/cli/attach.feature"},
+        async def ids(**filters):
+            payload = result_json(
+                await client.call_tool("get_scenario_results", filters)
             )
-        )
-        assert job_id in summary_by_feature_file["matched_job_ids"]
+            return [r["job_id"] for r in payload["results"]]
 
-        summary_by_other_feature_file = result_json(
-            await client.call_tool(
-                "summarize_scenario_results",
-                {"feature_file": "features/cli/does-not-exist.feature"},
-            )
+        assert job_id in await ids(feature_file="features/cli/attach.feature")
+        assert job_id not in await ids(
+            feature_file="features/cli/does-not-exist.feature"
         )
-        assert job_id not in summary_by_other_feature_file["matched_job_ids"]
-
-        summary_by_release = result_json(
-            await client.call_tool(
-                "summarize_scenario_results", {"release": "noble"}
-            )
-        )
-        assert job_id in summary_by_release["matched_job_ids"]
-
-        summary_by_other_release = result_json(
-            await client.call_tool(
-                "summarize_scenario_results", {"release": "jammy"}
-            )
-        )
-        assert job_id not in summary_by_other_release["matched_job_ids"]
-
-        summary_by_machine_type = result_json(
-            await client.call_tool(
-                "summarize_scenario_results",
-                {"machine_type": "lxd-container"},
-            )
-        )
-        assert job_id in summary_by_machine_type["matched_job_ids"]
-
-        summary_by_other_machine_type = result_json(
-            await client.call_tool(
-                "summarize_scenario_results", {"machine_type": "lxd-vm"}
-            )
-        )
-        assert job_id not in summary_by_other_machine_type["matched_job_ids"]
-
-        summary_by_completed_status = result_json(
-            await client.call_tool(
-                "summarize_scenario_results",
-                {"job_ids": [job_id], "status": "completed"},
-            )
-        )
-        assert summary_by_completed_status["matched_job_ids"] == [job_id]
-
-        summary_by_running_status = result_json(
-            await client.call_tool(
-                "summarize_scenario_results",
-                {"job_ids": [job_id], "status": "running"},
-            )
-        )
-        assert job_id not in summary_by_running_status["matched_job_ids"]
+        assert job_id in await ids(release="noble")
+        assert job_id not in await ids(release="jammy")
+        assert job_id in await ids(machine_type="lxd-container")
+        assert job_id not in await ids(machine_type="lxd-vm")
+        assert await ids(job_ids=[job_id], status="completed") == [job_id]
+        assert await ids(job_ids=[job_id], status="running") == []
