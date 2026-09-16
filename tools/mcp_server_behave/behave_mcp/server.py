@@ -111,11 +111,7 @@ RepoRoot = Annotated[
     str,
     Field(
         default="",
-        description=(
-            "Repository to run behave against. Defaults to "
-            "UBUNTU_PRO_CLIENT_REPO, then auto-detection -- which only "
-            "works for editable/in-place installs (`uv run`), not `uvx`."
-        ),
+        description="Checkout to use; defaults to UBUNTU_PRO_CLIENT_REPO.",
     ),
 ]
 JobId = Annotated[
