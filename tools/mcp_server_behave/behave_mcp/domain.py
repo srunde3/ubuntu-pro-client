@@ -77,8 +77,10 @@ DEFAULT_INSTALL_FROM = (
     InstallFrom.LOCAL.value
 )  # the pro client-defined default.
 DEFAULT_RUNNING_TAIL_LINES = 12
-DEFAULT_LOG_LINES = 200
-MAX_LOG_LINES = 2000
+# 500 lines of a behave log is ~90 KB, about what one tool result may
+# carry; the tail rarely holds the cause anyway (get_scenario_errors does).
+DEFAULT_LOG_LINES = 100
+MAX_LOG_LINES = 500
 DEFAULT_LOG_CONTEXT = 3
 MAX_LOG_CONTEXT = 20
 DEFAULT_WAIT_TIMEOUT_SECONDS = 1800
