@@ -974,6 +974,16 @@ def await_campaign_events(
             description="Most events to return in one batch.",
         ),
     ] = DEFAULT_EVENTS_LIMIT,
+    failure_chars: Annotated[
+        int,
+        Field(
+            default=campaign_domain.MAX_EVENT_ERROR_CHARS,
+            description=(
+                "Cut each failure's error_message to this many characters; "
+                "0 drops the messages, keeping step and status."
+            ),
+        ),
+    ] = campaign_domain.MAX_EVENT_ERROR_CHARS,
     repo_root: RepoRoot = "",
 ) -> AwaitEventsResponse:
     if timeout_seconds > _settings.campaign_poll_timeout:
@@ -989,6 +999,7 @@ def await_campaign_events(
         kinds=kinds,
         limit=limit,
         timeout=float(max(timeout_seconds, 0)),
+        failure_chars=failure_chars,
     )
 
 

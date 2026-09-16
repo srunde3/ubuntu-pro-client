@@ -1240,6 +1240,24 @@ def failure_details(result: Any) -> list[dict[str, str]]:
     return details
 
 
+def shorten_failures(data: dict[str, Any], chars: int) -> dict[str, Any]:
+    """A copy of an event body with each failure's message cut to ``chars``."""
+    failures = data.get("failures")
+    if not isinstance(failures, list) or chars >= MAX_EVENT_ERROR_CHARS:
+        return dict(data)
+    return {
+        **data,
+        "failures": [
+            (
+                {**item, "error_message": str(item["error_message"])[:chars]}
+                if isinstance(item, dict) and "error_message" in item
+                else item
+            )
+            for item in failures
+        ],
+    }
+
+
 # Thresholds for the derived signals. Each is a judgement call offered to
 # whoever is watching, never something the scheduler acts on itself.
 DEFAULT_OVERDUE_SECONDS = 3600.0

@@ -227,7 +227,8 @@ rather than quietly matching nothing, because a typo would otherwise look
 like a campaign that never emits.
 
 A `unit.failed` event carries the failing steps and their messages, so a
-failure can be judged without fetching the job's report. A
+failure can be judged without fetching the job's report; `failure_chars`
+shortens the messages on read for a caller that only wants to skim. A
 `unit.unclassifiable` event carries the reason the result could not be read.
 
 `seq` is dense and monotonic within a campaign, so a cursor never skips: pass

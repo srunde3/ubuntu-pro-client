@@ -335,14 +335,19 @@ class CampaignService:
         kinds: Sequence[str] = (),
         limit: int = DEFAULT_EVENTS_LIMIT,
         timeout: float = 0.0,
+        failure_chars: int = domain.MAX_EVENT_ERROR_CHARS,
     ) -> AwaitEventsResponse:
         """Return events after ``since_seq``, waiting up to ``timeout``.
 
         ``kinds`` subscribes by exact kind or by family (``unit.*``); empty
         means everything. A timeout returns an empty batch rather than an
         error, and the campaign summary comes back either way, so a quiet
-        stretch still tells the caller where things stand.
+        stretch still tells the caller where things stand. ``failure_chars``
+        shortens the error messages a ``unit.failed`` event carries; the
+        stored event keeps them whole.
         """
+        if failure_chars < 0:
+            raise CampaignError("failure_chars must not be negative")
         patterns = domain.expand_event_kinds(kinds)
         capped, _ = self._cap_events(limit)
 
@@ -370,7 +375,7 @@ class CampaignService:
                     seq=event.seq,
                     kind=event.kind,
                     at=event.at,
-                    data=dict(event.data),
+                    data=domain.shorten_failures(event.data, failure_chars),
                 )
                 for event in events
             ],

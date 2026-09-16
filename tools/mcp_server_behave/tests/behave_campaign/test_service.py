@@ -6,6 +6,7 @@ from behave_campaign.domain import (
     AttemptStarted,
     CampaignError,
     Filters,
+    NewEvent,
     RepoState,
     Unit,
 )
@@ -586,6 +587,38 @@ class TestUnitHistory:
 
 
 class TestAwaitEvents:
+    def test_failure_messages_can_be_shortened_on_read(self, service, events):
+        create(service)
+        events.append(
+            "1234567",
+            [
+                NewEvent(
+                    kind="unit.failed",
+                    at=AT,
+                    data={
+                        "failures": [
+                            {
+                                "step": "s",
+                                "status": "failed",
+                                "error_message": "x" * 50,
+                            }
+                        ]
+                    },
+                )
+            ],
+        )
+
+        short = service.await_events(
+            campaign_id="1234567", kinds=["unit.failed"], failure_chars=5
+        )
+        whole = service.await_events(
+            campaign_id="1234567", kinds=["unit.failed"]
+        )
+
+        assert short.events[0].data["failures"][0]["error_message"] == "xxxxx"
+        assert len(whole.events[0].data["failures"][0]["error_message"]) == 50
+        assert short.events[0].data["failures"][0]["step"] == "s"
+
     def test_creating_a_campaign_announces_it(self, service):
         create(service, install_from="proposed", max_lanes=4)
 
