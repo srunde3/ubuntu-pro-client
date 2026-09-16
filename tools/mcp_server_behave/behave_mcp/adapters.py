@@ -11,7 +11,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from behave_mcp import domain, parser
+from behave_mcp import domain, layout, parser
 from behave_mcp.messages import Artifacts, ExistsFlags, JobRecord, RepoState
 from behave_mcp.ports import (
     Job,
@@ -298,7 +298,7 @@ class LocalWorkspace:
         if override:
             return self._validated_repo_root(Path(override).expanduser())
 
-        env_value = os.environ.get("UBUNTU_PRO_CLIENT_REPO")
+        env_value = os.environ.get(layout.REPO_ENV_VAR)
         if env_value:
             return self._validated_repo_root(Path(env_value).expanduser())
 
@@ -327,16 +327,13 @@ class LocalWorkspace:
         Read per call rather than once at startup, because repo_root varies
         per call and the state directory follows it.
         """
-        env_path = os.environ.get(domain.STATE_DIR_ENV_VAR)
-        if env_path:
-            return Path(env_path).resolve()
-        return repo_root / domain.DEFAULT_STATE_DIR_NAME
+        return layout.state_dir(repo_root)
 
     def resolve_log_dir(self, repo_root: Path) -> Path:
-        return self._subdir(repo_root, domain.JOBS_SUBDIR)
+        return self._subdir(repo_root, layout.JOBS_SUBDIR)
 
     def resolve_campaign_dir(self, repo_root: Path) -> Path:
-        return self._subdir(repo_root, domain.CAMPAIGNS_SUBDIR)
+        return self._subdir(repo_root, layout.CAMPAIGNS_SUBDIR)
 
     def _subdir(self, repo_root: Path, name: str) -> Path:
         path = self.resolve_state_dir(repo_root) / name

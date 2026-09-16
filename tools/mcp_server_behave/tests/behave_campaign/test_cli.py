@@ -79,7 +79,9 @@ def run(tmp_path, campaign_file, repo, capsys):
             args = [*args, "--repo-root", str(repo)]
         if args[0] == "record" and "--install-from" not in args:
             args = [*args, "--install-from", "proposed"]
-        code = main([*args, "--campaign", str(campaign_file)])
+        if "--campaign-id" not in args:
+            args = [*args, "--campaign", str(campaign_file)]
+        code = main(args)
         captured = capsys.readouterr()
         assert code == expect, captured.err
         return json.loads(captured.out) if code == 0 else captured.err
@@ -120,8 +122,8 @@ class TestInit:
 
         assert "unknown release: bogus" in error
 
-    def test_full_campaign_needs_no_filters(self, run, campaign_file):
-        result = run(["create", "--campaign-id", "1234567"])
+    def test_full_campaign_needs_no_filters(self, run):
+        result = run(["create"])
 
         assert result["state"]["counts"]["unattempted"] == 3
         assert result["campaign"]["scope"] == {
@@ -132,15 +134,75 @@ class TestInit:
         }
 
     def test_campaign_header_records_how_it_was_built(self, run, repo):
-        result = run(
-            ["create", "--campaign-id", "1234567", "--release", "jammy"]
-        )
+        result = run(["create", "--release", "jammy"])
         campaign = result["campaign"]
 
-        assert campaign["campaign_id"] == "1234567"
+        assert campaign["campaign_id"] == "records"
         assert campaign["scope"]["release"] == ["jammy"]
         assert campaign["repo"]["root"] == str(repo)
         assert campaign["created_at"].endswith("Z")
+
+
+class TestAddressing:
+    """A campaign is named the way the server names it, or by its file."""
+
+    def test_an_id_resolves_to_the_servers_file(self, run, repo):
+        created = run(["create", "--campaign-id", "1234567"])
+        status = run(
+            ["status", "--campaign-id", "1234567", "--repo-root", str(repo)]
+        )
+
+        expected = repo / ".mcp_server_behave" / "campaigns" / "1234567.jsonl"
+        assert expected.is_file()
+        assert created["campaign"]["campaign_id"] == "1234567"
+        assert status["campaign"]["campaign_id"] == "1234567"
+
+    def test_repo_root_falls_back_to_the_environment(
+        self, run, repo, monkeypatch
+    ):
+        monkeypatch.setenv("UBUNTU_PRO_CLIENT_REPO", str(repo))
+
+        # create's run() adds --repo-root; status must find the same file
+        # from the environment alone.
+        run(["create", "--campaign-id", "1234567"])
+        status = main(["status", "--campaign-id", "1234567"])
+
+        assert status == 0
+
+    def test_without_either_is_an_error(self, capsys):
+        with pytest.raises(SystemExit) as exit:
+            main(["status"])
+
+        assert exit.value.code == 2
+        assert "--campaign-id" in capsys.readouterr().err
+
+    def test_both_is_an_error(self, campaign_file, capsys):
+        with pytest.raises(SystemExit) as exit:
+            main(
+                [
+                    "status",
+                    "--campaign-id",
+                    "1234567",
+                    "--campaign",
+                    str(campaign_file),
+                ]
+            )
+
+        assert exit.value.code == 2
+        assert "not allowed with" in capsys.readouterr().err
+
+    def test_a_file_names_its_own_id(self, planned, run, campaign_file):
+        result = run(["status"])
+
+        assert result["campaign"]["campaign_id"] == campaign_file.stem
+
+    def test_missing_repo_root_is_a_clear_error(self, monkeypatch, capsys):
+        monkeypatch.delenv("UBUNTU_PRO_CLIENT_REPO", raising=False)
+
+        code = main(["status", "--campaign-id", "1234567"])
+
+        assert code == 2
+        assert "UBUNTU_PRO_CLIENT_REPO" in capsys.readouterr().err
 
     def test_campaign_header_is_the_first_record(self, planned, campaign_file):
         first = json.loads(campaign_file.read_text().splitlines()[0])

@@ -38,8 +38,9 @@ from behave_campaign.ports import (
     CampaignNotFoundError,
     LaneStartError,
 )
+from behave_mcp import layout
 
-CAMPAIGN_SUFFIX = ".jsonl"
+CAMPAIGN_SUFFIX = layout.CAMPAIGN_SUFFIX
 EVENTS_SUFFIX = ".events" + CAMPAIGN_SUFFIX
 LOCK_SUFFIX = ".lock"
 

@@ -65,54 +65,63 @@ Launchpad bug number, but the record attaches no meaning to it.
 
 ```bash
 uv sync --extra test
+export UBUNTU_PRO_CLIENT_REPO=../..   # or pass --repo-root on each command
 
 # See which releases and machine types the feature files can run.
-uv run behave-campaign dimensions --repo-root ../..
+uv run behave-campaign dimensions
 
-# Create the campaign: "all the jammy lxd-vm tests".
-uv run behave-campaign create --campaign T.jsonl --repo-root ../.. \
-  --campaign-id 1234567 --release jammy --machine-type lxd-vm
+# Create the campaign: "all the jammy lxd-vm tests". The id names the file
+# the way the server names it, under <repo>/.mcp_server_behave/campaigns/.
+uv run behave-campaign create --campaign-id 1234567 \
+  --release jammy --machine-type lxd-vm
 
 # Repeat a filter to cover several values, as a real SRU usually does.
-uv run behave-campaign create --campaign T.jsonl --repo-root ../.. \
-  --campaign-id 1234567 \
+uv run behave-campaign create --campaign-id 1234567 \
   --release bionic --release focal --release jammy \
   --release noble --release resolute --release stonking
 
 # With no filters, the campaign covers every feature file.
-uv run behave-campaign create --campaign T.jsonl --repo-root ../.. \
-  --campaign-id 1234567
+uv run behave-campaign create --campaign-id 1234567
 
 # Record the install source and lane count for a runner to honour.
-uv run behave-campaign create --campaign T.jsonl --repo-root ../.. \
-  --campaign-id 1234567 --install-from proposed --max-lanes 8
+uv run behave-campaign create --campaign-id 1234567 \
+  --install-from proposed --max-lanes 8
 
 # Record started and finished attempts in batches.
-uv run behave-campaign record --campaign T.jsonl --install-from proposed \
+uv run behave-campaign record --campaign-id 1234567 --install-from proposed \
   --input attempts.json
 
 # Or hand the MCP's own start/wait payloads straight to the tool.
-uv run behave-campaign record --campaign T.jsonl --install-from proposed \
+uv run behave-campaign record --campaign-id 1234567 --install-from proposed \
   --from-mcp --input results.json
 
 # Ask what to run next, then inspect results.
-uv run behave-campaign next --campaign T.jsonl --limit 4
-uv run behave-campaign status --campaign T.jsonl --state failed
-uv run behave-campaign status --campaign T.jsonl --group-by scenario
-uv run behave-campaign status --campaign T.jsonl --include-units --limit 50
-uv run behave-campaign history --campaign T.jsonl \
+uv run behave-campaign next --campaign-id 1234567 --limit 4
+uv run behave-campaign status --campaign-id 1234567 --state failed
+uv run behave-campaign status --campaign-id 1234567 --group-by scenario
+uv run behave-campaign status --campaign-id 1234567 --units 50
+uv run behave-campaign history --campaign-id 1234567 \
   --feature features/cli/attach.feature
-```
 
 # Follow a campaign a server is running, from a terminal.
-uv run behave-campaign events --campaign T.jsonl --kinds 'unit.*' --follow
+uv run behave-campaign events --campaign-id 1234567 --kinds actionable --follow
+
+# A campaign file anywhere else: its id is the file's name.
+uv run behave-campaign status --campaign /tmp/T.jsonl
+```
 
 All commands read `--input` from stdin by default and print JSON to stdout.
 `status`, `next`, and `history` accept the same filters plus `--state`,
 repeatable to allow several values.
 
+A campaign is named the way the server names it: `--campaign-id 1234567`
+is `<repo>/.mcp_server_behave/campaigns/1234567.jsonl` (or under
+`$MCP_STATE_DIR`), so the CLI and the MCP tools read the same record by the
+same name. `--campaign FILE` addresses a file anywhere instead; its id is
+always the file's name. `--repo-root` defaults to `$UBUNTU_PRO_CLIENT_REPO`.
+
 `events` reads the log a server writes beside the campaign file
-(`T.events.jsonl`); it needs no server of its own. `--since-seq` and
+(`1234567.events.jsonl`); it needs no server of its own. `--since-seq` and
 `--kinds` work as they do for `await_campaign_events`. With `--follow` it
 prints one batch per line as events arrive, polling every `--interval`
 seconds, and returns once the campaign is complete or cancelled with no
@@ -124,22 +133,21 @@ The CLI prints the same response shapes the MCP tools return. `create` and
 install source, lanes) under `campaign` and its state (lifecycle, lanes in
 flight, counts by unit state) under `state`; every other response carries
 the state fields alone, since the header never changes. `status` and
-`history` omit or cap large unit lists the same way: `status` reports counts, in-flight units
-and problems, and lists every selected unit only with `--include-units`.
+`history` omit or cap large unit lists the same way: `status` reports counts,
+in-flight units and problems, and lists every selected unit only with
+`--units`.
 
 `create` optionally records `--install-from` and `--max-lanes` for a runner to
-honour later; both are omitted from the file when not given. `--campaign-id`
-defaults to the campaign file's name.
+honour later; both are omitted from the file when not given.
 
 Splitting work across people happens out of band: each person creates their
-own campaign file with the slice they agreed to run.
+own campaign with the slice they agreed to run.
 
 ## Guardrails
 
 The tool fails loudly instead of guessing:
 
-- A campaign file can only be initialised once; a campaign is not edited
-  afterwards.
+- A campaign can only be created once; it is not edited afterwards.
 - An unknown release, machine type, or feature in `create` is rejected rather
   than silently matching nothing.
 - Recording an attempt for a unit that was never planned is rejected.
@@ -327,9 +335,10 @@ Same hexagonal layering as [behave_mcp](../behave_mcp), one module per layer:
   `CampaignStore`, `FeatureReader`, `LaneRunner`, `EventLog`, `Ticker`,
   `CampaignRunLock`.
 - `adapters.py` -- concrete implementations. Two stores satisfy
-  `CampaignStore` because the front-ends address campaigns differently: the
-  MCP names one by id inside a campaign directory, the CLI is pointed at a
-  file. Both share one serialisation path, so there is one on-disk format.
+  `CampaignStore`: the MCP names a campaign by id inside a campaign
+  directory, the CLI can also be pointed at a file. Both share one
+  serialisation path, so there is one on-disk format; `behave_mcp.layout`
+  is where the directory convention lives.
 - `service.py` -- `CampaignService`, driven by both the MCP tool wrappers and
   the CLI. Where behaviour changes belong.
 - `messages.py` -- pydantic DTOs returned across the MCP boundary.

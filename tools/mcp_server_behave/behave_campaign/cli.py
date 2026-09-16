@@ -10,12 +10,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 from pathlib import Path
 from typing import Any, Callable, Iterator, Sequence
 
 from pydantic import BaseModel
+
+from behave_mcp import layout
 
 from .adapters import (
     JsonlEventLog,
@@ -73,9 +76,32 @@ def _event_log(campaign_file: Path) -> JsonlEventLog:
     return JsonlEventLog(campaign_file.parent)
 
 
+def _repo_root(args: argparse.Namespace) -> Path:
+    """``--repo-root``, else ``$UBUNTU_PRO_CLIENT_REPO``."""
+    given = getattr(args, "repo_root", None) or os.environ.get(
+        layout.REPO_ENV_VAR
+    )
+    if not given:
+        raise ValueError(
+            "pass --repo-root or set {}".format(layout.REPO_ENV_VAR)
+        )
+    return Path(given).expanduser().resolve()
+
+
+def _campaign_file(args: argparse.Namespace) -> Path:
+    """The campaign's file: given outright, or the server's file for an id.
+
+    The id names the file the way the server names it, so a human and the
+    server read the same record by the same name.
+    """
+    if args.campaign_file is not None:
+        return args.campaign_file
+    return layout.campaign_file(_repo_root(args), args.campaign_id)
+
+
 def _campaign_id(args: argparse.Namespace) -> str:
-    """The campaign's id, which the CLI takes from its file name."""
-    return getattr(args, "campaign_id", None) or args.campaign_file.stem
+    """The campaign's id: always its file's stem."""
+    return _campaign_file(args).stem
 
 
 def _load_json(source: str) -> Any:
@@ -98,13 +124,13 @@ def _filters(args: argparse.Namespace) -> Filters:
 def _command_dimensions(args: argparse.Namespace) -> BaseModel:
     # dimensions reads feature files, not a campaign, so this command takes
     # no --campaign and the store it is given is never touched.
-    return _service(Path()).dimensions(repo_root=args.repo_root)
+    return _service(Path()).dimensions(repo_root=_repo_root(args))
 
 
 def _command_create(args: argparse.Namespace) -> BaseModel:
-    return _service(args.campaign_file).create_campaign(
+    return _service(_campaign_file(args)).create_campaign(
         campaign_id=_campaign_id(args),
-        repo_root=args.repo_root.resolve(),
+        repo_root=_repo_root(args),
         releases=args.release or (),
         machine_types=args.machine_type or (),
         feature_files=args.feature or (),
@@ -115,7 +141,7 @@ def _command_create(args: argparse.Namespace) -> BaseModel:
 
 
 def _command_record(args: argparse.Namespace) -> BaseModel:
-    return _service(args.campaign_file).record_attempts(
+    return _service(_campaign_file(args)).record_attempts(
         campaign_id=_campaign_id(args),
         payload=_load_json(args.input),
         install_from=args.install_from,
@@ -124,7 +150,7 @@ def _command_record(args: argparse.Namespace) -> BaseModel:
 
 
 def _command_status(args: argparse.Namespace) -> BaseModel:
-    return _service(args.campaign_file).campaign_status(
+    return _service(_campaign_file(args)).campaign_status(
         campaign_id=_campaign_id(args),
         filters=_filters(args),
         units_limit=args.units_limit,
@@ -134,7 +160,7 @@ def _command_status(args: argparse.Namespace) -> BaseModel:
 
 
 def _command_next(args: argparse.Namespace) -> BaseModel:
-    return _service(args.campaign_file).next_units(
+    return _service(_campaign_file(args)).next_units(
         campaign_id=_campaign_id(args),
         filters=_filters(args),
         limit=args.limit,
@@ -142,7 +168,7 @@ def _command_next(args: argparse.Namespace) -> BaseModel:
 
 
 def _command_history(args: argparse.Namespace) -> BaseModel:
-    return _service(args.campaign_file).unit_history(
+    return _service(_campaign_file(args)).unit_history(
         campaign_id=_campaign_id(args),
         filters=_filters(args),
         limit=args.limit,
@@ -153,7 +179,7 @@ def _read_events(
     args: argparse.Namespace, since_seq: int
 ) -> AwaitEventsResponse:
     return _service(
-        args.campaign_file, events=_event_log(args.campaign_file)
+        args.campaign_file, events=_event_log(_campaign_file(args))
     ).await_events(
         campaign_id=_campaign_id(args),
         since_seq=since_seq,
@@ -205,21 +231,47 @@ def _add_command(
     with_state: bool = True,
 ) -> argparse.ArgumentParser:
     parser = subparsers.add_parser(name, help=help_text)
-    parser.add_argument(
-        "--campaign", required=True, type=Path, dest="campaign_file"
-    )
+    _add_campaign(parser)
     _add_filters(parser, with_state=with_state)
     parser.set_defaults(handler=handler)
     return parser
 
 
+def _add_campaign(parser: argparse.ArgumentParser) -> None:
+    which = parser.add_mutually_exclusive_group(required=True)
+    which.add_argument(
+        "--campaign-id",
+        dest="campaign_id",
+        metavar="ID",
+        help=(
+            "the campaign, by the name the server uses: "
+            "<repo-root>/{}/{}/ID{}".format(
+                layout.DEFAULT_STATE_DIR_NAME,
+                layout.CAMPAIGNS_SUBDIR,
+                layout.CAMPAIGN_SUFFIX,
+            )
+        ),
+    )
+    which.add_argument(
+        "--campaign",
+        type=Path,
+        dest="campaign_file",
+        metavar="FILE",
+        help="a campaign file anywhere; its id is the file's name",
+    )
+    _add_repo_root(parser)
+
+
 def _add_repo_root(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--repo-root",
-        required=True,
         type=Path,
         dest="repo_root",
-        help="ubuntu-pro-client checkout holding features/",
+        metavar="DIR",
+        help=(
+            "ubuntu-pro-client checkout holding features/ and the server's "
+            "state (default: ${})".format(layout.REPO_ENV_VAR)
+        ),
     )
 
 
@@ -241,16 +293,6 @@ def build_parser() -> argparse.ArgumentParser:
         "create the campaign from the feature files",
         _command_create,
         with_state=False,
-    )
-    _add_repo_root(create)
-    create.add_argument(
-        "--campaign-id",
-        default=None,
-        dest="campaign_id",
-        help=(
-            "identifier for this campaign, such as an SRU bug number. "
-            "Defaults to the campaign file's name."
-        ),
     )
     create.add_argument(
         "--install-from",
@@ -339,9 +381,7 @@ def build_parser() -> argparse.ArgumentParser:
     events = subparsers.add_parser(
         "events", help="read the events a running server has announced"
     )
-    events.add_argument(
-        "--campaign", required=True, type=Path, dest="campaign_file"
-    )
+    _add_campaign(events)
     events.add_argument(
         "--since-seq",
         type=int,

@@ -15,6 +15,11 @@ Every command prints one JSON document to stdout and exits `0`. An invalid
 argument, an unknown value, or an unreadable file prints a message to stderr
 and exits `2`. Response shapes match the `behave` MCP server's campaign tools.
 
+`--campaign-id` resolves to `<repo-root>/.mcp_server_behave/campaigns/ID.jsonl`,
+or `$MCP_STATE_DIR/campaigns/ID.jsonl` when `MCP_STATE_DIR` is set -- the same
+file the `behave` MCP server uses for that id. `--repo-root` defaults to
+`$UBUNTU_PRO_CLIENT_REPO`.
+
 Unit states: `unattempted`, `running`, `passed`, `failed`, `skipped`,
 `error`.
 
@@ -29,6 +34,7 @@ scenario count.
 Required arguments:
 
 * `--repo-root DIR`: An `ubuntu-pro-client` checkout holding `features/`.
+  Defaults to `$UBUNTU_PRO_CLIENT_REPO`.
 
 ```bash
 uv run behave-campaign dimensions --repo-root ../..
@@ -42,13 +48,14 @@ can be created only once.
 
 Required arguments:
 
-* `--campaign FILE`: The campaign's JSON Lines file to create.
-* `--repo-root DIR`: An `ubuntu-pro-client` checkout holding `features/`.
+* One of:
+  * `--campaign-id ID`: The campaign, by the name the server uses.
+  * `--campaign FILE`: A campaign file anywhere; its id is the file's name.
+* `--repo-root DIR`: An `ubuntu-pro-client` checkout holding `features/`,
+  whose state holds the campaign. Defaults to `$UBUNTU_PRO_CLIENT_REPO`.
 
 Optional arguments:
 
-* `--campaign-id ID`: Label for the campaign, such as an SRU bug number.
-  Defaults to the campaign file's name.
 * `--install-from SOURCE`: Install source every job in the campaign uses.
   Defaults to `local`.
 * `--max-lanes N`: Jobs a runner may keep in flight. Defaults to `1`.
@@ -60,9 +67,9 @@ Optional arguments:
 Omit every filter to cover every feature file.
 
 ```bash
-uv run behave-campaign create --campaign 1234567.jsonl --repo-root ../.. \
-  --campaign-id 1234567 --release jammy --release noble \
-  --machine-type lxd-vm --install-from proposed --max-lanes 4
+uv run behave-campaign create --campaign-id 1234567 --repo-root ../.. \
+  --release jammy --release noble --machine-type lxd-vm \
+  --install-from proposed --max-lanes 4
 ```
 
 Errors: an unknown release, machine type, or feature; a campaign file that
@@ -74,11 +81,15 @@ Append completed attempts.
 
 Required arguments:
 
-* `--campaign FILE`: The campaign's JSON Lines file.
+* One of:
+  * `--campaign-id ID`: The campaign, by the name the server uses.
+  * `--campaign FILE`: A campaign file anywhere; its id is the file's name.
 * `--install-from SOURCE`: Where the jobs installed `ubuntu-pro-client` from.
 
 Optional arguments:
 
+* `--repo-root DIR`: The checkout whose state holds the campaign, for
+  `--campaign-id`. Defaults to `$UBUNTU_PRO_CLIENT_REPO`.
 * `--input FILE`: JSON file to read. Defaults to `-`, standard input.
 * `--from-mcp`: Read `[{"unit": {...}, "result": <MCP payload>}]` instead of
   plain attempts.
@@ -101,7 +112,7 @@ Plain attempt input:
 `outcome` is one of `passed`, `failed`, `skipped`, `error`.
 
 ```bash
-uv run behave-campaign record --campaign 1234567.jsonl \
+uv run behave-campaign record --campaign-id 1234567 \
   --install-from proposed --input attempts.json
 ```
 
@@ -114,10 +125,14 @@ Report a campaign's header, state, in-flight units, and problem units.
 
 Required arguments:
 
-* `--campaign FILE`: The campaign's JSON Lines file.
+* One of:
+  * `--campaign-id ID`: The campaign, by the name the server uses.
+  * `--campaign FILE`: A campaign file anywhere; its id is the file's name.
 
 Optional arguments:
 
+* `--repo-root DIR`: The checkout whose state holds the campaign, for
+  `--campaign-id`. Defaults to `$UBUNTU_PRO_CLIENT_REPO`.
 * `--units N`: Also list up to `N` individual units. Defaults to none.
 * `--problems N`: List at most `N` problem rows. Defaults to all.
 * `--group-by unit|scenario`: List problems one unit per row, or one
@@ -131,8 +146,8 @@ Optional arguments:
 Filters narrow which units are counted and listed.
 
 ```bash
-uv run behave-campaign status --campaign 1234567.jsonl --group-by scenario
-uv run behave-campaign status --campaign 1234567.jsonl --state failed --units 50
+uv run behave-campaign status --campaign-id 1234567 --group-by scenario
+uv run behave-campaign status --campaign-id 1234567 --state failed --units 50
 ```
 
 ## next
@@ -142,10 +157,14 @@ skipped and errored units.
 
 Required arguments:
 
-* `--campaign FILE`: The campaign's JSON Lines file.
+* One of:
+  * `--campaign-id ID`: The campaign, by the name the server uses.
+  * `--campaign FILE`: A campaign file anywhere; its id is the file's name.
 
 Optional arguments:
 
+* `--repo-root DIR`: The checkout whose state holds the campaign, for
+  `--campaign-id`. Defaults to `$UBUNTU_PRO_CLIENT_REPO`.
 * `--limit N`: Most units to list. Defaults to `1`.
 * `--feature PATH`: Only this feature file. Repeatable.
 * `--scenario NAME`: Only this exact scenario name. Repeatable.
@@ -154,7 +173,7 @@ Optional arguments:
 * `--state STATE`: Only units in this state. Repeatable.
 
 ```bash
-uv run behave-campaign next --campaign 1234567.jsonl --limit 4
+uv run behave-campaign next --campaign-id 1234567 --limit 4
 ```
 
 ## history
@@ -164,10 +183,14 @@ List every attempt at each selected unit, oldest first: `job_id`,
 
 Required arguments:
 
-* `--campaign FILE`: The campaign's JSON Lines file.
+* One of:
+  * `--campaign-id ID`: The campaign, by the name the server uses.
+  * `--campaign FILE`: A campaign file anywhere; its id is the file's name.
 
 Optional arguments:
 
+* `--repo-root DIR`: The checkout whose state holds the campaign, for
+  `--campaign-id`. Defaults to `$UBUNTU_PRO_CLIENT_REPO`.
 * `--limit N`: Most units to list. Defaults to `200`; the maximum is `2000`.
 * `--feature PATH`: Only this feature file. Repeatable.
 * `--scenario NAME`: Only this exact scenario name. Repeatable.
@@ -176,7 +199,7 @@ Optional arguments:
 * `--state STATE`: Only units in this state. Repeatable.
 
 ```bash
-uv run behave-campaign history --campaign 1234567.jsonl \
+uv run behave-campaign history --campaign-id 1234567 \
   --feature features/cli/attach.feature
 ```
 
@@ -188,11 +211,14 @@ well as the events.
 
 Required arguments:
 
-* `--campaign FILE`: The campaign's JSON Lines file; the events file sits
-  beside it.
+* One of:
+  * `--campaign-id ID`: The campaign, by the name the server uses.
+  * `--campaign FILE`: A campaign file anywhere; its id is the file's name.
 
 Optional arguments:
 
+* `--repo-root DIR`: The checkout whose state holds the campaign, for
+  `--campaign-id`. Defaults to `$UBUNTU_PRO_CLIENT_REPO`.
 * `--since-seq N`: Return events numbered above `N`. Defaults to `0`, all
   events. Pass a response's `next_seq` to continue.
 * `--kinds KIND`: An event kind (`unit.failed`), a family (`unit.*`), or a
@@ -208,7 +234,7 @@ Families: `campaign`, `lane`, `unit`, `anomaly`. Presets: `actionable`
 `*` (everything).
 
 ```bash
-uv run behave-campaign events --campaign 1234567.jsonl \
+uv run behave-campaign events --campaign-id 1234567 \
   --kinds actionable --follow
 ```
 
@@ -222,6 +248,3 @@ Errors: an unknown kind, family, or preset.
 | `<id>.events.jsonl`           | the server            | Numbered events; `events` reads it         |
 | `<id>.lock`                   | the server            | Advisory lock while the campaign schedules |
 
-The `behave` MCP server keeps its campaigns under
-`<repo>/.mcp_server_behave/campaigns/`, or `$MCP_STATE_DIR/campaigns/`. Point
-`--campaign` at a file there to inspect a server-run campaign.

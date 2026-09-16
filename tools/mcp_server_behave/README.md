@@ -98,8 +98,10 @@ is can be read without scanning the event stream.
 is the only way a non-passing unit is ever re-run. `kill_job` terminates a
 job that has hung, so its lane is recorded and freed instead of held open.
 
-The package is also usable on its own through the `behave-campaign` CLI, and
-shares this project's `pyproject.toml`, virtualenv, and CI job. See
+The package is also usable on its own through the `behave-campaign` CLI,
+which names campaigns the way the server does (`--campaign-id`) and reads
+the same files; it shares this project's `pyproject.toml`, virtualenv, and
+CI job. See
 [behave_campaign/README.md](behave_campaign/README.md) for the record format,
 the CLI, and how MCP job results map onto attempts.
 

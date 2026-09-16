@@ -34,10 +34,9 @@ around it.
 ## Run it
 
 1. `control_campaign` with `action: start`.
-2. Tell the user they can watch from a terminal without you:
-   `uv run behave-campaign events --campaign <state_dir>/campaigns/<id>.jsonl --follow`
-   (run from `tools/mcp_server_behave`; the state dir is
-   `.mcp_server_behave` under the checkout unless `MCP_STATE_DIR` moves it).
+2. Tell the user they can watch from a terminal without you, from
+   `tools/mcp_server_behave`:
+   `uv run behave-campaign events --campaign-id <id> --repo-root <checkout> --follow`
 3. Delegate the watching to a subagent so the poll loop stays out of this
    conversation. Its prompt is the contents of
    [references/monitor.md](references/monitor.md) with the campaign id
@@ -59,8 +58,8 @@ complete picture, not a green one.
   actionable now; external flakes wait for the batch retry; candidate
   defects are recorded, never retried in hope.
 - `unit.unclassifiable` is a finding to report, not an error to work around.
-- `anomaly.repeated_scenario_failure` usually means a shared dependency (a
-  503 on the security endpoints) or a host issue rather than a release bug.
+- `anomaly.repeated_scenario_failure` usually means a shared dependency
+  or a host issue rather than a release bug.
 - `lane.overdue`: decide whether to `kill_job` it.
 - Before retrying a unit a second time, check `unit_history`; a unit that
   erred the same way twice is not a flake.
