@@ -271,6 +271,51 @@ class TestCampaignStatus:
         assert status.state.counts.running == 1
         assert status.state.counts.failed == 1
         assert status.state.counts.unattempted == 1
+        assert status.problem_scenarios is None
+
+    def test_problems_can_be_grouped_by_scenario(self, service, store):
+        create(service)
+        store.append(
+            "1234567",
+            [
+                AttemptFinished(
+                    unit=UNITS[0], job_id="job1", outcome="failed", at=AT
+                ),
+                AttemptFinished(
+                    unit=UNITS[1], job_id="job2", outcome="error", at=AT
+                ),
+                AttemptFinished(
+                    unit=UNITS[2], job_id="job3", outcome="passed", at=AT
+                ),
+            ],
+        )
+
+        status = service.campaign_status(
+            campaign_id="1234567", group_by="scenario"
+        )
+
+        assert status.problems is None
+        (row,) = status.problem_scenarios or []
+        assert (row.feature, row.scenario) == ("features/a.feature", "A")
+        # Units are the catalog's own combos, plus where to look.
+        assert [u.model_dump() for u in row.failed] == [
+            {
+                "release": "jammy",
+                "machine_type": "lxd-container",
+                "job_id": "job1",
+                "attempt_count": 1,
+            }
+        ]
+        assert [(u.release, u.machine_type) for u in row.error] == [
+            ("noble", "lxd-vm")
+        ]
+        assert row.skipped == []
+
+    def test_an_unknown_grouping_is_rejected(self, service):
+        create(service)
+
+        with pytest.raises(CampaignError, match="group_by"):
+            service.campaign_status(campaign_id="1234567", group_by="feature")
 
     def test_filters_narrow_the_counts(self, service):
         create(service)

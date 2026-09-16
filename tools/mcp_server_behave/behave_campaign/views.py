@@ -17,6 +17,8 @@ from behave_campaign.messages import (
     CampaignRepo,
     CampaignScope,
     CampaignState,
+    ProblemUnit,
+    ScenarioProblems,
     ScopeSize,
     StateCounts,
     UnitHistoryView,
@@ -106,3 +108,22 @@ def campaign_listing(
             machine_types=len(scope.machine_type),
         ),
     )
+
+
+def scenario_problems(
+    statuses: Sequence[UnitStatus],
+) -> list[ScenarioProblems]:
+    rows = []
+    for (feature, scenario), units in domain.group_by_scenario(statuses):
+        row = ScenarioProblems(feature=feature, scenario=scenario)
+        for status in units:
+            getattr(row, str(status.state)).append(
+                ProblemUnit(
+                    release=status.unit.release,
+                    machine_type=status.unit.machine_type,
+                    job_id=status.job_id,
+                    attempt_count=len(status.attempts),
+                )
+            )
+        rows.append(row)
+    return rows

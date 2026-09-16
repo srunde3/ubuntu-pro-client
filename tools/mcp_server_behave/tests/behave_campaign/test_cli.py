@@ -350,6 +350,23 @@ class TestQueries:
             "skipped",
         }
 
+    def test_status_groups_problems_by_scenario(self, planned, run):
+        run(
+            ["record"],
+            [
+                attempt(UNIT_A_JAMMY, "failed", "job-1"),
+                attempt(UNIT_A_NOBLE, "skipped", "job-2"),
+            ],
+        )
+
+        result = run(["status", "--group-by", "scenario"])
+
+        assert result["problems"] is None
+        (row,) = result["problem_scenarios"]
+        assert row["scenario"] == "A"
+        assert [u["job_id"] for u in row["failed"]] == ["job-1"]
+        assert [u["job_id"] for u in row["skipped"]] == ["job-2"]
+
     def test_history_lists_every_attempt(self, planned, run):
         run(["record"], [attempt(UNIT_A_JAMMY, "failed", "job-1")])
         run(["record"], [attempt(UNIT_A_JAMMY, "passed", "job-2")])

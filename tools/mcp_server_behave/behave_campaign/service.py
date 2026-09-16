@@ -47,6 +47,7 @@ from behave_campaign.views import (
     campaign_header,
     campaign_listing,
     campaign_state,
+    scenario_problems,
     unit_history_view,
     unit_view,
 )
@@ -232,6 +233,7 @@ class CampaignService:
         campaign_id: str,
         filters: Filters = Filters(),
         units_limit: int = 0,
+        group_by: str = domain.GroupBy.UNIT,
     ) -> CampaignStatusResponse:
         """Report counts, the units in flight, and the units needing action.
 
@@ -239,8 +241,16 @@ class CampaignService:
         can ask about one release without reading the whole campaign.
         ``units_limit`` is how many individual units to list: the default of
         zero lists none, because a full campaign runs to thousands of units
-        and the counts are what a caller usually acts on.
+        and the counts are what a caller usually acts on. ``group_by``
+        chooses how the problems read: one unit per row, or one scenario
+        per row with its units bucketed by state.
         """
+        if group_by not in domain.GROUPINGS:
+            raise CampaignError(
+                "unknown group_by {!r}; choose one of {}".format(
+                    group_by, ", ".join(domain.GROUPINGS)
+                )
+            )
         records = self._store.replay(campaign_id)
         statuses = [
             status
@@ -248,6 +258,7 @@ class CampaignService:
             if filters.matches(status)
         ]
 
+        problem_units = domain.problems(statuses)
         units = None
         truncated = False
         clamped = False
@@ -260,9 +271,16 @@ class CampaignService:
             campaign=campaign_header(campaign_id, records),
             state=campaign_state(campaign_id, records, statuses),
             running=[unit_view(status) for status in domain.running(statuses)],
-            problems=[
-                unit_view(status) for status in domain.problems(statuses)
-            ],
+            problems=(
+                [unit_view(status) for status in problem_units]
+                if group_by == domain.GroupBy.UNIT
+                else None
+            ),
+            problem_scenarios=(
+                scenario_problems(problem_units)
+                if group_by == domain.GroupBy.SCENARIO
+                else None
+            ),
             units=units,
             truncated=truncated,
             limit_clamped=clamped,

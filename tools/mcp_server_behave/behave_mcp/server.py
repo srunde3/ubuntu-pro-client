@@ -12,6 +12,7 @@ from mcp.server.fastmcp.server import Settings as FastMCPSettings
 from pydantic import Field
 from starlette.responses import JSONResponse
 
+from behave_campaign import domain as campaign_domain
 from behave_campaign.adapters import (
     FileCampaignRunLock,
     JsonlCampaignStore,
@@ -689,9 +690,12 @@ def list_campaigns(repo_root: RepoRoot = "") -> ListCampaignsResponse:
     description=(
         "Report one campaign's current state: counts by unit state, the "
         "units in flight, and the units needing action (failed, skipped or "
-        "error). Individual units are omitted by default because a full "
-        "campaign is over a thousand of them -- set units_limit to list up "
-        "to that many, with truncated saying whether any were dropped. The "
+        "error) -- one unit per row, or with group_by='scenario' one "
+        "scenario per row with its units bucketed by state, which is how "
+        "to see a scenario failing on every release at a glance. "
+        "Individual units are omitted by default because a full campaign "
+        "is over a thousand of them -- set units_limit to list up to that "
+        "many, with truncated saying whether any were dropped. The "
         "release, machine_type, feature, scenario and state filters narrow "
         "which units are counted and listed."
     )
@@ -727,6 +731,16 @@ def campaign_status(
             ),
         ),
     ] = 0,
+    group_by: Annotated[
+        campaign_domain.GroupBy,
+        Field(
+            default=campaign_domain.GroupBy.UNIT,
+            description=(
+                "How problems are listed: 'unit' (one per row) or "
+                "'scenario' (one scenario per row, units by state)."
+            ),
+        ),
+    ] = campaign_domain.GroupBy.UNIT,
     repo_root: RepoRoot = "",
 ) -> CampaignStatusResponse:
     return campaign_service(repo_root).campaign_status(
@@ -739,6 +753,7 @@ def campaign_status(
             state=tuple(state),
         ),
         units_limit=units_limit,
+        group_by=group_by.value,
     )
 
 

@@ -98,6 +98,7 @@ uv run behave-campaign record --campaign T.jsonl --install-from proposed \
 # Ask what to run next, then inspect results.
 uv run behave-campaign next --campaign T.jsonl --limit 4
 uv run behave-campaign status --campaign T.jsonl --state failed
+uv run behave-campaign status --campaign T.jsonl --group-by scenario
 uv run behave-campaign status --campaign T.jsonl --include-units --limit 50
 uv run behave-campaign history --campaign T.jsonl \
   --feature features/cli/attach.feature
@@ -186,8 +187,11 @@ write the same files the CLI does, under the directory named by
 - `list_campaigns` -- every stored campaign: its state, the header fields
   that identify it, and how many values each scope filter names.
 - `campaign_status` -- one campaign's counts, the units in flight, and the
-  units needing action. Individual units are opt-in via `units_limit`
-  because a full campaign is over a thousand of them.
+  units needing action, one unit per row or -- with `group_by=scenario` --
+  one scenario per row with its units bucketed by state, which is how a
+  scenario failing on every release reads at a glance. Individual units are
+  opt-in via `units_limit` because a full campaign is over a thousand of
+  them.
 - `start_campaign` -- begin scheduling. The server then keeps up to
   `max_lanes` jobs in flight and fills a lane as soon as one frees, with no
   further calls needed to keep it moving.

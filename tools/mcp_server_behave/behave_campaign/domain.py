@@ -733,6 +733,31 @@ def problems(statuses: Iterable[UnitStatus]) -> list[UnitStatus]:
     return [s for s in statuses if s.state in PROBLEM_OUTCOMES]
 
 
+class GroupBy(_StringEnum):
+    """How a status report lists its problem units."""
+
+    UNIT = "unit"
+    SCENARIO = "scenario"
+
+
+GROUPINGS = tuple(group.value for group in GroupBy)
+
+
+def group_by_scenario(
+    statuses: Iterable[UnitStatus],
+) -> list[tuple[tuple[str, str], list[UnitStatus]]]:
+    """Units bucketed by ``(feature, scenario)``, first seen first.
+
+    One row per scenario is the shape a flaky-or-real judgement wants: the
+    same scenario down on every release says defect, on one says flake.
+    """
+    grouped: dict[tuple[str, str], list[UnitStatus]] = {}
+    for status in statuses:
+        key = (status.unit.feature, status.unit.scenario)
+        grouped.setdefault(key, []).append(status)
+    return list(grouped.items())
+
+
 def running(statuses: Iterable[UnitStatus]) -> list[UnitStatus]:
     return [s for s in statuses if s.state == "running"]
 

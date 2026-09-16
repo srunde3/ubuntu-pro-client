@@ -28,9 +28,11 @@ from .domain import (
     DEFAULT_INSTALL_SOURCE,
     EVENT_FAMILIES,
     EVENT_PRESETS,
+    GROUPINGS,
     INSTALL_SOURCES,
     STATES,
     Filters,
+    GroupBy,
     Lifecycle,
 )
 from .messages import (
@@ -125,6 +127,7 @@ def _command_status(args: argparse.Namespace) -> BaseModel:
         campaign_id=_campaign_id(args),
         filters=_filters(args),
         units_limit=args.units_limit,
+        group_by=args.group_by,
     )
 
 
@@ -300,6 +303,16 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "list up to N individual units as well as the counts. "
             "Omit to report counts, in-flight units and problems only."
+        ),
+    )
+    status.add_argument(
+        "--group-by",
+        default=GroupBy.UNIT.value,
+        choices=GROUPINGS,
+        dest="group_by",
+        help=(
+            "list problems one unit per row, or one scenario per row with "
+            "its units by state (default: unit)"
         ),
     )
 

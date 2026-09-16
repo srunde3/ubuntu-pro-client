@@ -22,6 +22,29 @@ class UnitView(BaseModel):
     attempt_count: int = 0
 
 
+class ProblemUnit(BaseModel):
+    """A problem unit under its scenario: the combo, and where to look."""
+
+    release: str = ""
+    machine_type: str = ""
+    job_id: str | None = None
+    attempt_count: int = 0
+
+
+class ScenarioProblems(BaseModel):
+    """One scenario's problem units, bucketed by state.
+
+    Units are ``{release, machine_type}`` combos, the catalog's own object,
+    so "failed on every release" reads off one row.
+    """
+
+    feature: str = ""
+    scenario: str = ""
+    failed: list[ProblemUnit] = []
+    skipped: list[ProblemUnit] = []
+    error: list[ProblemUnit] = []
+
+
 class StateCounts(BaseModel):
     """How many units sit in each state."""
 
@@ -124,15 +147,19 @@ class RecordAttemptsResponse(CampaignState):
 class CampaignStatusResponse(BaseModel):
     """Current state of one campaign.
 
-    ``running`` and ``problems`` are always present because they are what a
-    caller acts on. ``units`` is None unless a ``units_limit`` was asked for,
-    and is capped at it, with ``truncated`` saying whether any were dropped.
+    ``running`` and the problems are always present because they are what
+    a caller acts on: ``problems`` lists them one unit per row, or
+    ``problem_scenarios`` one scenario per row when grouped that way;
+    the other is None. ``units`` is None unless a ``units_limit`` was
+    asked for, and is capped at it, with ``truncated`` saying whether any
+    were dropped.
     """
 
     campaign: CampaignHeader = CampaignHeader()
     state: CampaignState = CampaignState()
     running: list[UnitView] = []
-    problems: list[UnitView] = []
+    problems: list[UnitView] | None = None
+    problem_scenarios: list[ScenarioProblems] | None = None
     units: list[UnitView] | None = None
     truncated: bool = False
     limit_clamped: bool = False
