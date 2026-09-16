@@ -513,29 +513,62 @@ def wait_for_scenario_completion(
 
 @mcp.tool(
     description=(
-        "Return a tail of the stdout log for a behave job. job_id must "
-        "come from start_scenario or list_scenario_jobs. Use this for "
-        "human debugging without flooding agent context with full logs. "
-        "lines must be positive (rejected otherwise); values above the "
-        "server max are silently capped, with lines_clamped set to true "
-        "when that happens."
+        "Read part of a behave job's stdout log; every returned line is "
+        "prefixed 'N: ' with its 1-based line number. With pattern (a "
+        "regex, case-insensitive): the matching lines from start on, each "
+        "with context lines around it, grep-style, until the next window "
+        "would exceed lines. Without: lines lines from start, or the last "
+        "lines lines when start is 0. matches counts every match whether "
+        "or not it fit; truncated says the budget cut something. Use it "
+        "to locate (pattern='Traceback|Error', context=0) and then read "
+        "around (start=N)."
     )
 )
 def get_scenario_logs(
     job_id: JobId,
+    pattern: Annotated[
+        str,
+        Field(
+            default="",
+            description="Regex to search for; empty reads a range instead.",
+        ),
+    ] = "",
+    context: Annotated[
+        int,
+        Field(
+            default=domain.DEFAULT_LOG_CONTEXT,
+            description="Lines to include either side of each match.",
+        ),
+    ] = domain.DEFAULT_LOG_CONTEXT,
+    start: Annotated[
+        int,
+        Field(
+            default=0,
+            description=(
+                "1-based line to read or search from. 0 means the end of "
+                "the log when reading, the beginning when searching."
+            ),
+        ),
+    ] = 0,
     lines: Annotated[
         int,
         Field(
             description=(
-                "Number of trailing log lines to return. Must be "
-                "positive; values above the server max are silently "
-                "capped."
+                "Most lines to return. Must be positive; values above "
+                "the server max are capped, with lines_clamped set."
             )
         ),
-    ] = domain.DEFAULT_LOG_TAIL_LINES,
+    ] = domain.DEFAULT_LOG_LINES,
     repo_root: RepoRoot = "",
 ) -> LogsResponse:
-    return _service.get_logs(job_id, lines, repo_root)
+    return _service.get_logs(
+        job_id,
+        lines,
+        repo_root,
+        pattern=pattern,
+        context=context,
+        start=start,
+    )
 
 
 @mcp.tool(

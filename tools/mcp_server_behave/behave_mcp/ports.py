@@ -165,8 +165,8 @@ class JobResultStore(Protocol):
         """Return the last ``lines`` lines of the job's stdout as a string."""
         ...
 
-    def log_tail_lines(self, job_id: str, lines: int) -> list[str]:
-        """Return the last ``lines`` lines of the job's stdout as a list."""
+    def read_log_lines(self, job_id: str) -> list[str]:
+        """Return every line of the job's stdout; empty when there is none."""
         ...
 
     def read_report(self, job_id: str) -> list[Any] | None:

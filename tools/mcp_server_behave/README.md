@@ -30,7 +30,10 @@ The server exposes these MCP tools:
   - Provides raw status/data only -- rerunning failed scenarios and judging flaky-vs-real failures is left to the caller.
 - `wait_for_scenario_completion` -- waits for completion.
   - Returns a compact completion summary, or a timeout payload.
-- `get_scenario_logs` -- returns a bounded tail of captured stdout logs for a job.
+- `get_scenario_logs` -- reads part of a job's stdout log, every line prefixed with its number.
+  - With `pattern` (a regex): the matching lines from `start` on, each with `context` lines around it, grep-style, until the next window would exceed `lines`. `matches` counts every match whether or not it fit.
+  - Without: `lines` lines from `start`, or the last `lines` when `start` is 0.
+  - `truncated` says the `lines` budget cut something; `log_path` is the file itself.
 - `get_scenario_artifacts` -- returns disk artifact paths and metadata for a job.
 
 Release and substrate values are derived by parsing each feature's Gherkin `Examples` tables with the `behave` library, so the catalog always reflects the current feature files (no hardcoded release/substrate lists).

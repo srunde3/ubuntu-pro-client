@@ -271,12 +271,23 @@ WaitForCompletionResult = Annotated[
 
 
 class LogsResponse(BaseModel):
+    """Part of a job's stdout log, every line prefixed with its number.
+
+    ``first_line``/``last_line`` bound what ``text`` covers and are None
+    when it is empty. ``matches`` counts every line the pattern matched
+    from ``start`` on; ``truncated`` says the ``lines`` budget cut some of
+    what was asked for.
+    """
+
     job_id: str = ""
-    lines: int = 0
+    total_lines: int = 0
+    first_line: int | None = None
+    last_line: int | None = None
+    matches: int = 0
+    truncated: bool = False
     lines_clamped: bool = False
-    output: str = ""
-    output_lines: list[str] = []
-    artifacts: Artifacts | None = None
+    text: str = ""
+    log_path: str = ""
 
 
 class ArtifactsResponse(BaseModel):

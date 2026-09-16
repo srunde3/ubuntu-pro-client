@@ -251,14 +251,12 @@ class LocalJobResultStore:
             tail = deque(stream, maxlen=lines)
         return "".join(tail).rstrip() if tail else "Waiting for output..."
 
-    def log_tail_lines(self, job_id: str, lines: int) -> list[str]:
+    def read_log_lines(self, job_id: str) -> list[str]:
         path = self._paths(job_id).stdout_log
         if not path.exists():
             return []
-
-        with path.open("r", encoding="utf-8", errors="replace") as stream:
-            tail = deque(stream, maxlen=lines)
-        return [line.rstrip("\n") for line in tail]
+        text = path.read_text(encoding="utf-8", errors="replace")
+        return text.rstrip("\n").split("\n") if text else []
 
     def read_report(self, job_id: str) -> list[Any] | None:
         path = self._paths(job_id).json_report

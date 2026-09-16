@@ -180,8 +180,7 @@ async def test_mcp_start_wait_and_log_flow(monkeypatch, tmp_path):
             "get_scenario_logs", {"job_id": job_id, "lines": 2}
         )
         logs_payload = result_json(logs_result)
-        assert logs_payload["output"] == "line2\nline3"
-        assert logs_payload["output_lines"] == ["line2", "line3"]
+        assert logs_payload["text"] == "2: line2\n3: line3"
 
         artifacts_result = await client.call_tool(
             "get_scenario_artifacts", {"job_id": job_id}

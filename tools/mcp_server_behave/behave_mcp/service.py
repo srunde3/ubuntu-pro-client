@@ -495,15 +495,26 @@ class BehaveService:
     def get_logs(
         self,
         job_id: str,
-        lines: int = domain.DEFAULT_LOG_TAIL_LINES,
+        lines: int = domain.DEFAULT_LOG_LINES,
         repo_root: str = "",
+        *,
+        pattern: str = "",
+        context: int = domain.DEFAULT_LOG_CONTEXT,
+        start: int = 0,
     ) -> LogsResponse:
         if lines <= 0:
             raise BehaveServiceError(
                 f"lines must be a positive integer, got {lines}"
             )
-        lines_clamped = lines > domain.MAX_LOG_TAIL_LINES
-        lines = min(lines, domain.MAX_LOG_TAIL_LINES)
+        if context < 0 or start < 0:
+            raise BehaveServiceError(
+                "context and start must not be negative, got {} and {}".format(
+                    context, start
+                )
+            )
+        lines_clamped = lines > domain.MAX_LOG_LINES
+        lines = min(lines, domain.MAX_LOG_LINES)
+        context = min(context, domain.MAX_LOG_CONTEXT)
 
         job = self._registry.get(job_id)
         if job is None:
@@ -520,13 +531,27 @@ class BehaveService:
                 f"No log file exists for job_id: {job_id}"
             )
 
+        log_lines = results.read_log_lines(job_id)
+        try:
+            selection = domain.select_log_lines(
+                log_lines,
+                pattern=pattern,
+                context=context,
+                start=start,
+                limit=lines,
+            )
+        except ValueError as exc:
+            raise BehaveServiceError(str(exc)) from exc
         return LogsResponse(
             job_id=job_id,
-            lines=lines,
+            total_lines=len(log_lines),
+            first_line=selection.first_line,
+            last_line=selection.last_line,
+            matches=selection.matches,
+            truncated=selection.truncated,
             lines_clamped=lines_clamped,
-            output=results.log_tail(job_id, lines),
-            output_lines=results.log_tail_lines(job_id, lines),
-            artifacts=results.artifacts(job_id),
+            text=selection.text,
+            log_path=results.artifacts(job_id).stdout_log,
         )
 
     def get_artifacts(

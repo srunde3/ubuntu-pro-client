@@ -97,8 +97,8 @@ async def test_mcp_e2e_long_running_attach_flow(monkeypatch):
             "get_scenario_logs", {"job_id": job_id, "lines": 50}
         )
         logs_payload = result_json(logs_result)
-        assert logs_payload["output"]
-        assert logs_payload["output_lines"]
+        assert logs_payload["text"]
+        assert logs_payload["total_lines"] > 0
 
         artifacts_result = await client.call_tool(
             "get_scenario_artifacts", {"job_id": job_id}

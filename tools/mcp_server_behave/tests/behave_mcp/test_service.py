@@ -724,10 +724,41 @@ def test_get_logs_returns_tail(tmp_path):
     )
 
     result = service.get_logs(job_id, lines=2).model_dump(mode="json")
-    assert result["lines"] == 2
+    assert result["text"] == "2: l2\n3: l3"
+    assert result["total_lines"] == 3
+    assert (result["first_line"], result["last_line"]) == (2, 3)
+    assert result["truncated"] is True
     assert result["lines_clamped"] is False
-    assert result["output"] == "l2\nl3"
-    assert result["output_lines"] == ["l2", "l3"]
+    assert result["log_path"] == str(stdout_log)
+
+
+def test_get_logs_searches_with_context(tmp_path):
+    registry = InMemoryJobRegistry()
+    job_id = "jobgrep"
+    stdout_log = tmp_path / f"{job_id}_stdout.log"
+    stdout_log.write_text(
+        "ok\nTraceback (most recent call last):\n  x\nKeyError: k\nok\n",
+        encoding="utf-8",
+    )
+    registry.register(
+        job_id, Job(job_id=job_id, process_handle=None, log_dir=tmp_path)
+    )
+    service = _make_service(
+        FakeWorkspace(repo_root=tmp_path, log_dir=tmp_path),
+        registry=registry,
+    )
+
+    result = service.get_logs(
+        job_id, pattern="traceback|error", context=0
+    ).model_dump(mode="json")
+    assert (
+        result["text"]
+        == "2: Traceback (most recent call last):\n--\n4: KeyError: k"
+    )
+    assert result["matches"] == 2
+
+    with pytest.raises(BehaveServiceError, match="invalid pattern"):
+        service.get_logs(job_id, pattern="(")
 
 
 def test_get_logs_clamps_lines_above_max(tmp_path):
@@ -749,9 +780,8 @@ def test_get_logs_clamps_lines_above_max(tmp_path):
     )
 
     result = service.get_logs(
-        job_id, lines=domain.MAX_LOG_TAIL_LINES + 1000
+        job_id, lines=domain.MAX_LOG_LINES + 1000
     ).model_dump(mode="json")
-    assert result["lines"] == domain.MAX_LOG_TAIL_LINES
     assert result["lines_clamped"] is True
 
 

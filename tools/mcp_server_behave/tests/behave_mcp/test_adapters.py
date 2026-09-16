@@ -87,13 +87,13 @@ def test_log_tail_and_lines(tmp_path):
     store = _store(tmp_path)
     (tmp_path / "jobx_stdout.log").write_text("a\nb\nc\n", encoding="utf-8")
     assert store.log_tail("jobx", 2) == "b\nc"
-    assert store.log_tail_lines("jobx", 2) == ["b", "c"]
+    assert store.read_log_lines("jobx") == ["a", "b", "c"]
 
 
 def test_log_tail_missing(tmp_path):
     store = _store(tmp_path)
     assert store.log_tail("nope", 5) == "Waiting for output..."
-    assert store.log_tail_lines("nope", 5) == []
+    assert store.read_log_lines("nope") == []
 
 
 def test_read_report_missing_or_invalid(tmp_path):
