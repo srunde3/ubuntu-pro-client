@@ -446,12 +446,29 @@ class TestQueries:
         assert all(a["started_at"].endswith("Z") for a in attempts)
         assert all(a["finished_at"].endswith("Z") for a in attempts)
 
-    def test_status_on_missing_campaign_file_is_empty(self, run):
-        result = run(["status"])
+    def test_a_missing_campaign_is_an_error_not_an_empty_record(
+        self, run, campaign_file
+    ):
+        # An absent file used to read as a fresh campaign with header
+        # defaults -- max_lanes 1, no repo -- which looks like a real one.
+        for command in (["status"], ["next"], ["history"], ["events"]):
+            error = run(command, expect=2)
+            assert str(campaign_file) in error, command
 
-        assert result["running"] == []
-        assert result["problems"] == []
-        assert result["state"]["counts"]["unattempted"] == 0
+        error = run(
+            ["record"],
+            payload=[attempt(UNIT_A_JAMMY, "passed", "job-1")],
+            expect=2,
+        )
+        assert str(campaign_file) in error
+
+    def test_a_missing_id_is_an_error(self, run, repo):
+        error = run(
+            ["status", "--campaign-id", "absent", "--repo-root", str(repo)],
+            expect=2,
+        )
+
+        assert "absent" in error
 
 
 class TestEvents:

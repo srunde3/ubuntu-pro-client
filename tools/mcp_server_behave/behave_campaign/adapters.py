@@ -196,12 +196,17 @@ class SingleFileCampaignStore:
         _create_file(self._path, [header, *plans], "this file")
 
     def append(self, campaign_id: str, records: Sequence[Record]) -> None:
-        _append_file(self._path, records)
+        _append_file(self._existing_path(), records)
 
     def replay(self, campaign_id: str) -> list[Record]:
+        return _replay_file(self._existing_path())
+
+    def _existing_path(self) -> Path:
         if not self._path.is_file():
-            return []
-        return _replay_file(self._path)
+            raise CampaignNotFoundError(
+                "no campaign file at {}".format(self._path)
+            )
+        return self._path
 
     def exists(self, campaign_id: str) -> bool:
         return self._path.is_file()

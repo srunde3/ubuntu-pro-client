@@ -125,6 +125,18 @@ async def test_list_campaigns_is_empty_before_any_exist(repo):
 
 
 @pytest.mark.asyncio
+async def test_campaign_status_of_an_unknown_id_is_an_error(repo):
+    async with create_connected_server_and_client_session(mcp) as client:
+        result = await client.call_tool(
+            "campaign_status", {"campaign_id": "absent"}
+        )
+
+    # Never an empty record with header defaults that reads like a real one.
+    assert result.isError
+    assert "absent" in result_error_text(result)
+
+
+@pytest.mark.asyncio
 async def test_campaign_status_omits_units_by_default(repo):
     async with create_connected_server_and_client_session(mcp) as client:
         await client.call_tool("create_campaign", {"campaign_id": "1234567"})

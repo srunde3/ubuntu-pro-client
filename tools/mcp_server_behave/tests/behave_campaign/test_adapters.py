@@ -233,10 +233,13 @@ class TestSingleFileCampaignStore:
         assert path.is_file()
         assert not (tmp_path / "ignored.jsonl").exists()
 
-    def test_replay_of_a_missing_file_is_empty(self, tmp_path):
+    def test_a_missing_file_is_not_a_campaign(self, tmp_path):
         store = SingleFileCampaignStore(tmp_path / "absent.jsonl")
 
-        assert store.replay("") == []
+        with pytest.raises(CampaignNotFoundError, match="absent.jsonl"):
+            store.replay("")
+        with pytest.raises(CampaignNotFoundError, match="absent.jsonl"):
+            store.append("", [])
 
     def test_campaign_id_comes_from_the_file_stem(self, tmp_path):
         store = SingleFileCampaignStore(tmp_path / "1234567.jsonl")
