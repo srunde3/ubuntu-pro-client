@@ -440,6 +440,31 @@ async def test_await_events_reports_the_campaign_being_created(repo, runner):
 
 
 @pytest.mark.asyncio
+async def test_await_events_defaults_to_what_needs_acting_on(repo, runner):
+    async with create_connected_server_and_client_session(mcp) as client:
+        await client.call_tool(
+            "create_campaign", {"campaign_id": "1234567", "max_lanes": 1}
+        )
+        await client.call_tool("start_campaign", {"campaign_id": "1234567"})
+        runner.ticker.drive()
+
+        result = await client.call_tool(
+            "await_campaign_events", {"campaign_id": "1234567"}
+        )
+
+    payload = result_json(result)
+
+    # Two passes and two lane openings happened; the default keeps the
+    # campaign's own transitions and leaves progress to the counts.
+    assert [e["kind"] for e in payload["events"]] == [
+        "campaign.created",
+        "campaign.started",
+        "campaign.complete",
+    ]
+    assert payload["counts"]["passed"] == 2
+
+
+@pytest.mark.asyncio
 async def test_await_events_follows_a_campaign_through_a_lane(repo, runner):
     async with create_connected_server_and_client_session(mcp) as client:
         await client.call_tool(

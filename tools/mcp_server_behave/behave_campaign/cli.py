@@ -27,6 +27,7 @@ from .adapters import (
 from .domain import (
     DEFAULT_INSTALL_SOURCE,
     EVENT_FAMILIES,
+    EVENT_PRESETS,
     INSTALL_SOURCES,
     STATES,
     Filters,
@@ -330,8 +331,10 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         metavar="KIND",
         help=(
-            "an event kind or family to return, repeatable; omit for all. "
-            "Families: {}".format(", ".join(EVENT_FAMILIES))
+            "an event kind, family or preset to return, repeatable; omit "
+            "for all. Families: {}. Presets: {}".format(
+                ", ".join(EVENT_FAMILIES), ", ".join(EVENT_PRESETS)
+            )
         ),
     )
     events.add_argument("--limit", type=int, default=DEFAULT_EVENTS_LIMIT)

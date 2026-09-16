@@ -211,9 +211,13 @@ is how a watcher hears about it promptly.
 | `unit.*` | `passed`, `failed`, `skipped`, `errored`, `unclassifiable`, `retried` |
 | `anomaly.*` | `repeated_scenario_failure`, `repeated_skips`, `capacity_starved` |
 
-Subscribe by exact kind or by family (`unit.*`); omit `kinds` for everything.
-An unknown kind or family is rejected rather than quietly matching nothing,
-because a typo would otherwise look like a campaign that never emits.
+Subscribe by exact kind, by family (`unit.*`), or by preset: `actionable`
+is every non-passing outcome, `anomaly.*`, `lane.overdue` and `campaign.*`
+-- what a watcher has to react to, with progress left to the counts on
+every response -- and `*` is everything. The MCP tool defaults to
+`actionable`; the CLI to everything. An unknown kind or family is rejected
+rather than quietly matching nothing, because a typo would otherwise look
+like a campaign that never emits.
 
 A `unit.failed` event carries the failing steps and their messages, so a
 failure can be judged without fetching the job's report. A

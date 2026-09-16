@@ -8,12 +8,13 @@ import pytest
 
 from behave_campaign.adapters import JsonlEventLog, NullEventLog
 from behave_campaign.domain import (
+    ACTIONABLE_KINDS,
     CampaignError,
     NewEvent,
     event_matches,
+    expand_event_kinds,
     failure_details,
     unit_event_kind,
-    validate_event_kinds,
 )
 
 AT = "2026-09-12T12:00:00Z"
@@ -52,27 +53,41 @@ class TestEventMatching:
         assert not event_matches("unitary.thing", ["unit.*"])
 
 
-class TestValidateEventKinds:
+class TestExpandEventKinds:
     def test_known_kinds_and_families_are_accepted(self):
-        assert validate_event_kinds(["unit.*", "campaign.complete"]) == (
+        assert expand_event_kinds(["unit.*", "campaign.complete"]) == (
             "unit.*",
             "campaign.complete",
         )
 
     def test_no_filter_is_accepted(self):
-        assert validate_event_kinds([]) == ()
+        assert expand_event_kinds([]) == ()
+
+    def test_everything_preset_drops_every_other_pattern(self):
+        assert expand_event_kinds(["unit.failed", "*"]) == ()
+
+    def test_actionable_preset_expands_in_place(self):
+        expanded = expand_event_kinds(["actionable", "unit.passed"])
+
+        assert "unit.failed" in expanded
+        assert "anomaly.*" in expanded
+        assert "campaign.*" in expanded
+        assert expanded[-1] == "unit.passed"
+        # Progress is in the counts; these are noise to a watcher.
+        for quiet in ("unit.passed", "lane.started", "unit.retried"):
+            assert quiet not in ACTIONABLE_KINDS
 
     def test_an_unknown_family_is_rejected(self):
         # A typo would otherwise look like a campaign that emits nothing,
         # which is the most confusing failure available here.
         with pytest.raises(CampaignError) as error:
-            validate_event_kinds(["units.*"])
+            expand_event_kinds(["units.*"])
 
         assert "unknown event family" in str(error.value)
 
     def test_an_unknown_kind_is_rejected(self):
         with pytest.raises(CampaignError) as error:
-            validate_event_kinds(["unit.exploded"])
+            expand_event_kinds(["unit.exploded"])
 
         assert "unknown event kind" in str(error.value)
 

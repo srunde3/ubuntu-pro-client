@@ -1044,6 +1044,23 @@ class EventKind(_StringEnum):
 EVENT_KINDS = tuple(kind.value for kind in EventKind)
 EVENT_FAMILIES = tuple(family.value for family in EventFamily)
 
+# Subscription presets. ``actionable`` is what a watcher has to react to:
+# every non-passing outcome, every derived signal, and the campaign's own
+# transitions. Passes, lane openings and the watcher's own retries are left
+# out; the counts on every response carry progress.
+EVERYTHING_PRESET = "*"
+ACTIONABLE_PRESET = "actionable"
+ACTIONABLE_KINDS = (
+    EventKind.UNIT_FAILED.value,
+    EventKind.UNIT_ERRORED.value,
+    EventKind.UNIT_SKIPPED.value,
+    EventKind.UNIT_UNCLASSIFIABLE.value,
+    EventFamily.ANOMALY.value + ".*",
+    EventKind.LANE_OVERDUE.value,
+    EventFamily.CAMPAIGN.value + ".*",
+)
+EVENT_PRESETS = (EVERYTHING_PRESET, ACTIONABLE_PRESET)
+
 # Which unit event an outcome produces.
 _UNIT_EVENT_FOR_OUTCOME = {
     Outcome.PASSED: EventKind.UNIT_PASSED,
@@ -1106,28 +1123,38 @@ def parse_event(raw: Any) -> Event:
     )
 
 
-def validate_event_kinds(kinds: Sequence[str]) -> tuple[str, ...]:
+def expand_event_kinds(kinds: Sequence[str]) -> tuple[str, ...]:
     """Return the subscription patterns, rejecting ones that match nothing.
 
-    A typo in a filter would otherwise look like a campaign that never emits
-    anything, which is the most confusing failure available here.
+    Each entry is an exact kind, a family (``unit.*``), or a preset:
+    ``actionable`` expands to :data:`ACTIONABLE_KINDS` and ``*`` to no
+    pattern at all, which is everything. A typo would otherwise look like a
+    campaign that never emits anything, which is the most confusing failure
+    available here.
     """
+    patterns: list[str] = []
     for pattern in kinds:
-        if pattern.endswith(".*"):
-            if pattern[:-2] in EVENT_FAMILIES:
-                continue
+        if pattern == EVERYTHING_PRESET:
+            return ()
+        if pattern == ACTIONABLE_PRESET:
+            patterns.extend(ACTIONABLE_KINDS)
+        elif pattern.endswith(".*"):
+            if pattern[:-2] not in EVENT_FAMILIES:
+                raise CampaignError(
+                    "unknown event family {!r}; known families: {}".format(
+                        pattern[:-2], ", ".join(EVENT_FAMILIES)
+                    )
+                )
+            patterns.append(pattern)
+        elif pattern in EVENT_KINDS:
+            patterns.append(pattern)
+        else:
             raise CampaignError(
-                "unknown event family {!r}; known families: {}".format(
-                    pattern[:-2], ", ".join(EVENT_FAMILIES)
+                "unknown event kind {!r}; known kinds: {}; presets: {}".format(
+                    pattern, ", ".join(EVENT_KINDS), ", ".join(EVENT_PRESETS)
                 )
             )
-        elif pattern not in EVENT_KINDS:
-            raise CampaignError(
-                "unknown event kind {!r}; known kinds: {}".format(
-                    pattern, ", ".join(EVENT_KINDS)
-                )
-            )
-    return tuple(kinds)
+    return tuple(patterns)
 
 
 def event_matches(kind: str, patterns: Sequence[str]) -> bool:

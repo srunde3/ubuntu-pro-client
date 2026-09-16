@@ -321,14 +321,14 @@ class CampaignService:
         error, and the campaign summary comes back either way, so a quiet
         stretch still tells the caller where things stand.
         """
-        domain.validate_event_kinds(kinds)
+        patterns = domain.expand_event_kinds(kinds)
         capped, _ = self._cap_events(limit)
 
         if timeout > 0:
             events = self._events.wait(
                 campaign_id,
                 since_seq=since_seq,
-                kinds=kinds,
+                kinds=patterns,
                 limit=capped,
                 timeout=timeout,
             )
@@ -336,7 +336,7 @@ class CampaignService:
             events = self._events.read(
                 campaign_id,
                 since_seq=since_seq,
-                kinds=kinds,
+                kinds=patterns,
                 limit=capped,
             )
 

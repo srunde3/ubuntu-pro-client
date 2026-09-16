@@ -791,14 +791,14 @@ def reopen_campaign(
     description=(
         "Wait for news about a campaign. Returns every event after "
         "since_seq, blocking up to timeout_seconds for something to happen, "
-        "and always reports the campaign's counts and lifecycle -- so a "
+        "and always reports the campaign's state -- so a "
         "batch that comes back empty still says where things stand. Pass "
         "next_seq from the previous response as the next since_seq to read "
-        "the stream without gaps or repeats. Filter with kinds: exact kinds "
-        "like 'unit.failed', or a family like 'unit.*'; omit for "
-        "everything. Families are campaign.*, lane.* and unit.*. A "
-        "unit.failed event carries the failing steps, so a failure can be "
-        "judged without fetching the job's report."
+        "the stream without gaps or repeats. kinds defaults to the "
+        "actionable preset; pass ['*'] for everything, or exact kinds and "
+        "families (campaign.*, lane.*, unit.*, anomaly.*). A unit.failed "
+        "event carries the failing steps, so a failure can be judged "
+        "without fetching the job's report."
     )
 )
 def await_campaign_events(
@@ -817,10 +817,13 @@ def await_campaign_events(
         list[str],
         Field(
             description=(
-                "Event kinds or families to return. Empty means all of them."
+                "Event kinds (unit.failed), families (unit.*), or the "
+                "presets 'actionable' (every non-passing outcome, anomaly.*, "
+                "lane.overdue, campaign.*) and '*' (everything). Defaults to "
+                "actionable; progress is in counts on every response."
             ),
         ),
-    ] = [],
+    ] = ["actionable"],
     timeout_seconds: Annotated[
         int,
         Field(
