@@ -848,61 +848,39 @@ def unit_history(
 
 @tool(
     description=(
-        "Start scheduling a campaign. The server then keeps up to the "
-        "campaign's max_lanes behave jobs in flight, records every outcome, "
-        "and fills a lane as soon as one frees -- no further calls are "
-        "needed to keep it moving. Only one campaign runs at a time. A "
-        "finished campaign has no work to start, and a cancelled one must "
-        "be reopened first. Poll campaign_status to follow progress."
+        "Change what a campaign is doing. Only one campaign schedules at "
+        "a time.\n"
+        "  start   created -> running. Begins scheduling: the server keeps "
+        "up to max_lanes jobs in flight and fills a lane as soon as one "
+        "frees, with no further calls needed. A finished campaign has no "
+        "work to start; a cancelled one must be reopened first.\n"
+        "  pause   running -> paused. Stops opening lanes; jobs in flight "
+        "finish and are recorded. lanes_busy says how many are draining.\n"
+        "  resume  paused -> running. Includes a campaign the server paused "
+        "by itself after a restart.\n"
+        "  cancel  any -> cancelled. Closes it to scheduling and to "
+        "retry_units; jobs in flight still finish. For a campaign not "
+        "worth continuing. Undo with reopen_campaign.\n"
+        "Returns lifecycle, lanes_busy and counts. Poll campaign_status or "
+        "await_campaign_events to follow progress."
     )
 )
-def start_campaign(
-    campaign_id: CampaignIdArg, repo_root: RepoRoot = ""
+def control_campaign(
+    campaign_id: CampaignIdArg,
+    action: Annotated[
+        campaign_domain.ControlAction,
+        Field(description="start, pause, resume or cancel; see above."),
+    ],
+    repo_root: RepoRoot = "",
 ) -> CampaignControlResponse:
-    return campaign_runner(repo_root).start(campaign_id)
-
-
-@tool(
-    description=(
-        "Stop opening new lanes, and let the jobs already in flight run to "
-        "completion -- their results are still recorded. lanes_busy in the "
-        "response says how many are still draining. Use resume_campaign to "
-        "continue."
-    )
-)
-def pause_campaign(
-    campaign_id: CampaignIdArg, repo_root: RepoRoot = ""
-) -> CampaignControlResponse:
-    return campaign_runner(repo_root).pause(campaign_id)
-
-
-@tool(
-    description=(
-        "Resume a paused campaign, including one the server paused by "
-        "itself after a restart. Lanes begin filling again immediately."
-    )
-)
-def resume_campaign(
-    campaign_id: CampaignIdArg, repo_root: RepoRoot = ""
-) -> CampaignControlResponse:
-    return campaign_runner(repo_root).resume(campaign_id)
-
-
-@tool(
-    description=(
-        "Close a campaign to further scheduling. Like pause, jobs already "
-        "in flight run to completion and are recorded; unlike pause, it "
-        "also closes a campaign that has already finished, so retry_units "
-        "no longer reaches its failed and skipped units. The campaign's "
-        "record stays readable, and reopen_campaign takes the cancellation "
-        "back. Use it when a campaign is not worth continuing -- a broken "
-        "checkout, or infrastructure that is not going to recover."
-    )
-)
-def cancel_campaign(
-    campaign_id: CampaignIdArg, repo_root: RepoRoot = ""
-) -> CampaignControlResponse:
-    return campaign_runner(repo_root).cancel(campaign_id)
+    runner = campaign_runner(repo_root)
+    verbs = {
+        campaign_domain.ControlAction.START: runner.start,
+        campaign_domain.ControlAction.PAUSE: runner.pause,
+        campaign_domain.ControlAction.RESUME: runner.resume,
+        campaign_domain.ControlAction.CANCEL: runner.cancel,
+    }
+    return verbs[action](campaign_id)
 
 
 @tool(

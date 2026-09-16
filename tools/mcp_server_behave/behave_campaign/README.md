@@ -193,12 +193,11 @@ write the same files the CLI does, under the directory named by
   at `problems_limit` (50 over MCP; the CLI lists all) with `problems_total`
   alongside. Individual units are opt-in via `units_limit` because a full
   campaign is over a thousand of them.
-- `start_campaign` -- begin scheduling. The server then keeps up to
-  `max_lanes` jobs in flight and fills a lane as soon as one frees, with no
-  further calls needed to keep it moving.
-- `pause_campaign` / `resume_campaign` -- stop and restart lane opening.
-- `cancel_campaign` -- close a campaign to further scheduling, including
-  one that has already finished.
+- `control_campaign` -- one tool, four actions. `start` begins scheduling:
+  the server then keeps up to `max_lanes` jobs in flight and fills a lane as
+  soon as one frees, with no further calls needed to keep it moving. `pause`
+  and `resume` stop and restart lane opening. `cancel` closes a campaign to
+  further scheduling, including one that has already finished.
 - `reopen_campaign` -- take a cancellation back, for one made by mistake.
 - `await_campaign_events` -- wait for news, with a cursor.
 - `unit_history` -- every attempt at each selected unit: job, install

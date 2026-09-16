@@ -42,7 +42,7 @@ rely on this file for those; it will drift and the tool will not.
 4. Call `create_campaign` with the agreed scope, `install_from: proposed`, and
 	a `max_lanes` the host can stand. Nothing runs yet.
 5. Report the unit count it returns and **get the user's confirmation before
-	calling `start_campaign`**.
+	calling `control_campaign` with `action: start`**.
 
 If `create_campaign` rejects the scope -- an unknown release, a `max_lanes`
 above the server's job limit, an id already in use -- that is a scope mistake
@@ -50,7 +50,7 @@ to resolve with the user, not an error to work around.
 
 ## Run it
 
-Call `start_campaign`, then immediately delegate campaign monitoring to a
+Call `control_campaign` with `action: start`, then immediately delegate campaign monitoring to a
 subagent (`runSubagent`). The human should not be required to check in or prompt
 repeatedly; an extended monitoring subagent watches the event stream, triages
 failures, and reports back.
@@ -98,10 +98,17 @@ When the subagent returns:
 ### Failure Triage (Zero-Log Overhead)
 
 - `unit.failed` carries `data.failures` with the failing `step` and
-  `error_message`. Judge directly from those step assertions without calling
-  `get_scenario_logs`.
-- Only fetch `get_scenario_logs` if `data.failures` is empty (typically
-  indicates a Behave hook error such as `after_step` or a test harness crash).
+  `error_message`. Judge directly from those step assertions without reading
+  the log.
+- When `error_message` is empty or the unit errored (a `status: error` setup
+  step, a hook crash, a harness failure), call `get_scenario_errors` for that
+  job: it returns every traceback, hook error and failed assertion in order,
+  with the exception raised. The first region is usually the cause and later
+  ones its consequences. Only then, if needed, `get_scenario_logs` with
+  `start` set to a region's `first_line` to read around it -- never the
+  whole log.
+- Provisioning failures come in classes: one log tells you the class, and the
+  judgement applies to every unit in it. Do not read one log per unit.
 - Classify failures promptly:
   1. **Host/Harness Defect** (e.g. hook crash, file encoding, permission
      denial): Actionable immediately. Fix the harness or host environment, then
@@ -124,11 +131,12 @@ When the subagent returns:
 
 Let plain failures accumulate and keep going. The point of a first pass is a
 complete picture, not a green one. If an environmental bug breaks all lanes,
-call `pause_campaign`, fix the root cause, and batch-retry.
+call `control_campaign` with `action: pause`, fix the root cause, and
+batch-retry.
 
 ## Stop, retry, resume
 
-`pause_campaign` and `cancel_campaign` both drain: jobs already running finish
+`control_campaign` actions `pause` and `cancel` both drain: jobs already running finish
 and are recorded. Neither kills anything. `lanes_busy` in the response says how
 many are still draining. Cancel when the run is not worth continuing -- a
 broken checkout, infrastructure that will not recover -- and say why. Pause a
@@ -139,7 +147,7 @@ run you mean to come back to: cancelling also closes the campaign to
 cancel stays in the record and the reopen is appended after it. A campaign
 with units left unattempted starts scheduling again; one whose units were all
 attempted comes back `complete`, so reopening it is followed by `retry_units`,
-not `start_campaign`. If the cancel left jobs in flight that no server is
+not `action: start`. If the cancel left jobs in flight that no server is
 watching any more, it names those units and refuses; check them, then reopen
 with `abandon_in_flight` to record them as errored.
 
@@ -151,7 +159,7 @@ accepts the request and stays paused.
 Resuming: `list_campaigns` finds the campaign, `campaign_status` shows where it
 got to. A campaign the server was running when it last stopped comes back
 `paused`, with `server_restart` as the reason -- check its in-flight units
-before calling `resume_campaign`.
+before calling `control_campaign` with `action: resume`.
 
 ## Finish
 

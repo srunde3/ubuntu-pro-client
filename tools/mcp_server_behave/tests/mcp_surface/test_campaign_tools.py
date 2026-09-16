@@ -295,7 +295,7 @@ async def test_start_campaign_marks_it_running(repo, runner):
     async with create_connected_server_and_client_session(mcp) as client:
         await client.call_tool("create_campaign", {"campaign_id": "1234567"})
         result = await client.call_tool(
-            "start_campaign", {"campaign_id": "1234567"}
+            "control_campaign", {"campaign_id": "1234567", "action": "start"}
         )
 
     payload = result_json(result)
@@ -308,7 +308,7 @@ async def test_start_campaign_marks_it_running(repo, runner):
 async def test_starting_an_unknown_campaign_is_an_error(repo, runner):
     async with create_connected_server_and_client_session(mcp) as client:
         result = await client.call_tool(
-            "start_campaign", {"campaign_id": "absent"}
+            "control_campaign", {"campaign_id": "absent", "action": "start"}
         )
 
     assert "no campaign" in result_error_text(result)
@@ -319,9 +319,11 @@ async def test_only_one_campaign_runs_at_a_time(repo, runner):
     async with create_connected_server_and_client_session(mcp) as client:
         await client.call_tool("create_campaign", {"campaign_id": "111"})
         await client.call_tool("create_campaign", {"campaign_id": "222"})
-        await client.call_tool("start_campaign", {"campaign_id": "111"})
+        await client.call_tool(
+            "control_campaign", {"campaign_id": "111", "action": "start"}
+        )
         result = await client.call_tool(
-            "start_campaign", {"campaign_id": "222"}
+            "control_campaign", {"campaign_id": "222", "action": "start"}
         )
 
     assert "only one campaign" in result_error_text(result)
@@ -331,13 +333,15 @@ async def test_only_one_campaign_runs_at_a_time(repo, runner):
 async def test_pause_then_resume_round_trips(repo, runner):
     async with create_connected_server_and_client_session(mcp) as client:
         await client.call_tool("create_campaign", {"campaign_id": "1234567"})
-        await client.call_tool("start_campaign", {"campaign_id": "1234567"})
+        await client.call_tool(
+            "control_campaign", {"campaign_id": "1234567", "action": "start"}
+        )
 
         paused = await client.call_tool(
-            "pause_campaign", {"campaign_id": "1234567"}
+            "control_campaign", {"campaign_id": "1234567", "action": "pause"}
         )
         resumed = await client.call_tool(
-            "resume_campaign", {"campaign_id": "1234567"}
+            "control_campaign", {"campaign_id": "1234567", "action": "resume"}
         )
 
     assert result_json(paused)["lifecycle"] == "paused"
@@ -349,7 +353,7 @@ async def test_pausing_a_campaign_that_never_started_is_an_error(repo, runner):
     async with create_connected_server_and_client_session(mcp) as client:
         await client.call_tool("create_campaign", {"campaign_id": "1234567"})
         result = await client.call_tool(
-            "pause_campaign", {"campaign_id": "1234567"}
+            "control_campaign", {"campaign_id": "1234567", "action": "pause"}
         )
 
     assert "created" in result_error_text(result)
@@ -359,12 +363,14 @@ async def test_pausing_a_campaign_that_never_started_is_an_error(repo, runner):
 async def test_cancel_closes_the_campaign(repo, runner):
     async with create_connected_server_and_client_session(mcp) as client:
         await client.call_tool("create_campaign", {"campaign_id": "1234567"})
-        await client.call_tool("start_campaign", {"campaign_id": "1234567"})
+        await client.call_tool(
+            "control_campaign", {"campaign_id": "1234567", "action": "start"}
+        )
         cancelled = await client.call_tool(
-            "cancel_campaign", {"campaign_id": "1234567"}
+            "control_campaign", {"campaign_id": "1234567", "action": "cancel"}
         )
         restart = await client.call_tool(
-            "start_campaign", {"campaign_id": "1234567"}
+            "control_campaign", {"campaign_id": "1234567", "action": "start"}
         )
 
     assert result_json(cancelled)["lifecycle"] == "cancelled"
@@ -375,14 +381,18 @@ async def test_cancel_closes_the_campaign(repo, runner):
 async def test_reopen_takes_a_cancellation_back(repo, runner):
     async with create_connected_server_and_client_session(mcp) as client:
         await client.call_tool("create_campaign", {"campaign_id": "1234567"})
-        await client.call_tool("start_campaign", {"campaign_id": "1234567"})
-        await client.call_tool("cancel_campaign", {"campaign_id": "1234567"})
+        await client.call_tool(
+            "control_campaign", {"campaign_id": "1234567", "action": "start"}
+        )
+        await client.call_tool(
+            "control_campaign", {"campaign_id": "1234567", "action": "cancel"}
+        )
         reopened = await client.call_tool(
             "reopen_campaign",
             {"campaign_id": "1234567", "reason": "cancelled by mistake"},
         )
         restarted = await client.call_tool(
-            "start_campaign", {"campaign_id": "1234567"}
+            "control_campaign", {"campaign_id": "1234567", "action": "start"}
         )
 
     assert result_json(reopened)["lifecycle"] == "running"
@@ -395,7 +405,9 @@ async def test_reopen_takes_a_cancellation_back(repo, runner):
 async def test_reopening_a_live_campaign_is_an_error(repo, runner):
     async with create_connected_server_and_client_session(mcp) as client:
         await client.call_tool("create_campaign", {"campaign_id": "1234567"})
-        await client.call_tool("start_campaign", {"campaign_id": "1234567"})
+        await client.call_tool(
+            "control_campaign", {"campaign_id": "1234567", "action": "start"}
+        )
         result = await client.call_tool(
             "reopen_campaign", {"campaign_id": "1234567"}
         )
@@ -409,7 +421,9 @@ async def test_a_started_campaign_fills_lanes_on_its_tick(repo, runner):
         await client.call_tool(
             "create_campaign", {"campaign_id": "1234567", "max_lanes": 1}
         )
-        await client.call_tool("start_campaign", {"campaign_id": "1234567"})
+        await client.call_tool(
+            "control_campaign", {"campaign_id": "1234567", "action": "start"}
+        )
         # One tick only: this is about the lane being open, not the campaign
         # finishing.
         runner.ticker.tick()
@@ -445,7 +459,9 @@ async def test_unit_history_lists_every_attempt(repo, runner):
         await client.call_tool(
             "create_campaign", {"campaign_id": "1234567", "max_lanes": 1}
         )
-        await client.call_tool("start_campaign", {"campaign_id": "1234567"})
+        await client.call_tool(
+            "control_campaign", {"campaign_id": "1234567", "action": "start"}
+        )
         runner.ticker.drive()
 
         result = await client.call_tool(
@@ -468,7 +484,9 @@ async def test_await_events_defaults_to_what_needs_acting_on(repo, runner):
         await client.call_tool(
             "create_campaign", {"campaign_id": "1234567", "max_lanes": 1}
         )
-        await client.call_tool("start_campaign", {"campaign_id": "1234567"})
+        await client.call_tool(
+            "control_campaign", {"campaign_id": "1234567", "action": "start"}
+        )
         runner.ticker.drive()
 
         result = await client.call_tool(
@@ -493,7 +511,9 @@ async def test_await_events_follows_a_campaign_through_a_lane(repo, runner):
         await client.call_tool(
             "create_campaign", {"campaign_id": "1234567", "max_lanes": 1}
         )
-        await client.call_tool("start_campaign", {"campaign_id": "1234567"})
+        await client.call_tool(
+            "control_campaign", {"campaign_id": "1234567", "action": "start"}
+        )
         runner.ticker.drive()
 
         result = await client.call_tool(
@@ -517,7 +537,9 @@ async def test_await_events_follows_a_campaign_through_a_lane(repo, runner):
 async def test_the_cursor_reads_the_stream_without_repeats(repo, runner):
     async with create_connected_server_and_client_session(mcp) as client:
         await client.call_tool("create_campaign", {"campaign_id": "1234567"})
-        await client.call_tool("start_campaign", {"campaign_id": "1234567"})
+        await client.call_tool(
+            "control_campaign", {"campaign_id": "1234567", "action": "start"}
+        )
 
         first = result_json(
             await client.call_tool(
@@ -609,7 +631,9 @@ async def test_retry_units_requeues_a_failure(repo, runner, monkeypatch):
         # max_lanes stays at 1: MCP_MAX_PARALLEL_JOBS defaults to 1, and a
         # campaign asking for more than the server allows is refused.
         await client.call_tool("create_campaign", {"campaign_id": "1234567"})
-        await client.call_tool("start_campaign", {"campaign_id": "1234567"})
+        await client.call_tool(
+            "control_campaign", {"campaign_id": "1234567", "action": "start"}
+        )
         runner.ticker.drive()
 
         status = result_json(
@@ -635,7 +659,9 @@ async def test_retry_units_requeues_a_failure(repo, runner, monkeypatch):
 async def test_retry_units_with_nothing_to_retry_is_an_error(repo, runner):
     async with create_connected_server_and_client_session(mcp) as client:
         await client.call_tool("create_campaign", {"campaign_id": "1234567"})
-        await client.call_tool("start_campaign", {"campaign_id": "1234567"})
+        await client.call_tool(
+            "control_campaign", {"campaign_id": "1234567", "action": "start"}
+        )
         result = await client.call_tool(
             "retry_units", {"campaign_id": "1234567"}
         )

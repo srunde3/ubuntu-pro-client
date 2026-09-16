@@ -733,6 +733,15 @@ def problems(statuses: Iterable[UnitStatus]) -> list[UnitStatus]:
     return [s for s in statuses if s.state in PROBLEM_OUTCOMES]
 
 
+class ControlAction(_StringEnum):
+    """What a caller can ask a running server to do with a campaign."""
+
+    START = "start"
+    PAUSE = "pause"
+    RESUME = "resume"
+    CANCEL = "cancel"
+
+
 class GroupBy(_StringEnum):
     """How a status report lists its problem units."""
 

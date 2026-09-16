@@ -38,10 +38,9 @@ async def test_mcp_lists_expected_tools():
     assert "create_campaign" in tools
     assert "list_campaigns" in tools
     assert "campaign_status" in tools
-    assert "start_campaign" in tools
-    assert "pause_campaign" in tools
-    assert "resume_campaign" in tools
-    assert "cancel_campaign" in tools
+    assert "control_campaign" in tools
+    for verb in ("start", "pause", "resume", "cancel"):
+        assert f"{verb}_campaign" not in tools
     assert "reopen_campaign" in tools
     assert "retry_units" in tools
     assert "kill_job" in tools

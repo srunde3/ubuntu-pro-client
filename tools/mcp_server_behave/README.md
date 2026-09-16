@@ -69,13 +69,13 @@ run next. The server's job history is a bounded window, so an SRU campaign that
 runs for days is recorded there instead.
 
 `create_campaign` plans one and stores it without starting anything;
-`list_campaigns` and `campaign_status` report on them. `start_campaign` then
-schedules it: the server keeps up to the campaign's `max_lanes` behave jobs in
-flight, records every outcome, and fills a lane as soon as one frees, with no
-further calls needed to keep it moving. `pause_campaign`, `resume_campaign`
-and `cancel_campaign` control it; pause and cancel both let in-flight jobs
-finish rather than killing them. `reopen_campaign` takes a cancellation back,
-for one made by mistake.
+`list_campaigns` and `campaign_status` report on them. `control_campaign`
+with `action: start` then schedules it: the server keeps up to the campaign's
+`max_lanes` behave jobs in flight, records every outcome, and fills a lane as
+soon as one frees, with no further calls needed to keep it moving. The same
+tool's `pause`, `resume` and `cancel` actions control it; pause and cancel
+both let in-flight jobs finish rather than killing them. `reopen_campaign`
+takes a cancellation back, for one made by mistake.
 
 Only one campaign schedules at a time, held by an advisory lock so a
 concurrent CLI fails cleanly instead of interleaving writes.
