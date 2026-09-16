@@ -189,8 +189,14 @@ class ListDimensionsResponse(BaseModel):
 
 
 class FindScenariosResponse(BaseModel):
+    """Matches in catalog order, capped at ``limit``; ``total`` counts them
+    all and ``truncated`` says some were left out."""
+
     repo_root: str = ""
     matches: list[ScenarioMatch] = []
+    total: int = 0
+    truncated: bool = False
+    limit_clamped: bool = False
 
 
 class StartScenarioResponse(BaseModel):

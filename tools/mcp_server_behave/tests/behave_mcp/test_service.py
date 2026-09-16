@@ -206,6 +206,21 @@ def test_list_dimensions_counts_scenarios(tmp_path):
     ]
 
 
+def test_find_scenarios_caps_matches_but_counts_them_all(tmp_path):
+    repo_root = _make_repo_with_outline(tmp_path)
+    service = _make_service(FakeWorkspace(repo_root=repo_root))
+
+    result = service.find_scenarios(limit=1)
+
+    assert len(result.matches) == 1
+    assert result.total >= 2
+    assert result.truncated is True
+    assert result.limit_clamped is False
+
+    with pytest.raises(BehaveServiceError, match="limit must be"):
+        service.find_scenarios(limit=0)
+
+
 def test_find_scenarios_filters_by_tag(tmp_path):
     repo_root = _make_repo_with_outline(tmp_path)
     service = _make_service(FakeWorkspace(repo_root=repo_root))

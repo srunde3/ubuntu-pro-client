@@ -16,6 +16,7 @@ The server exposes these MCP tools:
 - `find_scenarios` -- reverse lookup across all features.
   - Optional `release`, `machine_type`, `tag`, and `text` (scenario-name substring) filters.
   - Returns matching `feature_file`, `scenario_name`, `type`, required config, and the combos satisfying the filters.
+  - `limit` caps the matches (default 50), with `total` and `truncated` alongside; `limit_clamped` is set when a value above the server max was capped.
 - `start_scenario` -- starts a behave scenario in the background.
   - Returns a `job_id`.
   - Optional `install_from` controls where `ubuntu-pro-client` is installed from before the scenario runs (sets `UACLIENT_BEHAVE_INSTALL_FROM` for the behave subprocess). Allowed values: `local` (default), `archive`, `daily`, `staging`, `stable`, `proposed`.

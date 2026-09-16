@@ -193,7 +193,14 @@ class BehaveService:
         tag: str | None = None,
         text: str | None = None,
         repo_root: str = "",
+        limit: int = domain.DEFAULT_FIND_LIMIT,
     ) -> FindScenariosResponse:
+        if limit <= 0:
+            raise BehaveServiceError(
+                f"limit must be a positive integer, got {limit}"
+            )
+        limit_clamped = limit > domain.MAX_FIND_LIMIT
+        limit = min(limit, domain.MAX_FIND_LIMIT)
         try:
             resolved_repo_root = self._workspace.resolve_repo_root(
                 repo_root or None
@@ -233,7 +240,10 @@ class BehaveService:
 
         return FindScenariosResponse(
             repo_root=str(resolved_repo_root),
-            matches=matches,
+            matches=matches[:limit],
+            total=len(matches),
+            truncated=len(matches) > limit,
+            limit_clamped=limit_clamped,
         )
 
     def _feature_has_match(

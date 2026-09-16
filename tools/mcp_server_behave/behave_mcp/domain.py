@@ -93,6 +93,9 @@ DEFAULT_JOB_LIST_LIMIT = 20
 MAX_JOB_LIST_LIMIT = 500
 DEFAULT_RESULTS_LIMIT = 20
 MAX_RESULTS_LIMIT = 500
+# An unfiltered search hits every scenario in the suite (hundreds).
+DEFAULT_FIND_LIMIT = 50
+MAX_FIND_LIMIT = 500
 
 
 def to_combo(combo: parser.Combo) -> Combo:

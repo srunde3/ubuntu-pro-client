@@ -304,7 +304,9 @@ def list_dimensions(repo_root: RepoRoot = "") -> ListDimensionsResponse:
         "Find scenarios across all features matching optional release, "
         "machine_type, tag, and text (scenario-name substring) filters. "
         "Returns matching feature_file, scenario_name, type, required config, "
-        "and the combos that satisfy the release/machine_type filters."
+        "and the combos that satisfy the release/machine_type filters. "
+        "limit caps the matches, with total and truncated alongside; "
+        "narrow the filters rather than raising it."
     )
 )
 def find_scenarios(
@@ -312,6 +314,15 @@ def find_scenarios(
     machine_type: MachineTypeFilter = "",
     tag: TagFilter = "",
     text: TextFilter = "",
+    limit: Annotated[
+        int,
+        Field(
+            description=(
+                "Most matches to return. Must be positive; values above "
+                "the server max are capped, with limit_clamped set."
+            )
+        ),
+    ] = domain.DEFAULT_FIND_LIMIT,
     repo_root: RepoRoot = "",
 ) -> FindScenariosResponse:
     return _service.find_scenarios(
@@ -320,6 +331,7 @@ def find_scenarios(
         tag=tag or None,
         text=text or None,
         repo_root=repo_root,
+        limit=limit,
     )
 
 
