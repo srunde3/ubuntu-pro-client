@@ -42,6 +42,7 @@ from behave_campaign.messages import (
     NextUnitsResponse,
     RecordAttemptsResponse,
     UnitHistoryResponse,
+    UnitsResponse,
 )
 from behave_campaign.ports import CampaignStore, EventLog, FeatureReader
 from behave_campaign.views import (
@@ -233,7 +234,6 @@ class CampaignService:
         *,
         campaign_id: str,
         filters: Filters = Filters(),
-        units_limit: int = 0,
         group_by: str = domain.GroupBy.UNIT,
         problems_limit: int = DEFAULT_PROBLEMS_LIMIT,
     ) -> CampaignStatusResponse:
@@ -241,11 +241,9 @@ class CampaignService:
 
         ``filters`` narrows which units are counted and listed, so a caller
         can ask about one release without reading the whole campaign.
-        ``units_limit`` is how many individual units to list: the default of
-        zero lists none, because a full campaign runs to thousands of units
-        and the counts are what a caller usually acts on. ``group_by``
-        chooses how the problems read: one unit per row, or one scenario
-        per row with its units bucketed by state.
+        ``group_by`` chooses how the problems read: one unit per row, or one
+        scenario per row with its units bucketed by state. Individual units
+        are :meth:`list_units`' job.
         """
         if group_by not in domain.GROUPINGS:
             raise CampaignError(
@@ -262,13 +260,6 @@ class CampaignService:
 
         problem_units = domain.problems(statuses)
         problems_cap, _ = self._cap(problems_limit)
-        units = None
-        truncated = False
-        clamped = False
-        if units_limit:
-            capped, clamped = self._cap(units_limit)
-            units = [unit_view(status) for status in statuses[:capped]]
-            truncated = len(statuses) > capped
 
         return CampaignStatusResponse(
             campaign=campaign_header(campaign_id, records),
@@ -285,8 +276,21 @@ class CampaignService:
                 else None
             ),
             problems_total=len(problem_units),
-            units=units,
-            truncated=truncated,
+        )
+
+    def list_units(
+        self,
+        *,
+        campaign_id: str,
+        filters: Filters = Filters(),
+        limit: int = DEFAULT_UNITS_LIMIT,
+    ) -> UnitsResponse:
+        """Report every selected unit with its current state."""
+        statuses = self._selected(campaign_id, filters)
+        capped, clamped = self._cap(limit)
+        return UnitsResponse(
+            units=[unit_view(status) for status in statuses[:capped]],
+            truncated=len(statuses) > capped,
             limit_clamped=clamped,
         )
 

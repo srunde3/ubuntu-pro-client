@@ -99,7 +99,7 @@ uv run behave-campaign record --campaign-id 1234567 --install-from proposed \
 uv run behave-campaign next --campaign-id 1234567 --limit 4
 uv run behave-campaign status --campaign-id 1234567 --state failed
 uv run behave-campaign status --campaign-id 1234567 --group-by scenario
-uv run behave-campaign status --campaign-id 1234567 --units 50
+uv run behave-campaign units --campaign-id 1234567 --state failed --format csv
 uv run behave-campaign history --campaign-id 1234567 \
   --feature features/cli/attach.feature
 
@@ -110,9 +110,10 @@ uv run behave-campaign events --campaign-id 1234567 --kinds actionable --follow
 uv run behave-campaign status --campaign /tmp/T.jsonl
 ```
 
-All commands read `--input` from stdin by default and print JSON to stdout.
-`status`, `next`, and `history` accept the same filters plus `--state`,
-repeatable to allow several values.
+All commands read `--input` from stdin by default and print JSON to stdout;
+`units`, `next` and `history` also take `--format csv`, one row per unit (or
+per attempt, for `history`). `status`, `units`, `next`, and `history` accept
+the same filters plus `--state`, repeatable to allow several values.
 
 A campaign is named the way the server names it: `--campaign-id 1234567`
 is `<repo>/.mcp_server_behave/campaigns/1234567.jsonl` (or under
@@ -132,10 +133,9 @@ The CLI prints the same response shapes the MCP tools return. `create` and
 `status` carry the campaign's header (how it was built: scope, checkout,
 install source, lanes) under `campaign` and its state (lifecycle, lanes in
 flight, counts by unit state) under `state`; every other response carries
-the state fields alone, since the header never changes. `status` and
-`history` omit or cap large unit lists the same way: `status` reports counts,
-in-flight units and problems, and lists every selected unit only with
-`--units`.
+the state fields alone, since the header never changes. `status` reports
+counts, in-flight units and problems; `units` and `history` list individual
+units, capped at `--limit` and saying so.
 
 `create` optionally records `--install-from` and `--max-lanes` for a runner to
 honour later; both are omitted from the file when not given.
@@ -199,8 +199,7 @@ write the same files the CLI does, under the directory named by
   one scenario per row with its units bucketed by state, which is how a
   scenario failing on every release reads at a glance. Either list is capped
   at `problems_limit` (50 over MCP; the CLI lists all) with `problems_total`
-  alongside. Individual units are opt-in via `units_limit` because a full
-  campaign is over a thousand of them.
+  alongside. Individual units are `unit_history`'s job.
 - `control_campaign` -- one tool, four actions. `start` begins scheduling:
   the server then keeps up to `max_lanes` jobs in flight and fills a lane as
   soon as one frees, with no further calls needed to keep it moving. `pause`

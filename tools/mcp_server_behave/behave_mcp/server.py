@@ -715,12 +715,10 @@ def list_campaigns(repo_root: RepoRoot = "") -> ListCampaignsResponse:
         "units in flight, and the units needing action (failed, skipped or "
         "error) -- one unit per row, or with group_by='scenario' one "
         "scenario per row with its units bucketed by state, which is how "
-        "to see a scenario failing on every release at a glance. "
-        "Individual units are omitted by default because a full campaign "
-        "is over a thousand of them -- set units_limit to list up to that "
-        "many, with truncated saying whether any were dropped. The "
+        "to see a scenario failing on every release at a glance. The "
         "release, machine_type, feature, scenario and state filters narrow "
-        "which units are counted and listed."
+        "which units are counted and listed; unit_history lists individual "
+        "units."
     )
 )
 def campaign_status(
@@ -744,16 +742,6 @@ def campaign_status(
             ),
         ),
     ] = [],
-    units_limit: Annotated[
-        int,
-        Field(
-            default=0,
-            description=(
-                "List up to this many individual units alongside the "
-                "counts. Defaults to 0, which lists none."
-            ),
-        ),
-    ] = 0,
     group_by: Annotated[
         campaign_domain.GroupBy,
         Field(
@@ -784,7 +772,6 @@ def campaign_status(
             machine_type=(machine_type,) if machine_type else (),
             state=tuple(state),
         ),
-        units_limit=units_limit,
         group_by=group_by.value,
         problems_limit=problems_limit,
     )

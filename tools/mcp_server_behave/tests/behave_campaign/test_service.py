@@ -165,6 +165,49 @@ class TestCreateCampaign:
             create(service, max_lanes=0)
 
 
+class TestListUnits:
+    def test_every_selected_unit_with_its_state(self, service, store):
+        create(service)
+        store.append(
+            "1234567",
+            [
+                AttemptFinished(
+                    unit=UNITS[0], job_id="job1", outcome="failed", at=AT
+                )
+            ],
+        )
+
+        listed = service.list_units(campaign_id="1234567")
+
+        assert [(u.release, u.state, u.job_id) for u in listed.units] == [
+            ("jammy", "failed", "job1"),
+            ("noble", "unattempted", None),
+            ("jammy", "unattempted", None),
+        ]
+        assert not listed.truncated
+
+    def test_the_list_is_capped_and_says_so(self, service):
+        create(service)
+
+        listed = service.list_units(campaign_id="1234567", limit=2)
+
+        assert len(listed.units) == 2
+        assert listed.truncated
+
+    def test_an_oversized_limit_is_clamped(self, service):
+        create(service)
+
+        assert service.list_units(
+            campaign_id="1234567", limit=10_000
+        ).limit_clamped
+
+    def test_a_non_positive_limit_is_rejected(self, service):
+        create(service)
+
+        with pytest.raises(CampaignError):
+            service.list_units(campaign_id="1234567", limit=0)
+
+
 class TestListCampaigns:
     def test_it_summarises_each_stored_campaign(self, service):
         create(service, campaign_id="111")
@@ -202,49 +245,12 @@ class TestCampaignStatus:
         assert status.running == []
         assert status.problems == []
 
-    def test_units_are_omitted_unless_asked_for(self, service):
+    def test_status_never_lists_individual_units(self, service):
         create(service)
 
-        assert service.campaign_status(campaign_id="1234567").units is None
+        status = service.campaign_status(campaign_id="1234567")
 
-    def test_a_units_limit_returns_them(self, service):
-        create(service)
-
-        status = service.campaign_status(campaign_id="1234567", units_limit=10)
-
-        assert len(status.units) == 3
-        assert not status.truncated
-
-    def test_the_unit_list_is_capped_and_says_so(self, service):
-        create(service)
-
-        status = service.campaign_status(campaign_id="1234567", units_limit=2)
-
-        assert len(status.units) == 2
-        assert status.truncated
-
-    def test_an_oversized_limit_is_clamped(self, service):
-        create(service)
-
-        status = service.campaign_status(
-            campaign_id="1234567", units_limit=10_000
-        )
-
-        assert status.limit_clamped
-
-    def test_a_zero_units_limit_simply_lists_none(self, service):
-        create(service)
-
-        status = service.campaign_status(campaign_id="1234567", units_limit=0)
-
-        assert status.units is None
-        assert status.state.counts.unattempted == 3
-
-    def test_a_negative_units_limit_is_rejected(self, service):
-        create(service)
-
-        with pytest.raises(CampaignError):
-            service.campaign_status(campaign_id="1234567", units_limit=-1)
+        assert not hasattr(status, "units")
 
     def test_running_and_problem_units_are_always_reported(
         self, service, store
@@ -363,13 +369,11 @@ class TestCampaignStatus:
             ],
         )
 
-        status = service.campaign_status(
-            campaign_id="1234567",
-            filters=Filters(state=("passed",)),
-            units_limit=10,
+        listed = service.list_units(
+            campaign_id="1234567", filters=Filters(state=("passed",))
         )
 
-        assert [u.state for u in status.units] == ["passed"]
+        assert [u.state for u in listed.units] == ["passed"]
 
     def test_it_reports_the_stored_header(self, service):
         create(service, install_from="proposed", max_lanes=4)

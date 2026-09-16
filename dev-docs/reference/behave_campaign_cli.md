@@ -11,9 +11,11 @@ uv sync --extra test
 uv run behave-campaign <command> [options]
 ```
 
-Every command prints one JSON document to stdout and exits `0`. An invalid
-argument, an unknown value, or an unreadable file prints a message to stderr
-and exits `2`. Response shapes match the `behave` MCP server's campaign tools.
+Every command prints one JSON document to stdout and exits `0`; `units`,
+`next` and `history` also take `--format csv`. An invalid argument, an
+unknown value, a missing campaign, or an unreadable file prints a message to
+stderr and exits `2`. JSON shapes match the `behave` MCP server's campaign
+tools.
 
 `--campaign-id` resolves to `<repo-root>/.mcp_server_behave/campaigns/ID.jsonl`,
 or `$MCP_STATE_DIR/campaigns/ID.jsonl` when `MCP_STATE_DIR` is set -- the same
@@ -133,7 +135,6 @@ Optional arguments:
 
 * `--repo-root DIR`: The checkout whose state holds the campaign, for
   `--campaign-id`. Defaults to `$UBUNTU_PRO_CLIENT_REPO`.
-* `--units N`: Also list up to `N` individual units. Defaults to none.
 * `--problems N`: List at most `N` problem rows. Defaults to all.
 * `--group-by unit|scenario`: List problems one unit per row, or one
   scenario per row with its units by state. Defaults to `unit`.
@@ -147,7 +148,37 @@ Filters narrow which units are counted and listed.
 
 ```bash
 uv run behave-campaign status --campaign-id 1234567 --group-by scenario
-uv run behave-campaign status --campaign-id 1234567 --state failed --units 50
+uv run behave-campaign status --campaign-id 1234567 --release jammy
+```
+
+## units
+
+List every selected unit with its state, last `job_id` and
+`attempt_count`.
+
+Required arguments:
+
+* One of:
+  * `--campaign-id ID`: The campaign, by the name the server uses.
+  * `--campaign FILE`: A campaign file anywhere; its id is the file's name.
+
+Optional arguments:
+
+* `--repo-root DIR`: The checkout whose state holds the campaign, for
+  `--campaign-id`. Defaults to `$UBUNTU_PRO_CLIENT_REPO`.
+* `--limit N`: Most units to list. Defaults to `200`; the maximum is `2000`.
+* `--format json|csv`: Defaults to `json`. CSV is one row per unit with the
+  columns `feature, scenario, release, machine_type, state, job_id,
+  attempt_count`; a cut list is reported on stderr.
+* `--feature PATH`: Only this feature file. Repeatable.
+* `--scenario NAME`: Only this exact scenario name. Repeatable.
+* `--release NAME`: Only this release. Repeatable.
+* `--machine-type NAME`: Only this machine type. Repeatable.
+* `--state STATE`: Only units in this state. Repeatable.
+
+```bash
+uv run behave-campaign units --campaign-id 1234567 --state failed \
+  --format csv > failed.csv
 ```
 
 ## next
@@ -166,6 +197,8 @@ Optional arguments:
 * `--repo-root DIR`: The checkout whose state holds the campaign, for
   `--campaign-id`. Defaults to `$UBUNTU_PRO_CLIENT_REPO`.
 * `--limit N`: Most units to list. Defaults to `1`.
+* `--format json|csv`: Defaults to `json`. CSV is one row per unit, the same
+  columns as `units`.
 * `--feature PATH`: Only this feature file. Repeatable.
 * `--scenario NAME`: Only this exact scenario name. Repeatable.
 * `--release NAME`: Only this release. Repeatable.
@@ -192,6 +225,10 @@ Optional arguments:
 * `--repo-root DIR`: The checkout whose state holds the campaign, for
   `--campaign-id`. Defaults to `$UBUNTU_PRO_CLIENT_REPO`.
 * `--limit N`: Most units to list. Defaults to `200`; the maximum is `2000`.
+* `--format json|csv`: Defaults to `json`. CSV is one row per attempt with
+  the columns `feature, scenario, release, machine_type, state, attempt,
+  job_id, install_from, started_at, outcome, finished_at`; a unit never
+  attempted is one row with the attempt columns empty.
 * `--feature PATH`: Only this feature file. Repeatable.
 * `--scenario NAME`: Only this exact scenario name. Repeatable.
 * `--release NAME`: Only this release. Repeatable.

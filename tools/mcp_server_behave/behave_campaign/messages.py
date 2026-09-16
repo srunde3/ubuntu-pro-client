@@ -155,8 +155,6 @@ class CampaignStatusResponse(BaseModel):
     ``problem_scenarios`` one scenario per row when grouped that way; the
     other is None. Either list is capped at ``problems_limit`` (units, or
     scenario rows) and ``problems_total`` counts every problem unit.
-    ``units`` is None unless a ``units_limit`` was asked for, and is
-    capped at it, with ``truncated`` saying whether any were dropped.
     """
 
     campaign: CampaignHeader = CampaignHeader()
@@ -165,7 +163,12 @@ class CampaignStatusResponse(BaseModel):
     problems: list[UnitView] | None = None
     problem_scenarios: list[ScenarioProblems] | None = None
     problems_total: int = 0
-    units: list[UnitView] | None = None
+
+
+class UnitsResponse(BaseModel):
+    """Every selected unit with its current state, capped at ``limit``."""
+
+    units: list[UnitView] = []
     truncated: bool = False
     limit_clamped: bool = False
 

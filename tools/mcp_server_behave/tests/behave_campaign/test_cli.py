@@ -143,6 +143,102 @@ class TestInit:
         assert campaign["created_at"].endswith("Z")
 
 
+class TestUnits:
+    def test_lists_every_unit_with_its_state(self, planned, run):
+        run(["record"], [attempt(UNIT_A_JAMMY, "failed", "job-1")])
+
+        result = run(["units"])
+
+        assert [(unit_of(u), u["state"]) for u in result["units"]] == [
+            (UNIT_A_JAMMY, "failed"),
+            (UNIT_A_NOBLE, "unattempted"),
+            (UNIT_B_JAMMY, "unattempted"),
+        ]
+        assert result["truncated"] is False
+
+    def test_filters_and_limit_apply(self, planned, run):
+        result = run(["units", "--release", "jammy", "--limit", "1"])
+
+        assert [unit_of(u) for u in result["units"]] == [UNIT_A_JAMMY]
+        assert result["truncated"] is True
+
+    def test_csv_is_one_row_per_unit(
+        self, planned, run, capsys, campaign_file
+    ):
+        run(["record"], [attempt(UNIT_A_JAMMY, "failed", "job-1")])
+
+        code = main(
+            ["units", "--campaign", str(campaign_file), "--format", "csv"]
+        )
+        out = capsys.readouterr().out.splitlines()
+
+        assert code == 0
+        assert out[0] == (
+            "feature,scenario,release,machine_type,state,job_id,attempt_count"
+        )
+        assert (
+            out[1] == "features/a.feature,A,jammy,lxd-container,failed,job-1,1"
+        )
+        assert out[2] == "features/a.feature,A,noble,lxd-vm,unattempted,,0"
+        assert len(out) == 4
+
+    def test_csv_warns_when_cut_by_the_limit(
+        self, planned, capsys, campaign_file
+    ):
+        main(
+            [
+                "units",
+                "--campaign",
+                str(campaign_file),
+                "--format",
+                "csv",
+                "--limit",
+                "1",
+            ]
+        )
+        captured = capsys.readouterr()
+
+        assert len(captured.out.splitlines()) == 2
+        assert "--limit 1" in captured.err
+
+    def test_history_csv_is_one_row_per_attempt(
+        self, planned, run, capsys, campaign_file
+    ):
+        run(
+            ["record"],
+            [
+                attempt(UNIT_A_JAMMY, "failed", "job-1"),
+                attempt(UNIT_A_JAMMY, "passed", "job-2"),
+            ],
+        )
+
+        main(
+            [
+                "history",
+                "--campaign",
+                str(campaign_file),
+                "--format",
+                "csv",
+                "--feature",
+                "features/a.feature",
+            ]
+        )
+        out = capsys.readouterr().out.splitlines()
+
+        assert out[0].startswith(
+            "feature,scenario,release,machine_type,state,"
+        )
+        assert out[0].endswith(
+            "attempt,job_id,install_from,started_at,outcome,finished_at"
+        )
+        # Two attempts at A/jammy, then A/noble with none.
+        assert [row.split(",")[5:7] for row in out[1:]] == [
+            ["1", "job-1"],
+            ["2", "job-2"],
+            ["", ""],
+        ]
+
+
 class TestAddressing:
     """A campaign is named the way the server names it, or by its file."""
 

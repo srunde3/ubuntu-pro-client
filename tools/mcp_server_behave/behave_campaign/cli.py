@@ -9,6 +9,7 @@ genuinely a command line's: parsing arguments and reading stdin.
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import os
 import sys
@@ -153,9 +154,16 @@ def _command_status(args: argparse.Namespace) -> BaseModel:
     return _service(_campaign_file(args)).campaign_status(
         campaign_id=_campaign_id(args),
         filters=_filters(args),
-        units_limit=args.units_limit,
         group_by=args.group_by,
         problems_limit=args.problems_limit,
+    )
+
+
+def _command_units(args: argparse.Namespace) -> BaseModel:
+    return _service(_campaign_file(args)).list_units(
+        campaign_id=_campaign_id(args),
+        filters=_filters(args),
+        limit=args.limit,
     )
 
 
@@ -210,6 +218,68 @@ def _follow_events(args: argparse.Namespace) -> Iterator[BaseModel]:
         if settled and batch.lanes_busy == 0:
             return
         time.sleep(args.interval)
+
+
+UNIT_COLUMNS = (
+    "feature",
+    "scenario",
+    "release",
+    "machine_type",
+    "state",
+    "job_id",
+    "attempt_count",
+)
+ATTEMPT_COLUMNS = (
+    "attempt",
+    "job_id",
+    "install_from",
+    "started_at",
+    "outcome",
+    "finished_at",
+)
+
+
+def _unit_rows(response: BaseModel) -> tuple[Sequence[str], list[dict]]:
+    """One row per unit."""
+    units = getattr(response, "units")
+    return UNIT_COLUMNS, [unit.model_dump() for unit in units]
+
+
+def _attempt_rows(response: BaseModel) -> tuple[Sequence[str], list[dict]]:
+    """One row per attempt; a unit never attempted still gets one row."""
+    columns = (*UNIT_COLUMNS[:5], *ATTEMPT_COLUMNS)
+    rows = []
+    for unit in getattr(response, "units"):
+        base = {key: getattr(unit, key) for key in UNIT_COLUMNS[:5]}
+        if not unit.attempts:
+            rows.append(base)
+        for number, attempt in enumerate(unit.attempts, 1):
+            rows.append({**base, "attempt": number, **attempt.model_dump()})
+    return columns, rows
+
+
+def _write_csv(response: BaseModel, args: argparse.Namespace) -> None:
+    columns, rows = args.csv_rows(response)
+    writer = csv.DictWriter(sys.stdout, fieldnames=columns)
+    writer.writeheader()
+    writer.writerows(rows)
+    if getattr(response, "truncated", False):
+        print(
+            "listing cut at --limit {}; more units match".format(args.limit),
+            file=sys.stderr,
+        )
+
+
+def _add_format(
+    parser: argparse.ArgumentParser, rows: Callable[[BaseModel], Any]
+) -> None:
+    parser.add_argument(
+        "--format",
+        choices=("json", "csv"),
+        default="json",
+        help="json (default), or csv with one row per item",
+    )
+    parser.set_defaults(csv_rows=rows)
 
 
 def _add_filters(
@@ -339,17 +409,6 @@ def build_parser() -> argparse.ArgumentParser:
         subparsers, "status", "show current state per unit", _command_status
     )
     status.add_argument(
-        "--units",
-        type=int,
-        default=0,
-        dest="units_limit",
-        metavar="N",
-        help=(
-            "list up to N individual units as well as the counts. "
-            "Omit to report counts, in-flight units and problems only."
-        ),
-    )
-    status.add_argument(
         "--problems",
         type=int,
         default=MAX_UNITS_LIMIT,
@@ -368,15 +427,23 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    units = _add_command(
+        subparsers, "units", "list every unit with its state", _command_units
+    )
+    units.add_argument("--limit", type=int, default=DEFAULT_UNITS_LIMIT)
+    _add_format(units, _unit_rows)
+
     following = _add_command(
         subparsers, "next", "show the units to run next", _command_next
     )
     following.add_argument("--limit", type=int, default=1)
+    _add_format(following, _unit_rows)
 
     history = _add_command(
         subparsers, "history", "show every attempt per unit", _command_history
     )
     history.add_argument("--limit", type=int, default=DEFAULT_UNITS_LIMIT)
+    _add_format(history, _attempt_rows)
 
     events = subparsers.add_parser(
         "events", help="read the events a running server has announced"
@@ -430,6 +497,10 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     try:
         result = handler(args)
+        if getattr(args, "format", "json") == "csv":
+            assert isinstance(result, BaseModel)
+            _write_csv(result, args)
+            return 0
         outputs = [result] if isinstance(result, BaseModel) else result
         for output in outputs:
             json.dump(output.model_dump(), sys.stdout, sort_keys=True)

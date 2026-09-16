@@ -137,7 +137,7 @@ async def test_campaign_status_of_an_unknown_id_is_an_error(repo):
 
 
 @pytest.mark.asyncio
-async def test_campaign_status_omits_units_by_default(repo):
+async def test_campaign_status_is_a_summary(repo):
     async with create_connected_server_and_client_session(mcp) as client:
         await client.call_tool("create_campaign", {"campaign_id": "1234567"})
         result = await client.call_tool(
@@ -146,26 +146,11 @@ async def test_campaign_status_omits_units_by_default(repo):
 
     payload = result_json(result)
 
-    assert payload["units"] is None
+    # Individual units are unit_history's job.
+    assert "units" not in payload
     assert payload["running"] == []
     assert payload["problems"] == []
     assert payload["state"]["counts"]["unattempted"] == 2
-
-
-@pytest.mark.asyncio
-async def test_campaign_status_returns_units_when_a_limit_is_given(repo):
-    async with create_connected_server_and_client_session(mcp) as client:
-        await client.call_tool("create_campaign", {"campaign_id": "1234567"})
-        result = await client.call_tool(
-            "campaign_status",
-            {"campaign_id": "1234567", "units_limit": 50},
-        )
-
-    units = result_json(result)["units"]
-
-    assert len(units) == 2
-    assert {unit["release"] for unit in units} == {"jammy", "noble"}
-    assert all(unit["state"] == "unattempted" for unit in units)
 
 
 @pytest.mark.asyncio
@@ -174,17 +159,13 @@ async def test_campaign_status_filters_by_release(repo):
         await client.call_tool("create_campaign", {"campaign_id": "1234567"})
         result = await client.call_tool(
             "campaign_status",
-            {
-                "campaign_id": "1234567",
-                "release": "noble",
-                "units_limit": 50,
-            },
+            {"campaign_id": "1234567", "release": "noble"},
         )
 
     payload = result_json(result)
 
     assert payload["state"]["counts"]["unattempted"] == 1
-    assert [unit["release"] for unit in payload["units"]] == ["noble"]
+    assert "units" not in payload
 
 
 @pytest.mark.asyncio
