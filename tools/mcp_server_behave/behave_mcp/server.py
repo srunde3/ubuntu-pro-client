@@ -46,6 +46,7 @@ from behave_mcp.config import ConfigError, Settings, load_settings
 from behave_mcp.messages import (
     ArtifactsResponse,
     DescribeFeatureResponse,
+    ErrorsResponse,
     FindScenariosResponse,
     KillJobResponse,
     ListDimensionsResponse,
@@ -509,6 +510,25 @@ def wait_for_scenario_completion(
         poll_interval_seconds,
         repo_root,
     )
+
+
+@mcp.tool(
+    description=(
+        "What went wrong in a behave job, from its log: every traceback, "
+        "hook error and failed assertion in the order they happened, each "
+        "with its line range, the failing step above it, and the "
+        "exception raised. Use this first on a failed job -- the first "
+        "region is usually the cause and later ones its consequences (a "
+        "cleanup hook failing because the machine never existed). Then "
+        "get_scenario_logs(start=first_line) to read around one. When "
+        "errors is empty but the job failed, behave itself may not have "
+        "run: read tail, or get_scenario_logs with a pattern."
+    )
+)
+def get_scenario_errors(
+    job_id: JobId, repo_root: RepoRoot = ""
+) -> ErrorsResponse:
+    return _service.get_errors(job_id, repo_root)
 
 
 @mcp.tool(

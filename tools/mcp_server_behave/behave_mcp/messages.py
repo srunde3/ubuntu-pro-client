@@ -290,6 +290,56 @@ class LogsResponse(BaseModel):
     log_path: str = ""
 
 
+class StepView(BaseModel):
+    """The failing step line a log region sits under."""
+
+    line: int = 0
+    text: str = ""
+
+
+class LogRegionView(BaseModel):
+    """One failure as the log shows it.
+
+    ``kind`` is traceback, hook_error or assert. ``exception`` names what
+    went wrong -- for a chained traceback, the last one raised. ``text`` is
+    the region itself, with long middles and long lines elided.
+    """
+
+    kind: str = ""
+    first_line: int = 0
+    last_line: int = 0
+    step: StepView | None = None
+    exception: str = ""
+    text: str = ""
+
+
+class LogSummaryView(BaseModel):
+    """behave's own closing block: failing scenarios and the counts."""
+
+    first_line: int = 0
+    last_line: int = 0
+    text: str = ""
+
+
+class ErrorsResponse(BaseModel):
+    """A job's failures as its log shows them, in order.
+
+    ``errors`` is capped; ``errors_total`` says how many there were.
+    ``finished`` is whether behave reached its summary. ``tail`` and
+    ``log_path`` are there for a run the parser has nothing to say about
+    -- a tox or pip failure before behave, a killed job.
+    """
+
+    job_id: str = ""
+    total_lines: int = 0
+    finished: bool = False
+    errors: list[LogRegionView] = []
+    errors_total: int = 0
+    summary: LogSummaryView | None = None
+    tail: str = ""
+    log_path: str = ""
+
+
 class ArtifactsResponse(BaseModel):
     job_id: str = ""
     artifacts: Artifacts | None = None

@@ -1436,3 +1436,51 @@ class TestKillJob:
 
         with pytest.raises(UnknownJobError):
             service.kill_job("nope")
+
+
+def test_get_errors_digests_the_log(tmp_path):
+    registry = InMemoryJobRegistry()
+    job_id = "joberr"
+    stdout_log = tmp_path / f"{job_id}_stdout.log"
+    stdout_log.write_text(
+        "    Given a machine ... error in 0.1s\n"
+        "Traceback (most recent call last):\n"
+        '  File "steps.py", line 4, in given\n'
+        "KeyError: 'base'\n"
+        "\n"
+        "Errored scenarios:\n"
+        "  f.feature:1  s\n"
+        "\n"
+        "0 features passed, 0 failed, 1 error, 0 skipped\n"
+        "Took 0min 0.002s\n",
+        encoding="utf-8",
+    )
+    registry.register(
+        job_id, Job(job_id=job_id, process_handle=None, log_dir=tmp_path)
+    )
+    service = _make_service(
+        FakeWorkspace(repo_root=tmp_path, log_dir=tmp_path),
+        registry=registry,
+    )
+
+    result = service.get_errors(job_id).model_dump(mode="json")
+
+    assert result["finished"] is True
+    assert result["errors_total"] == 1
+    (region,) = result["errors"]
+    assert region["kind"] == "traceback"
+    assert region["exception"] == "KeyError: 'base'"
+    assert region["step"] == {
+        "line": 1,
+        "text": "Given a machine ... error in 0.1s",
+    }
+    assert result["summary"]["first_line"] == 6
+    assert result["log_path"] == str(stdout_log)
+
+
+def test_get_errors_unknown_job_id_is_actionable(tmp_path):
+    service = _make_service(
+        FakeWorkspace(repo_root=tmp_path, log_dir=tmp_path)
+    )
+    with pytest.raises(UnknownJobError):
+        service.get_errors("nope")

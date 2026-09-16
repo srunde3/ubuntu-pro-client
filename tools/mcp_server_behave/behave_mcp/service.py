@@ -11,6 +11,7 @@ from behave_mcp.messages import (
     CapacityExceededResponse,
     CompletedResponse,
     DescribeFeatureResponse,
+    ErrorsResponse,
     Failure,
     FindScenariosResponse,
     JobCounts,
@@ -21,12 +22,15 @@ from behave_mcp.messages import (
     ListDimensionsResponse,
     ListFeaturesResponse,
     ListScenarioJobsResponse,
+    LogRegionView,
     LogsResponse,
+    LogSummaryView,
     RunningResponse,
     RunStatus,
     ScenarioMatch,
     StartScenarioResponse,
     StartScenarioResult,
+    StepView,
     SummarizeScenarioResultsResponse,
     TimeoutResponse,
     WaitForCompletionResult,
@@ -551,6 +555,56 @@ class BehaveService:
             truncated=selection.truncated,
             lines_clamped=lines_clamped,
             text=selection.text,
+            log_path=results.artifacts(job_id).stdout_log,
+        )
+
+    def get_errors(self, job_id: str, repo_root: str = "") -> ErrorsResponse:
+        job = self._registry.get(job_id)
+        if job is None:
+            try:
+                job = self._recover_job(job_id, repo_root or None)
+            except ValueError as exc:
+                raise BehaveServiceError(str(exc)) from exc
+            if job is None:
+                raise UnknownJobError(job_id)
+
+        results = self._results.bind(job.log_dir)
+        if not results.exists(job_id).stdout_log:
+            raise BehaveServiceError(
+                f"No log file exists for job_id: {job_id}"
+            )
+
+        digest = domain.digest_log(results.read_log_lines(job_id))
+        return ErrorsResponse(
+            job_id=job_id,
+            total_lines=digest.total_lines,
+            finished=digest.finished,
+            errors=[
+                LogRegionView(
+                    kind=region.kind,
+                    first_line=region.first_line,
+                    last_line=region.last_line,
+                    step=(
+                        StepView(line=region.step.line, text=region.step.text)
+                        if region.step
+                        else None
+                    ),
+                    exception=region.exception,
+                    text=region.text,
+                )
+                for region in digest.errors
+            ],
+            errors_total=digest.errors_total,
+            summary=(
+                LogSummaryView(
+                    first_line=digest.summary.first_line,
+                    last_line=digest.summary.last_line,
+                    text=digest.summary.text,
+                )
+                if digest.summary
+                else None
+            ),
+            tail=digest.tail,
             log_path=results.artifacts(job_id).stdout_log,
         )
 

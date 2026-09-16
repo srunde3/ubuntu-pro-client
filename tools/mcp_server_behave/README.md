@@ -30,6 +30,9 @@ The server exposes these MCP tools:
   - Provides raw status/data only -- rerunning failed scenarios and judging flaky-vs-real failures is left to the caller.
 - `wait_for_scenario_completion` -- waits for completion.
   - Returns a compact completion summary, or a timeout payload.
+- `get_scenario_errors` -- what went wrong in a job, from its log: every traceback, hook error and failed assertion in the order they happened, each with its line range, the failing step above it, and the exception raised.
+  - The first region is usually the cause and later ones its consequences; `errors` is capped with `errors_total` alongside, long regions and lines are elided.
+  - `finished` says whether behave reached its summary; `summary` is that block; `tail` and `log_path` are there when the parser has nothing to say (a tox or pip failure before behave, a killed job).
 - `get_scenario_logs` -- reads part of a job's stdout log, every line prefixed with its number.
   - With `pattern` (a regex): the matching lines from `start` on, each with `context` lines around it, grep-style, until the next window would exceed `lines`. `matches` counts every match whether or not it fit.
   - Without: `lines` lines from `start`, or the last `lines` when `start` is 0.

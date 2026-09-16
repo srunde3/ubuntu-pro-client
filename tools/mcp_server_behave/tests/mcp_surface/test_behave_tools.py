@@ -33,6 +33,7 @@ async def test_mcp_lists_expected_tools():
     assert "summarize_scenario_results" in tools
     assert "wait_for_scenario_completion" in tools
     assert "get_scenario_logs" in tools
+    assert "get_scenario_errors" in tools
     assert "get_scenario_artifacts" in tools
     assert "create_campaign" in tools
     assert "list_campaigns" in tools
