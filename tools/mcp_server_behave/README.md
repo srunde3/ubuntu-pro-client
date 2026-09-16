@@ -90,6 +90,10 @@ can be judged without fetching the job's report. `anomaly.*` events and
 one scenario failing across every release, a refused lane, a job running far
 too long -- and nothing acts on them automatically.
 
+`unit_history` lists every attempt at each selected unit -- the job it ran
+as, what it installed from, and its outcome -- so how a unit got to where it
+is can be read without scanning the event stream.
+
 `retry_units` asks for another attempt at units that already had one, which
 is the only way a non-passing unit is ever re-run. `kill_job` terminates a
 job that has hung, so its lane is recorded and freed instead of held open.

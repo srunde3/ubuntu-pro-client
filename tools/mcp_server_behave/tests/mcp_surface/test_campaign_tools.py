@@ -440,6 +440,29 @@ async def test_await_events_reports_the_campaign_being_created(repo, runner):
 
 
 @pytest.mark.asyncio
+async def test_unit_history_lists_every_attempt(repo, runner):
+    async with create_connected_server_and_client_session(mcp) as client:
+        await client.call_tool(
+            "create_campaign", {"campaign_id": "1234567", "max_lanes": 1}
+        )
+        await client.call_tool("start_campaign", {"campaign_id": "1234567"})
+        runner.ticker.drive()
+
+        result = await client.call_tool(
+            "unit_history", {"campaign_id": "1234567", "release": "jammy"}
+        )
+
+    payload = result_json(result)
+
+    (unit,) = payload["units"]
+    assert unit["release"] == "jammy"
+    assert unit["state"] == "passed"
+    (attempt,) = unit["attempts"]
+    assert attempt["outcome"] == "passed"
+    assert attempt["job_id"]
+
+
+@pytest.mark.asyncio
 async def test_await_events_defaults_to_what_needs_acting_on(repo, runner):
     async with create_connected_server_and_client_session(mcp) as client:
         await client.call_tool(

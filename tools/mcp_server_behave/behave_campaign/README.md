@@ -200,6 +200,9 @@ write the same files the CLI does, under the directory named by
   one that has already finished.
 - `reopen_campaign` -- take a cancellation back, for one made by mistake.
 - `await_campaign_events` -- wait for news, with a cursor.
+- `unit_history` -- every attempt at each selected unit: job, install
+  source, timestamps and outcome. How a unit got to where it is, without
+  reading the event stream.
 - `retry_units` -- ask for another attempt at units that already had one.
 - `kill_job` -- terminate a job that has hung.
 

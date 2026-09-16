@@ -24,6 +24,7 @@ from behave_campaign.adapters import (
 from behave_campaign.domain import Filters
 from behave_campaign.messages import (
     DEFAULT_EVENTS_LIMIT,
+    DEFAULT_HISTORY_LIMIT,
     AwaitEventsResponse,
     CampaignControlResponse,
     CampaignStatusResponse,
@@ -31,6 +32,7 @@ from behave_campaign.messages import (
     ListCampaignsResponse,
     ReopenCampaignResponse,
     RetryUnitsResponse,
+    UnitHistoryResponse,
 )
 from behave_campaign.repo import repo_state as read_repo_state
 from behave_campaign.runner import CampaignRunner
@@ -754,6 +756,58 @@ def campaign_status(
         ),
         units_limit=units_limit,
         group_by=group_by.value,
+    )
+
+
+@mcp.tool(
+    description=(
+        "Every attempt at each selected unit, oldest first: the job it "
+        "ran as, what it installed from, when, and its outcome. This is "
+        "how to see that a unit errored, was retried and then passed "
+        "without reading the event stream. Narrow with the release, "
+        "machine_type, feature, scenario and state filters; a single "
+        "scenario across its releases is the usual question. limit caps "
+        "the units listed, with truncated saying whether any were dropped."
+    )
+)
+def unit_history(
+    campaign_id: CampaignIdArg,
+    release: ReleaseFilter = "",
+    machine_type: MachineTypeFilter = "",
+    feature: Annotated[
+        str, Field(default="", description="Only this feature file path.")
+    ] = "",
+    scenario: Annotated[
+        str, Field(default="", description="Only this exact scenario name.")
+    ] = "",
+    state: Annotated[
+        list[str],
+        Field(
+            description=(
+                "Only units in these states: unattempted, running, passed, "
+                "failed, skipped, error."
+            ),
+        ),
+    ] = [],
+    limit: Annotated[
+        int,
+        Field(
+            default=DEFAULT_HISTORY_LIMIT,
+            description="Most units to list.",
+        ),
+    ] = DEFAULT_HISTORY_LIMIT,
+    repo_root: RepoRoot = "",
+) -> UnitHistoryResponse:
+    return campaign_service(repo_root).unit_history(
+        campaign_id=campaign_id,
+        filters=Filters(
+            feature=(feature,) if feature else (),
+            scenario=(scenario,) if scenario else (),
+            release=(release,) if release else (),
+            machine_type=(machine_type,) if machine_type else (),
+            state=tuple(state),
+        ),
+        limit=limit,
     )
 
 

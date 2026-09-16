@@ -6,6 +6,8 @@ from pydantic import BaseModel
 # the units that need attention. The whole list is opt-in and capped.
 DEFAULT_UNITS_LIMIT = 200
 MAX_UNITS_LIMIT = 2000
+# A history row carries every attempt, so its default is tighter.
+DEFAULT_HISTORY_LIMIT = 50
 DEFAULT_EVENTS_LIMIT = 100
 MAX_EVENTS_LIMIT = 1000
 
