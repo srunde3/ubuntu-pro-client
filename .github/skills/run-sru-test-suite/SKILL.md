@@ -6,166 +6,93 @@ argument-hint: 'Describe the SRU verification run'
 
 # Run SRU Test Suite
 
-## Scope
-
-SRU verification of the Behave integration tests in `features/`, using the
-`behave` MCP server's campaign tools.
-
-## The split
-
-A **campaign** is the durable record of an SRU verification: which test units
-are in scope, what has been attempted, and what each attempt established. A
-**unit** is one scenario for one release on one `machine_type`. An **attempt**
-is one try at a unit, which is one behave job.
-
-The server runs the campaign. It keeps up to `max_lanes` jobs in flight, fills
-a lane the moment one frees, classifies every result, and records everything.
-You do not start jobs, translate results, or track progress.
-
-You make the decisions it deliberately does not:
-
-- what is in scope, agreed with the user
-- whether a failure is real or flaky, and what deserves another attempt
-- whether the run is worth continuing at all
-
-Read each tool's own description for its parameters and response shape. Do not
-rely on this file for those; it will drift and the tool will not.
+The `behave` MCP server's campaign tools schedule, run, classify and record
+every job. Do not loop `start_scenario` yourself. You decide what the server
+does not: what is in scope (agreed with the user), whether a failure is real
+or flaky and deserves another attempt, and whether the run is worth
+continuing. Each tool's description carries its parameters, actions and
+response shape. Diagnose individual failures per
+[feature-test-runs](../feature-test-runs/SKILL.md), which carries what the
+failure classes mean on this host.
 
 ## Define scope
 
-1. Ask for a Launchpad SRU bug URL or numeric ID, and normalise a URL to the
-	ID. It identifies the campaign locally; do not read or update Launchpad.
-2. Call `list_dimensions` and show the user those exact release and
-	`machine_type` values. Do not translate aliases or invent values.
+1. Ask for a Launchpad SRU bug URL or numeric ID. The ID identifies the
+   campaign locally; do not read or update Launchpad.
+2. `list_dimensions`, and show the user those exact release and
+   `machine_type` values. Do not translate aliases or invent values.
 3. Ask whether this is a full run or a named set of feature files or
-	scenarios.
-4. Call `create_campaign` with the agreed scope, `install_from: proposed`, and
-	a `max_lanes` the host can stand. Nothing runs yet.
+   scenarios.
+4. `create_campaign` with the agreed scope, `install_from: proposed`, and a
+   `max_lanes` the host can stand.
 5. Report the unit count it returns and **get the user's confirmation before
-	calling `control_campaign` with `action: start`**.
+   starting**.
 
-If `create_campaign` rejects the scope -- an unknown release, a `max_lanes`
-above the server's job limit, an id already in use -- that is a scope mistake
-to resolve with the user, not an error to work around.
+If `create_campaign` rejects the scope, resolve it with the user; do not work
+around it.
 
 ## Run it
 
-Call `control_campaign` with `action: start`, then immediately delegate campaign monitoring to a
-subagent (`runSubagent`). The human should not be required to check in or prompt
-repeatedly; an extended monitoring subagent watches the event stream, triages
-failures, and reports back.
-
-### Subagent Delegation
-
-Dispatch a subagent with a prompt instructing it to:
-1. Long-poll `await_campaign_events` in a loop using `timeout_seconds: 60` and
-   passing back `next_seq` on every cycle.
-2. Filter strictly to actionable event kinds:
-   ```json
-   {
-     "kinds": [
-       "unit.failed",
-       "unit.errored",
-       "unit.unclassifiable",
-       "anomaly.*",
-       "lane.overdue",
-       "campaign.*"
-     ]
-   }
-   ```
-   Do NOT subscribe to `unit.*` or leave `kinds` empty—pass events and lane churn
-   bloat context. Aggregate counts (`passed`, `failed`, `running`, `unattempted`)
-   and `lanes_busy` are already present in every response.
-3. Triage failures directly from `data.failures` inline without reading logs
-   unless `failures` is empty (indicating a harness/hook crash).
-4. Run for an extended window (e.g. 10–15 polling cycles) or stop early if:
-   - The campaign finishes (`running == 0` and `unattempted == 0`), OR
-   - A systemic defect appears (host harness crash, environment misconfiguration,
-     repeated hook failure across all lanes), OR
-   - A lane is overdue and needs a kill/drain decision.
-5. Return a concise, structured report back to the main agent:
-   - Current campaign counts (`passed`, `failed`, `error`, `unattempted`, `running`)
-   - Triaged failure summary (harness/flake/bug)
-   - Specific decision points requiring human input, if any
-
-When the subagent returns:
-- If the campaign finished, proceed to `## Finish`.
-- If an action was needed (e.g. host fix, retry), take the action with user confirmation.
-- If the campaign is still healthy and running, report the progress update to the user and dispatch the next extended monitoring subagent.
+1. `control_campaign` with `action: start`.
+2. Tell the user they can watch from a terminal without you:
+   `uv run behave-campaign events --campaign <state_dir>/campaigns/<id>.jsonl --follow`
+   (run from `tools/mcp_server_behave`; the state dir is
+   `.mcp_server_behave` under the checkout unless `MCP_STATE_DIR` moves it).
+3. Delegate the watching to a subagent so the poll loop stays out of this
+   conversation. Its prompt is the contents of
+   [references/monitor.md](references/monitor.md) with the campaign id
+   filled in -- pass that file, do not paraphrase it. Act on its report:
+   - campaign `complete` -> **Finish**.
+   - a decision needed (host fix, retry, kill, pause) -> take it with the
+     user's confirmation, then dispatch the monitor again.
+   - still healthy -> relay the counts and dispatch the monitor again.
 
 ## Judgement
 
-### Failure Triage (Zero-Log Overhead)
-
-- `unit.failed` carries `data.failures` with the failing `step` and
-  `error_message`. Judge directly from those step assertions without reading
-  the log.
-- When `error_message` is empty or the unit errored (a `status: error` setup
-  step, a hook crash, a harness failure), call `get_scenario_errors` for that
-  job: it returns every traceback, hook error and failed assertion in order,
-  with the exception raised. The first region is usually the cause and later
-  ones its consequences. Only then, if needed, `get_scenario_logs` with
-  `start` set to a region's `first_line` to read around it -- never the
-  whole log.
-- Provisioning failures come in classes: one log tells you the class, and the
-  judgement applies to every unit in it. Do not read one log per unit.
-- Classify failures promptly:
-  1. **Host/Harness Defect** (e.g. hook crash, file encoding, permission
-     denial): Actionable immediately. Fix the harness or host environment, then
-     use `retry_units` to re-queue affected units.
-  2. **External Flake** (e.g. HTTP 503 from backend/CVE endpoints, network
-     timeout): Note the transient failure; let it accumulate until the pass
-     completes, then retry in batch.
-  3. **Genuine Code Bug** (client regression or release incompatibility):
-     Record it for the SRU record. Do not retry real defects.
-- `unit.skipped` means configuration the host does not have. Report the
-  missing variable names. Never ask the user for a secret value in chat.
-- `unit.unclassifiable` is a finding to report, not an error to work around:
-  the job produced something the classifier could not read.
-- `anomaly.*` events are offered for judgement and nothing acts on them:
-  - `anomaly.repeated_scenario_failure` (same scenario failing across multiple
-    releases) usually signals external service degradation (e.g. 503 on
-    security endpoints) or a host hook issue rather than a release-specific bug.
-- `lane.overdue` means a job has run far longer than expected. Decide whether
-  to `kill_job` it; the campaign then records that unit as errored and frees the lane.
-
 Let plain failures accumulate and keep going. The point of a first pass is a
-complete picture, not a green one. If an environmental bug breaks all lanes,
-call `control_campaign` with `action: pause`, fix the root cause, and
-batch-retry.
+complete picture, not a green one.
+
+- `campaign_status` with `group_by: scenario` is the picture. The same
+  scenario failed on every release reads as a defect or a shared dependency;
+  on one release, as a flake or a release-specific bug.
+- Triage each class once. Host configuration and infrastructure are
+  actionable now; external flakes wait for the batch retry; candidate
+  defects are recorded, never retried in hope.
+- `unit.unclassifiable` is a finding to report, not an error to work around.
+- `anomaly.repeated_scenario_failure` usually means a shared dependency (a
+  503 on the security endpoints) or a host issue rather than a release bug.
+- `lane.overdue`: decide whether to `kill_job` it.
+- Before retrying a unit a second time, check `unit_history`; a unit that
+  erred the same way twice is not a flake.
+- If one cause is failing every lane, pause, fix it, then `retry_units` in
+  a batch with a `reason`.
 
 ## Stop, retry, resume
 
-`control_campaign` actions `pause` and `cancel` both drain: jobs already running finish
-and are recorded. Neither kills anything. `lanes_busy` in the response says how
-many are still draining. Cancel when the run is not worth continuing -- a
-broken checkout, infrastructure that will not recover -- and say why. Pause a
-run you mean to come back to: cancelling also closes the campaign to
-`retry_units`, which is the whole difference between the two.
+`control_campaign`'s description is the decision table. **pause** a run you
+mean to come back to; **cancel** one that is not worth continuing -- a broken
+checkout, infrastructure that will not recover -- and say why.
 
-`reopen_campaign` takes a cancellation back, for one you made in error. The
-cancel stays in the record and the reopen is appended after it. A campaign
-with units left unattempted starts scheduling again; one whose units were all
-attempted comes back `complete`, so reopening it is followed by `retry_units`,
-not `action: start`. If the cancel left jobs in flight that no server is
-watching any more, it names those units and refuses; check them, then reopen
-with `abandon_in_flight` to record them as errored.
-
-Nothing re-runs a non-passing unit on its own. `retry_units` is the only way,
-and it selects failed, skipped and errored units unless you name a state.
-Retrying a campaign that had finished starts it scheduling again; a paused one
-accepts the request and stays paused.
-
-Resuming: `list_campaigns` finds the campaign, `campaign_status` shows where it
-got to. A campaign the server was running when it last stopped comes back
-`paused`, with `server_restart` as the reason -- check its in-flight units
-before calling `control_campaign` with `action: resume`.
+A campaign the server was running when it last stopped comes back `paused`
+with reason `server_restart`; check its in-flight units before resuming.
 
 ## Finish
 
-A campaign is `complete` when nothing is unattempted or in flight. Report
-without giving an overall verdict:
+Report without giving an overall verdict, from `campaign_status` with
+`group_by: scenario` and a `problems_limit` above `problems_total`:
 
-- counts by state
-- the failed, skipped and errored units with their `job_id`s
-- the campaign id
+```markdown
+## SRU <id> -- behave verification
+
+Counts: <passed> passed, <failed> failed, <skipped> skipped, <error> error
+of <total> units. Install source: <install_from>. Checkout: <branch>@<commit>.
+
+### Problems by scenario
+| Feature | Scenario | Failed | Skipped | Error |
+| ... | ... | <release> on <machine_type> (job <id>) ... | ... | ... |
+
+### Classes
+- <class>: <which scenarios>, <what it means>, <retried? outcome>
+
+Campaign id: <id>. Job ids above open with get_scenario_errors.
+```
