@@ -278,7 +278,7 @@ def build_command(
 ) -> list[str]:
     command = ["tox", "-e", "behave", "--", feature_file]
     if scenario_name:
-        command.extend(["--name", scenario_name])
+        command.extend(["--name", re.escape(scenario_name)])
     if releases:
         command.extend(["-D", f"releases={','.join(releases)}"])
     command.extend(["-D", f"machine_types={','.join(machine_types)}"])

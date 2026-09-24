@@ -6,6 +6,20 @@ from behave_mcp import domain
 from behave_mcp.messages import JobRecord
 
 
+def test_build_command_escapes_scenario_name_for_behave_regex(tmp_path):
+    command = domain.build_command(
+        "features/proxy_config.feature",
+        ["lxd-container"],
+        "apt_http(s)_proxy still works",
+        ["bionic"],
+        tmp_path / "report.json",
+    )
+
+    assert command[command.index("--name") + 1] == (
+        r"apt_http\(s\)_proxy\ still\ works"
+    )
+
+
 def test_classify_job_state_live_handle_running():
     result = domain.classify_job_state(
         has_live_handle=True,
