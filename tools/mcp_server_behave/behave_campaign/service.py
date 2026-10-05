@@ -12,7 +12,7 @@ so a call reads the same wherever it comes from.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Callable, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 from behave_campaign import domain
 from behave_campaign.domain import (
@@ -49,10 +49,12 @@ from behave_campaign.views import (
     campaign_header,
     campaign_listing,
     campaign_state,
+    lanes_busy_by_pool,
     scenario_problems,
     unit_history_view,
     unit_view,
 )
+from behave_mcp.pools import Pool
 
 
 class CampaignService:
@@ -66,9 +68,9 @@ class CampaignService:
         events: EventLog,
         now: Callable[[], str],
         repo_state: Callable[[Path], RepoState],
-        max_lane_ceiling: int | None = None,
+        lane_ceiling: Mapping[Pool, int] | None = None,
     ) -> None:
-        """``max_lane_ceiling`` caps a campaign's ``max_lanes``.
+        """``lane_ceiling`` caps a campaign's lanes in each pool.
 
         The MCP passes its concurrent-job limit. ``None`` means no ceiling
         applies, which is the CLI's case: it runs nothing itself, so the
@@ -79,7 +81,7 @@ class CampaignService:
         self._events = events
         self._now = now
         self._repo_state = repo_state
-        self._max_lane_ceiling = max_lane_ceiling
+        self._lane_ceiling = lane_ceiling
 
     # -- creating ---------------------------------------------------------
 
@@ -93,7 +95,7 @@ class CampaignService:
         feature_files: Sequence[str] = (),
         scenarios: Sequence[str] = (),
         install_from: str = domain.DEFAULT_INSTALL_SOURCE,
-        max_lanes: int = 1,
+        lanes: Mapping[Pool, int] | None = None,
     ) -> CreateCampaignResponse:
         """Plan a campaign and store it. Starts nothing.
 
@@ -104,7 +106,6 @@ class CampaignService:
         """
         domain.validate_campaign_id(campaign_id)
         domain.validate_install_source(install_from)
-        self._validate_max_lanes(max_lanes)
 
         filters = Filters(
             feature=tuple(feature_files),
@@ -115,6 +116,8 @@ class CampaignService:
         units = self._features.discover_units(repo_root, filters)
         if not units:
             raise CampaignError("no test units matched the requested filters")
+        resolved_lanes = domain.resolve_lanes(units, lanes or {})
+        self._check_lane_ceiling(resolved_lanes)
 
         at = self._now()
         header = CampaignHeader(
@@ -123,7 +126,7 @@ class CampaignService:
             repo=self._repo_state(repo_root),
             filters=filters,
             install_from=install_from,
-            max_lanes=max_lanes,
+            lanes=resolved_lanes,
         )
         plans = [PlanRecord(unit=unit, at=at) for unit in units]
         self._store.create(campaign_id, header, plans)
@@ -136,7 +139,7 @@ class CampaignService:
                     data={
                         "total_units": len(units),
                         "install_from": install_from,
-                        "max_lanes": max_lanes,
+                        "lanes": domain.lanes_as_dict(resolved_lanes),
                         "scope": filters.scope_as_dict(),
                     },
                 )
@@ -264,6 +267,7 @@ class CampaignService:
         return CampaignStatusResponse(
             campaign=campaign_header(campaign_id, records),
             state=campaign_state(campaign_id, records, statuses),
+            lanes_busy_by_pool=lanes_busy_by_pool(records),
             running=[unit_view(status) for status in domain.running(statuses)],
             problems=(
                 [unit_view(status) for status in problem_units[:problems_cap]]
@@ -432,18 +436,23 @@ class CampaignService:
                 )
             )
 
-    def _validate_max_lanes(self, max_lanes: int) -> None:
-        if max_lanes < 1:
-            raise CampaignError("max_lanes must be a positive integer")
-        if self._max_lane_ceiling is None:
+    def _check_lane_ceiling(self, lanes: Mapping[Pool, int]) -> None:
+        if self._lane_ceiling is None:
             return
-        if max_lanes > self._max_lane_ceiling:
-            raise CampaignError(
-                "max_lanes {} exceeds the server's concurrent job limit of "
-                "{}. Such a campaign would run serially and look like a "
-                "hang, so raise the server's limit or lower "
-                "max_lanes.".format(max_lanes, self._max_lane_ceiling)
-            )
+        for pool, count in lanes.items():
+            limit = self._lane_ceiling.get(pool, 0)
+            if not limit:
+                raise CampaignError(
+                    "the campaign has {pool} units, but the server has "
+                    "disabled the {pool} pool".format(pool=pool)
+                )
+            if count > limit:
+                raise CampaignError(
+                    "{} {} lanes exceed the server's {} job limit of {}. "
+                    "Such a campaign would run slower than asked and look "
+                    "like a hang, so raise the server's limit or lower the "
+                    "lanes.".format(count, pool, pool, limit)
+                )
 
     @staticmethod
     def _cap_events(limit: int) -> tuple[int, bool]:

@@ -11,7 +11,7 @@ from typing import Annotated, Any, Callable
 from mcp.server import FastMCP
 from mcp.server.fastmcp.server import Settings as FastMCPSettings
 from mcp.types import TextContent
-from pydantic import Field
+from pydantic import BaseModel, Field
 from starlette.responses import JSONResponse
 
 from behave_campaign import domain as campaign_domain
@@ -63,6 +63,7 @@ from behave_mcp.messages import (
     StartScenarioResult,
     WaitForCompletionResult,
 )
+from behave_mcp.pools import Pool
 from behave_mcp.ports import JobRegistry
 from behave_mcp.service import BehaveService
 
@@ -105,6 +106,31 @@ def tool(**kwargs: Any) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
         return mcp.tool(structured_output=False, **kwargs)(as_text)
 
     return register
+
+
+class CampaignLanes(BaseModel):
+    """Lanes per pool for a campaign. A pool left out gets one lane."""
+
+    lxd: int | None = Field(
+        default=None, description="Lanes for lxd-container and lxd-vm."
+    )
+    cloud: int | None = Field(
+        default=None, description="Lanes for aws.*, gcp.* and azure.*."
+    )
+    wsl: int | None = Field(
+        default=None, description="Lanes for wsl; 1 at most."
+    )
+
+    def requested(self) -> dict[Pool, int]:
+        return {
+            pool: count
+            for pool, count in (
+                (Pool.LXD, self.lxd),
+                (Pool.CLOUD, self.cloud),
+                (Pool.WSL, self.wsl),
+            )
+            if count is not None
+        }
 
 
 RepoRoot = Annotated[
@@ -254,7 +280,7 @@ def campaign_service(repo_root: str) -> CampaignService:
         events=campaign_events(campaign_dir),
         now=system_now,
         repo_state=read_repo_state,
-        max_lane_ceiling=sum(_settings.pool_limits.values()),
+        lane_ceiling=_settings.pool_limits,
     )
 
 
@@ -637,8 +663,10 @@ def get_scenario_artifacts(
         "campaign is never a Cartesian product. Omit every filter to cover "
         "the whole suite. Use list_dimensions first to discover valid "
         "release and machine_type values. Returns the unit count so the "
-        "scope can be confirmed before any test runs. max_lanes may not "
-        "exceed the server's job limits."
+        "scope can be confirmed before any test runs. lanes sets how many "
+        "jobs run at once in each pool the units draw on (lxd, cloud, wsl); "
+        "a pool left out gets 1, and none may exceed the server's limit "
+        "for that pool."
     )
 )
 def create_campaign(
@@ -673,16 +701,7 @@ def create_campaign(
         ),
     ] = [],
     install_from: InstallFrom = domain.InstallFrom.LOCAL,
-    max_lanes: Annotated[
-        int,
-        Field(
-            default=1,
-            description=(
-                "How many behave jobs the campaign may run at once. Must "
-                "not exceed the server's job limits."
-            ),
-        ),
-    ] = 1,
+    lanes: CampaignLanes = CampaignLanes(),
     repo_root: RepoRoot = "",
 ) -> CreateCampaignResponse:
     return campaign_service(repo_root).create_campaign(
@@ -693,7 +712,7 @@ def create_campaign(
         feature_files=features,
         scenarios=scenarios,
         install_from=install_from.value,
-        max_lanes=max_lanes,
+        lanes=lanes.requested(),
     )
 
 
@@ -833,7 +852,7 @@ def unit_history(
         "Change what a campaign is doing. Only one campaign schedules at "
         "a time.\n"
         "  start   created -> running. Begins scheduling: the server keeps "
-        "up to max_lanes jobs in flight and fills a lane as soon as one "
+        "its lanes in each pool full and fills a lane as soon as one "
         "frees, with no further calls needed. A finished campaign has no "
         "work to start; a cancelled one must be reopened first.\n"
         "  pause   running -> paused. Stops opening lanes; jobs in flight "

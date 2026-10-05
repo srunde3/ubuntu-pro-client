@@ -22,12 +22,20 @@ from behave_campaign.domain import (
     lifecycle,
     plan_tick,
 )
+from behave_mcp.pools import Pool
 
 AT = "2026-09-12T12:00:00Z"
 
 UNIT_A = Unit("features/a.feature", "A", "jammy", "lxd-container")
 UNIT_B = Unit("features/b.feature", "B", "noble", "lxd-vm")
 UNIT_C = Unit("features/c.feature", "C", "focal", "lxd-container")
+UNIT_W1 = Unit("features/w.feature", "W", "jammy", "wsl")
+UNIT_W2 = Unit("features/w.feature", "W", "noble", "wsl")
+UNIT_CLOUD = Unit("features/d.feature", "D", "jammy", "aws.generic")
+
+
+def lxd(lanes):
+    return {Pool.LXD: lanes}
 
 
 def plan(*units):
@@ -231,8 +239,57 @@ class TestClassifyResult:
 
 
 class TestPlanTick:
+    def test_each_pool_fills_only_its_own_free_lanes(self):
+        records = [
+            *plan(UNIT_W1, UNIT_W2, UNIT_A, UNIT_B, UNIT_C, UNIT_CLOUD),
+            LifecycleRecord(Lifecycle.RUNNING, AT),
+        ]
+
+        tick = plan_tick(
+            records=records,
+            lanes=[],
+            lane_limits={Pool.LXD: 2, Pool.CLOUD: 1, Pool.WSL: 1},
+            at=AT,
+        )
+
+        assert sorted(unit.pool for unit in tick.start) == [
+            Pool.CLOUD,
+            Pool.LXD,
+            Pool.LXD,
+            Pool.WSL,
+        ]
+
+    def test_a_busy_wsl_lane_does_not_hold_back_lxd(self):
+        records = [
+            *plan(UNIT_W1, UNIT_W2, UNIT_A, UNIT_B),
+            LifecycleRecord(Lifecycle.RUNNING, AT),
+            attempt(UNIT_W1, "running"),
+        ]
+        lanes = [Lane(unit=UNIT_W1, job_id="job1")]
+
+        tick = plan_tick(
+            records=records,
+            lanes=lanes,
+            lane_limits={Pool.LXD: 2, Pool.WSL: 1},
+            at=AT,
+        )
+
+        assert set(tick.start) == {UNIT_A, UNIT_B}
+
+    def test_a_pool_without_lanes_starts_nothing(self):
+        records = [
+            *plan(UNIT_W1, UNIT_A),
+            LifecycleRecord(Lifecycle.RUNNING, AT),
+        ]
+
+        tick = plan_tick(records=records, lanes=[], lane_limits=lxd(4), at=AT)
+
+        assert tick.start == (UNIT_A,)
+
     def test_a_created_campaign_starts_nothing(self):
-        tick = plan_tick(records=plan(UNIT_A), lanes=[], max_lanes=4, at=AT)
+        tick = plan_tick(
+            records=plan(UNIT_A), lanes=[], lane_limits=lxd(4), at=AT
+        )
 
         assert tick.idle
         assert tick.lifecycle == Lifecycle.CREATED
@@ -243,7 +300,7 @@ class TestPlanTick:
             LifecycleRecord(Lifecycle.RUNNING, AT),
         ]
 
-        tick = plan_tick(records=records, lanes=[], max_lanes=2, at=AT)
+        tick = plan_tick(records=records, lanes=[], lane_limits=lxd(2), at=AT)
 
         assert len(tick.start) == 2
         assert tick.lifecycle == Lifecycle.RUNNING
@@ -255,7 +312,9 @@ class TestPlanTick:
         ]
         lanes = [Lane(unit=UNIT_A, job_id="job1")]
 
-        tick = plan_tick(records=records, lanes=lanes, max_lanes=2, at=AT)
+        tick = plan_tick(
+            records=records, lanes=lanes, lane_limits=lxd(2), at=AT
+        )
 
         assert len(tick.start) == 1
 
@@ -269,7 +328,9 @@ class TestPlanTick:
             Lane(unit=UNIT_B, job_id="job2"),
         ]
 
-        tick = plan_tick(records=records, lanes=lanes, max_lanes=2, at=AT)
+        tick = plan_tick(
+            records=records, lanes=lanes, lane_limits=lxd(2), at=AT
+        )
 
         assert tick.start == ()
 
@@ -281,7 +342,9 @@ class TestPlanTick:
         ]
         lanes = [Lane(unit=UNIT_A, job_id="job1", result=completed())]
 
-        tick = plan_tick(records=records, lanes=lanes, max_lanes=2, at=AT)
+        tick = plan_tick(
+            records=records, lanes=lanes, lane_limits=lxd(2), at=AT
+        )
 
         assert [c.finished.outcome for c in tick.record] == ["passed"]
 
@@ -293,7 +356,9 @@ class TestPlanTick:
         ]
         lanes = [Lane(unit=UNIT_A, job_id="job1", result=completed())]
 
-        tick = plan_tick(records=records, lanes=lanes, max_lanes=1, at=AT)
+        tick = plan_tick(
+            records=records, lanes=lanes, lane_limits=lxd(1), at=AT
+        )
 
         assert [c.finished.unit for c in tick.record] == [UNIT_A]
         assert tick.start == (UNIT_B,)
@@ -306,7 +371,9 @@ class TestPlanTick:
         ]
         lanes = [Lane(unit=UNIT_A, job_id="job1")]
 
-        tick = plan_tick(records=records, lanes=lanes, max_lanes=4, at=AT)
+        tick = plan_tick(
+            records=records, lanes=lanes, lane_limits=lxd(4), at=AT
+        )
 
         assert UNIT_A not in tick.start
 
@@ -318,7 +385,7 @@ class TestPlanTick:
             attempt(UNIT_B, "passed"),
         ]
 
-        tick = plan_tick(records=records, lanes=[], max_lanes=4, at=AT)
+        tick = plan_tick(records=records, lanes=[], lane_limits=lxd(4), at=AT)
 
         assert tick.start == ()
         assert tick.lifecycle == Lifecycle.COMPLETE
@@ -332,7 +399,9 @@ class TestPlanTick:
         ]
         lanes = [Lane(unit=UNIT_A, job_id="job1", result=completed())]
 
-        tick = plan_tick(records=records, lanes=lanes, max_lanes=4, at=AT)
+        tick = plan_tick(
+            records=records, lanes=lanes, lane_limits=lxd(4), at=AT
+        )
 
         assert [c.finished.outcome for c in tick.record] == ["passed"]
         assert tick.start == ()
@@ -347,7 +416,9 @@ class TestPlanTick:
         ]
         lanes = [Lane(unit=UNIT_A, job_id="job1", result=completed())]
 
-        tick = plan_tick(records=records, lanes=lanes, max_lanes=4, at=AT)
+        tick = plan_tick(
+            records=records, lanes=lanes, lane_limits=lxd(4), at=AT
+        )
 
         assert len(tick.record) == 1
         assert tick.start == ()
@@ -361,7 +432,9 @@ class TestPlanTick:
         ]
         lanes = [Lane(unit=UNIT_A, job_id="job1", result=completed())]
 
-        tick = plan_tick(records=records, lanes=lanes, max_lanes=4, at=AT)
+        tick = plan_tick(
+            records=records, lanes=lanes, lane_limits=lxd(4), at=AT
+        )
 
         assert tick.lifecycle == Lifecycle.COMPLETE
         assert tick.start == ()
@@ -380,7 +453,9 @@ class TestPlanTick:
             )
         ]
 
-        tick = plan_tick(records=records, lanes=lanes, max_lanes=2, at=AT)
+        tick = plan_tick(
+            records=records, lanes=lanes, lane_limits=lxd(2), at=AT
+        )
 
         assert tick.record[0].problem
         # UNIT_A was just recorded as error. It must not be re-queued: only
@@ -396,7 +471,10 @@ def test_no_lane_is_ever_opened_outside_running(state):
         LifecycleRecord(state, AT),
     ]
 
-    assert plan_tick(records=records, lanes=[], max_lanes=8, at=AT).start == ()
+    assert (
+        plan_tick(records=records, lanes=[], lane_limits=lxd(8), at=AT).start
+        == ()
+    )
 
 
 class TestSchedulerNeverRetries:
@@ -411,7 +489,7 @@ class TestSchedulerNeverRetries:
             attempt(UNIT_B, "passed"),
         ]
 
-        tick = plan_tick(records=records, lanes=[], max_lanes=8, at=AT)
+        tick = plan_tick(records=records, lanes=[], lane_limits=lxd(8), at=AT)
 
         assert tick.start == ()
 
@@ -423,7 +501,7 @@ class TestSchedulerNeverRetries:
             attempt(UNIT_A, state),
         ]
 
-        tick = plan_tick(records=records, lanes=[], max_lanes=1, at=AT)
+        tick = plan_tick(records=records, lanes=[], lane_limits=lxd(1), at=AT)
 
         assert tick.start == (UNIT_B,)
 
@@ -435,7 +513,9 @@ class TestSchedulerNeverRetries:
         ]
         lanes = [Lane(unit=UNIT_A, job_id="job1", result=completed(passed=0))]
 
-        tick = plan_tick(records=records, lanes=lanes, max_lanes=1, at=AT)
+        tick = plan_tick(
+            records=records, lanes=lanes, lane_limits=lxd(1), at=AT
+        )
 
         assert tick.record[0].finished.outcome == "error"
         assert tick.start == (UNIT_B,)

@@ -62,7 +62,7 @@ def campaign_header(
         campaign_id=campaign_id,
         created_at=header.at,
         install_from=header.install_from,
-        max_lanes=header.max_lanes,
+        lanes=domain.lanes_as_dict(header.lanes),
         total_units=len(domain.reduce_units(records)),
         repo=CampaignRepo(**header.repo.as_dict()),
         scope=CampaignScope(**header.filters.scope_as_dict()),
@@ -90,6 +90,13 @@ def campaign_state(
     )
 
 
+def lanes_busy_by_pool(records: Sequence[Record]) -> dict[str, int]:
+    """Lanes in flight for each pool the campaign has lanes in."""
+    header = header_of(records) or domain.CampaignHeader()
+    busy = domain.busy_by_pool(domain.reduce_units(records))
+    return {pool.value: busy.get(pool, 0) for pool in header.lanes}
+
+
 def campaign_listing(
     campaign_id: str, records: Sequence[Record]
 ) -> CampaignListing:
@@ -99,7 +106,7 @@ def campaign_listing(
         **campaign_state(campaign_id, records).model_dump(),
         created_at=header.at,
         install_from=header.install_from,
-        max_lanes=header.max_lanes,
+        lanes=domain.lanes_as_dict(header.lanes),
         total_units=len(domain.reduce_units(records)),
         scope_size=ScopeSize(
             features=len(scope.feature),

@@ -24,6 +24,7 @@ from behave_campaign.domain import (
 )
 from behave_campaign.ports import CampaignLockedError, LaneStartError
 from behave_campaign.runner import RESTART_REASON, CampaignRunner, ThreadTicker
+from behave_mcp.pools import Pool
 
 AT = "2026-09-12T12:00:00Z"
 
@@ -40,6 +41,10 @@ UNITS = [
     Unit("features/a.feature", "A", "jammy", "lxd-container"),
     Unit("features/b.feature", "B", "noble", "lxd-vm"),
     Unit("features/c.feature", "C", "focal", "lxd-container"),
+]
+WSL_UNITS = [
+    Unit("features/w.feature", "W", "jammy", "wsl"),
+    Unit("features/w.feature", "W", "noble", "wsl"),
 ]
 
 
@@ -58,13 +63,17 @@ def completed(passed=1, failed=0, job_id="job"):
 class FakeLanes:
     """Records what was started, and finishes jobs only when told to."""
 
-    def __init__(self, max_starts=None):
+    def __init__(self, max_starts=None, full_pools=()):
         self.started = []
         self.results = {}
         self.max_starts = max_starts
+        self.full_pools = set(full_pools)
         self.refusals = 0
 
     def start(self, unit, *, repo_root, install_from):
+        if unit.pool in self.full_pools:
+            self.refusals += 1
+            raise LaneStartError("pool is full", full_pool=unit.pool)
         if (
             self.max_starts is not None
             and len(self.started) >= self.max_starts
@@ -165,7 +174,7 @@ def runner(store, lanes, lock, ticker, events):
     )
 
 
-def create(store, campaign_id="1234567", units=None, max_lanes=2):
+def create(store, campaign_id="1234567", units=None, lxd_lanes=2, lanes=None):
     units = UNITS if units is None else units
     header = CampaignHeader(
         at=AT,
@@ -173,7 +182,7 @@ def create(store, campaign_id="1234567", units=None, max_lanes=2):
         repo=RepoState(root="/repo"),
         filters=Filters(),
         install_from="proposed",
-        max_lanes=max_lanes,
+        lanes=lanes if lanes is not None else {Pool.LXD: lxd_lanes},
     )
     store.create(
         campaign_id, header, [PlanRecord(unit=u, at=AT) for u in units]
@@ -214,7 +223,7 @@ class TestStart:
         assert "cancelled" in str(error.value)
 
     def test_a_finished_campaign_cannot_be_started(self, runner, store, lanes):
-        create(store, units=[UNITS[0]], max_lanes=1)
+        create(store, units=[UNITS[0]], lxd_lanes=1)
         runner.start("1234567")
         runner.tick("1234567")
         lanes.finish("job1")
@@ -254,7 +263,7 @@ class TestTick:
         assert report.lifecycle == Lifecycle.CREATED
 
     def test_a_running_campaign_fills_its_lanes(self, runner, store, lanes):
-        create(store, max_lanes=2)
+        create(store, lxd_lanes=2)
         runner.start("1234567")
 
         report = runner.tick("1234567")
@@ -266,7 +275,7 @@ class TestTick:
     def test_it_records_a_running_attempt_for_each_lane(
         self, runner, store, lanes
     ):
-        create(store, max_lanes=2)
+        create(store, lxd_lanes=2)
         runner.start("1234567")
         runner.tick("1234567")
 
@@ -279,7 +288,7 @@ class TestTick:
     def test_lanes_carry_the_campaign_install_source_and_repo(
         self, runner, store, lanes
     ):
-        create(store, max_lanes=1)
+        create(store, lxd_lanes=1)
         runner.start("1234567")
         runner.tick("1234567")
 
@@ -289,7 +298,7 @@ class TestTick:
         assert str(repo_root) == "/repo"
 
     def test_a_full_window_starts_nothing_more(self, runner, store, lanes):
-        create(store, max_lanes=2)
+        create(store, lxd_lanes=2)
         runner.start("1234567")
         runner.tick("1234567")
 
@@ -301,7 +310,7 @@ class TestTick:
     def test_a_finished_lane_is_recorded_and_refilled(
         self, runner, store, lanes
     ):
-        create(store, max_lanes=1)
+        create(store, lxd_lanes=1)
         runner.start("1234567")
         runner.tick("1234567")
         lanes.finish("job1")
@@ -315,7 +324,7 @@ class TestTick:
     def test_a_failure_is_recorded_and_does_not_stop_the_campaign(
         self, runner, store, lanes
     ):
-        create(store, max_lanes=1)
+        create(store, lxd_lanes=1)
         runner.start("1234567")
         runner.tick("1234567")
         lanes.finish("job1", passed=0, failed=1)
@@ -329,7 +338,7 @@ class TestTick:
     def test_a_failed_unit_is_never_retried_by_the_runner(
         self, runner, store, lanes
     ):
-        create(store, units=[UNITS[0]], max_lanes=1)
+        create(store, units=[UNITS[0]], lxd_lanes=1)
         runner.start("1234567")
         runner.tick("1234567")
         lanes.finish("job1", passed=0, failed=1)
@@ -344,7 +353,7 @@ class TestTick:
     def test_an_unclassifiable_result_is_reported_as_a_problem(
         self, runner, store, lanes
     ):
-        create(store, units=[UNITS[0]], max_lanes=1)
+        create(store, units=[UNITS[0]], lxd_lanes=1)
         runner.start("1234567")
         runner.tick("1234567")
         lanes.results["job1"] = {
@@ -376,7 +385,7 @@ class TestTick:
             now=lambda: AT,
             ticker=FakeTicker(),
         )
-        create(store, max_lanes=3)
+        create(store, lxd_lanes=3)
         runner.start("1234567")
 
         report = runner.tick("1234567")
@@ -386,10 +395,72 @@ class TestTick:
         statuses = reduce_units(store.replay("1234567"))
         assert sum(1 for s in statuses if s.state == "unattempted") == 2
 
+    def test_each_pool_fills_its_own_lanes(self, runner, store, lanes):
+        create(
+            store,
+            units=[*WSL_UNITS, *UNITS],
+            lanes={Pool.LXD: 2, Pool.WSL: 1},
+        )
+        runner.start("1234567")
+
+        report = runner.tick("1234567")
+
+        pools = [unit.pool for unit in lanes.started_units]
+        assert report.started == 3
+        assert pools.count(Pool.LXD) == 2
+        assert pools.count(Pool.WSL) == 1
+
+    def test_a_busy_wsl_lane_is_never_doubled(self, runner, store, lanes):
+        create(
+            store,
+            units=[*WSL_UNITS, *UNITS],
+            lanes={Pool.LXD: 3, Pool.WSL: 1},
+        )
+        runner.start("1234567")
+        runner.tick("1234567")
+        lanes.finish("job2")
+
+        runner.tick("1234567")
+
+        started_wsl = [
+            unit for unit in lanes.started_units if unit.pool == Pool.WSL
+        ]
+        assert started_wsl == [WSL_UNITS[0]]
+
+    def test_a_full_pool_does_not_hold_back_the_others(self, store, lock):
+        lanes = FakeLanes(full_pools={Pool.WSL})
+        events = JsonlEventLog(store.root)
+        runner = CampaignRunner(
+            store=store,
+            lanes=lanes,
+            lock=lock,
+            events=events,
+            now=lambda: AT,
+            ticker=FakeTicker(),
+        )
+        create(
+            store,
+            units=[*WSL_UNITS, *UNITS],
+            lanes={Pool.LXD: 3, Pool.WSL: 1},
+        )
+        runner.start("1234567")
+
+        report = runner.tick("1234567")
+
+        assert report.started == 3
+        assert lanes.refusals == 1
+        starved = events.read(
+            "1234567",
+            since_seq=0,
+            kinds=["anomaly.capacity_starved"],
+            limit=10,
+        )
+        assert [event.data["pool"] for event in starved] == ["wsl"]
+
     def test_the_last_lane_finishing_completes_the_campaign(
         self, runner, store, lanes
     ):
-        create(store, units=[UNITS[0]], max_lanes=1)
+        create(store, units=[UNITS[0]], lxd_lanes=1)
         runner.start("1234567")
         runner.tick("1234567")
         lanes.finish("job1")
@@ -403,7 +474,7 @@ class TestTick:
     def test_a_campaign_with_work_left_is_not_finished(
         self, runner, store, lanes
     ):
-        create(store, max_lanes=1)
+        create(store, lxd_lanes=1)
         runner.start("1234567")
 
         assert not runner.tick("1234567").finished
@@ -413,7 +484,7 @@ class TestPauseAndResume:
     def test_pause_stops_new_lanes_but_keeps_the_running_one(
         self, runner, store, lanes
     ):
-        create(store, max_lanes=1)
+        create(store, lxd_lanes=1)
         runner.start("1234567")
         runner.tick("1234567")
 
@@ -425,7 +496,7 @@ class TestPauseAndResume:
     def test_a_paused_campaign_drains_rather_than_abandoning_work(
         self, runner, store, lanes
     ):
-        create(store, max_lanes=1)
+        create(store, lxd_lanes=1)
         runner.start("1234567")
         runner.tick("1234567")
         runner.pause("1234567")
@@ -439,7 +510,7 @@ class TestPauseAndResume:
         assert statuses[0].state == "passed"
 
     def test_resume_starts_lanes_again(self, runner, store, lanes):
-        create(store, max_lanes=1)
+        create(store, lxd_lanes=1)
         runner.start("1234567")
         runner.pause("1234567")
 
@@ -470,7 +541,7 @@ class TestCancel:
     def test_cancel_closes_the_campaign_to_scheduling(
         self, runner, store, lanes
     ):
-        create(store, max_lanes=1)
+        create(store, lxd_lanes=1)
         runner.start("1234567")
 
         response = runner.cancel("1234567")
@@ -483,7 +554,7 @@ class TestCancel:
     def test_cancel_drains_a_lane_already_in_flight(
         self, runner, store, lanes
     ):
-        create(store, max_lanes=1)
+        create(store, lxd_lanes=1)
         runner.start("1234567")
         runner.tick("1234567")
         response = runner.cancel("1234567")
@@ -533,7 +604,7 @@ class TestReopen:
     def test_it_puts_a_cancelled_campaign_back_to_work(
         self, runner, store, lanes
     ):
-        create(store, max_lanes=1)
+        create(store, lxd_lanes=1)
         runner.start("1234567")
         runner.cancel("1234567")
 
@@ -579,7 +650,7 @@ class TestReopen:
     def test_a_finished_campaign_comes_back_complete_and_retryable(
         self, runner, store, lanes
     ):
-        create(store, units=[UNITS[0]], max_lanes=1)
+        create(store, units=[UNITS[0]], lxd_lanes=1)
         runner.start("1234567")
         runner.tick("1234567")
         lanes.finish("job1", passed=0, failed=1)
@@ -608,7 +679,7 @@ class TestReopen:
     def test_lanes_still_draining_are_left_to_report_themselves(
         self, runner, store, lanes
     ):
-        create(store, max_lanes=1)
+        create(store, lxd_lanes=1)
         runner.start("1234567")
         runner.tick("1234567")
         runner.cancel("1234567")
@@ -624,7 +695,7 @@ class TestReopen:
     def test_jobs_nothing_is_watching_stop_a_reopen(
         self, runner, store, lanes, lock, events
     ):
-        create(store, max_lanes=1)
+        create(store, lxd_lanes=1)
         runner.start("1234567")
         runner.tick("1234567")
         runner.cancel("1234567")
@@ -639,7 +710,7 @@ class TestReopen:
     def test_abandoning_them_records_them_as_errored(
         self, runner, store, lanes, lock, events
     ):
-        create(store, units=[UNITS[0]], max_lanes=1)
+        create(store, units=[UNITS[0]], lxd_lanes=1)
         runner.start("1234567")
         runner.tick("1234567")
         runner.cancel("1234567")
@@ -713,7 +784,7 @@ class TestRecover:
         assert paused == []
 
     def test_a_recovered_campaign_can_be_resumed(self, runner, store, lanes):
-        create(store, max_lanes=1)
+        create(store, lxd_lanes=1)
         runner.start("1234567")
         fresh_lanes = FakeLanes()
         fresh = CampaignRunner(
@@ -821,7 +892,7 @@ class TestTheWholeLoop:
             Unit("features/f{}.feature".format(n), "S", "jammy", "lxd-vm")
             for n in range(12)
         ]
-        create(store, units=units, max_lanes=4)
+        create(store, units=units, lxd_lanes=4)
         lanes = self.AutoLanes()
         runner = CampaignRunner(
             store=store,
@@ -852,7 +923,7 @@ class TestTheWholeLoop:
             Unit("features/f{}.feature".format(n), "S", "jammy", "lxd-vm")
             for n in range(20)
         ]
-        create(store, units=units, max_lanes=3)
+        create(store, units=units, lxd_lanes=3)
         lanes = self.AutoLanes()
         runner = CampaignRunner(
             store=store,
@@ -876,7 +947,7 @@ class TestTheWholeLoop:
             Unit("features/f{}.feature".format(n), "S", "jammy", "lxd-vm")
             for n in range(40)
         ]
-        create(store, units=units, max_lanes=2)
+        create(store, units=units, lxd_lanes=2)
         lanes = self.AutoLanes()
         runner = CampaignRunner(
             store=store,
@@ -942,7 +1013,7 @@ class TestEvents:
     def test_an_abandoned_unit_is_announced_as_errored(
         self, runner, store, lanes, lock, events
     ):
-        create(store, units=[UNITS[0]], max_lanes=1)
+        create(store, units=[UNITS[0]], lxd_lanes=1)
         runner.start("1234567")
         runner.tick("1234567")
         runner.cancel("1234567")
@@ -961,7 +1032,7 @@ class TestEvents:
     def test_an_opened_lane_is_announced_with_its_job(
         self, runner, store, events, lanes
     ):
-        create(store, max_lanes=1)
+        create(store, lxd_lanes=1)
         runner.start("1234567")
         runner.tick("1234567")
 
@@ -975,7 +1046,7 @@ class TestEvents:
         assert opened[0].data["install_from"] == "proposed"
 
     def test_a_passing_unit_is_announced(self, runner, store, events, lanes):
-        create(store, units=[UNITS[0]], max_lanes=1)
+        create(store, units=[UNITS[0]], lxd_lanes=1)
         runner.start("1234567")
         runner.tick("1234567")
         lanes.finish("job1")
@@ -986,7 +1057,7 @@ class TestEvents:
     def test_a_failing_unit_carries_its_failing_steps(
         self, runner, store, events, lanes
     ):
-        create(store, units=[UNITS[0]], max_lanes=1)
+        create(store, units=[UNITS[0]], lxd_lanes=1)
         runner.start("1234567")
         runner.tick("1234567")
         lanes.results["job1"] = {
@@ -1018,7 +1089,7 @@ class TestEvents:
     def test_an_unclassifiable_result_has_its_own_kind_and_reason(
         self, runner, store, events, lanes
     ):
-        create(store, units=[UNITS[0]], max_lanes=1)
+        create(store, units=[UNITS[0]], lxd_lanes=1)
         runner.start("1234567")
         runner.tick("1234567")
         lanes.results["job1"] = {
@@ -1042,7 +1113,7 @@ class TestEvents:
     def test_completion_is_announced_with_the_counts(
         self, runner, store, events, lanes
     ):
-        create(store, units=[UNITS[0]], max_lanes=1)
+        create(store, units=[UNITS[0]], lxd_lanes=1)
         runner.start("1234567")
         runner.tick("1234567")
         lanes.finish("job1")
@@ -1085,7 +1156,7 @@ class TestRetryUnits:
     def test_a_failed_unit_becomes_schedulable_again(
         self, runner, store, lanes
     ):
-        create(store, units=[UNITS[0]], max_lanes=1)
+        create(store, units=[UNITS[0]], lxd_lanes=1)
         runner.start("1234567")
         self._finish(runner, lanes, "job1", passed=0, failed=1)
         assert lifecycle(store.replay("1234567")) == Lifecycle.COMPLETE
@@ -1097,7 +1168,7 @@ class TestRetryUnits:
         assert response.rescheduling
 
     def test_the_retried_unit_actually_runs_again(self, runner, store, lanes):
-        create(store, units=[UNITS[0]], max_lanes=1)
+        create(store, units=[UNITS[0]], lxd_lanes=1)
         runner.start("1234567")
         self._finish(runner, lanes, "job1", passed=0, failed=1)
         runner.retry_units("1234567")
@@ -1110,7 +1181,7 @@ class TestRetryUnits:
     def test_a_retry_can_turn_a_failure_into_a_pass(
         self, runner, store, lanes
     ):
-        create(store, units=[UNITS[0]], max_lanes=1)
+        create(store, units=[UNITS[0]], lxd_lanes=1)
         runner.start("1234567")
         self._finish(runner, lanes, "job1", passed=0, failed=1)
         runner.retry_units("1234567")
@@ -1124,7 +1195,7 @@ class TestRetryUnits:
     def test_the_request_is_recorded_with_its_reason(
         self, runner, store, lanes
     ):
-        create(store, units=[UNITS[0]], max_lanes=1)
+        create(store, units=[UNITS[0]], lxd_lanes=1)
         runner.start("1234567")
         self._finish(runner, lanes, "job1", passed=0, failed=1)
 
@@ -1134,7 +1205,7 @@ class TestRetryUnits:
         assert stored.reason == "looked flaky"
 
     def test_it_defaults_to_the_problem_states(self, runner, store, lanes):
-        create(store, max_lanes=3)
+        create(store, lxd_lanes=3)
         runner.start("1234567")
         runner.tick("1234567")
         lanes.finish("job1", passed=0, failed=1)
@@ -1151,7 +1222,7 @@ class TestRetryUnits:
     def test_a_passing_unit_can_be_retried_when_named(
         self, runner, store, lanes
     ):
-        create(store, units=[UNITS[0]], max_lanes=1)
+        create(store, units=[UNITS[0]], lxd_lanes=1)
         runner.start("1234567")
         self._finish(runner, lanes, "job1")
 
@@ -1162,7 +1233,7 @@ class TestRetryUnits:
         assert response.requeued == 1
 
     def test_filters_narrow_the_selection(self, runner, store, lanes):
-        create(store, max_lanes=3)
+        create(store, lxd_lanes=3)
         runner.start("1234567")
         runner.tick("1234567")
         for job in ("job1", "job2", "job3"):
@@ -1176,7 +1247,7 @@ class TestRetryUnits:
         assert {u.release for u in response.units} == {"jammy"}
 
     def test_a_unit_in_flight_is_never_selected(self, runner, store, lanes):
-        create(store, units=[UNITS[0]], max_lanes=1)
+        create(store, units=[UNITS[0]], lxd_lanes=1)
         runner.start("1234567")
         runner.tick("1234567")
 
@@ -1193,7 +1264,7 @@ class TestRetryUnits:
         assert "nothing was re-queued" in str(error.value)
 
     def test_a_cancelled_campaign_refuses_retries(self, runner, store, lanes):
-        create(store, units=[UNITS[0]], max_lanes=1)
+        create(store, units=[UNITS[0]], lxd_lanes=1)
         runner.start("1234567")
         self._finish(runner, lanes, "job1", passed=0, failed=1)
         runner.cancel("1234567")
@@ -1208,7 +1279,7 @@ class TestRetryUnits:
     ):
         # Two units, so the campaign is still running -- and so pausable --
         # once the first one has failed.
-        create(store, units=[UNITS[0], UNITS[1]], max_lanes=1)
+        create(store, units=[UNITS[0], UNITS[1]], lxd_lanes=1)
         runner.start("1234567")
         self._finish(runner, lanes, "job1", passed=0, failed=1)
         runner.pause("1234567")
@@ -1223,7 +1294,7 @@ class TestRetryUnits:
     def test_cancelling_a_finished_campaign_closes_it_to_retries(
         self, runner, store, lanes
     ):
-        create(store, units=[UNITS[0]], max_lanes=1)
+        create(store, units=[UNITS[0]], lxd_lanes=1)
         runner.start("1234567")
         self._finish(runner, lanes, "job1", passed=0, failed=1)
 
@@ -1233,7 +1304,7 @@ class TestRetryUnits:
             runner.retry_units("1234567")
 
     def test_retrying_is_announced(self, runner, store, lanes, events):
-        create(store, units=[UNITS[0]], max_lanes=1)
+        create(store, units=[UNITS[0]], lxd_lanes=1)
         runner.start("1234567")
         self._finish(runner, lanes, "job1", passed=0, failed=1)
 
@@ -1260,7 +1331,7 @@ class TestSignals:
             ticker=FakeTicker(),
             overdue_seconds=60,
         )
-        create(store, units=[UNITS[0]], max_lanes=1)
+        create(store, units=[UNITS[0]], lxd_lanes=1)
         runner.start("1234567")
         runner.tick("1234567")
 
@@ -1289,7 +1360,7 @@ class TestSignals:
             now=lambda: AT,
             ticker=FakeTicker(),
         )
-        create(store, max_lanes=3)
+        create(store, lxd_lanes=3)
         runner.start("1234567")
 
         runner.tick("1234567")
@@ -1311,7 +1382,7 @@ class TestSignals:
             Unit("features/a.feature", "A", release, "lxd-vm")
             for release in ("focal", "jammy", "noble")
         ]
-        create(store, units=units, max_lanes=3)
+        create(store, units=units, lxd_lanes=3)
         runner.start("1234567")
         runner.tick("1234567")
         for job in ("job1", "job2", "job3"):
@@ -1333,7 +1404,7 @@ class TestSignals:
     def test_a_healthy_campaign_reports_no_anomalies(
         self, runner, store, lanes
     ):
-        create(store, max_lanes=3)
+        create(store, lxd_lanes=3)
         runner.start("1234567")
         runner.tick("1234567")
         for job in ("job1", "job2", "job3"):

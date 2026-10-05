@@ -60,7 +60,12 @@ Optional arguments:
 
 * `--install-from SOURCE`: Install source every job in the campaign uses.
   Defaults to `local`.
-* `--max-lanes N`: Jobs a runner may keep in flight. Defaults to `1`.
+* `--lxd-lanes N`: LXD jobs (`lxd-container`, `lxd-vm`) a runner may keep
+  in flight. Defaults to `1` when the scope has LXD units.
+* `--cloud-lanes N`: Cloud jobs (`aws.*`, `gcp.*`, `azure.*`) a runner may
+  keep in flight. Defaults to `1` when the scope has cloud units.
+* `--wsl-lanes N`: WSL jobs a runner may keep in flight, at most `1`.
+  Defaults to `1` when the scope has WSL units.
 * `--feature PATH`: Only this feature file. Repeatable.
 * `--scenario NAME`: Only this exact scenario name. Repeatable.
 * `--release NAME`: Only this release. Repeatable.
@@ -71,11 +76,12 @@ Omit every filter to cover every feature file.
 ```bash
 uv run behave-campaign create --campaign-id 1234567 --repo-root ../.. \
   --release jammy --release noble --machine-type lxd-vm \
-  --install-from proposed --max-lanes 4
+  --install-from proposed --lxd-lanes 4
 ```
 
 Errors: an unknown release, machine type, or feature; a campaign file that
-already exists; no unit matching the filters.
+already exists; no unit matching the filters; lanes for a pool no unit in
+scope draws on; fewer than one lane for a pool, or more than one for `wsl`.
 
 ## record
 
@@ -123,7 +129,8 @@ that is not a clean pass, failure, or skip; a job still in flight.
 
 ## status
 
-Report a campaign's header, state, in-flight units, and problem units.
+Report a campaign's header, state, lanes busy in each pool, in-flight units,
+and problem units.
 
 Required arguments:
 

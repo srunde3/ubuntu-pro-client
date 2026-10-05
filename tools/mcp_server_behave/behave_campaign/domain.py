@@ -11,7 +11,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any, Iterable, Sequence
+from typing import Any, Iterable, Mapping, Sequence
+
+from behave_mcp.pools import MAX_WSL_JOBS, POOL_OF, POOLS, Pool
 
 
 class _StringEnum(str, Enum):
@@ -121,7 +123,7 @@ CAMPAIGN_FIELDS = (
     "repo",
     "filters",
     "install_from",
-    "max_lanes",
+    "lanes",
 )
 REPO_FIELDS = ("root", "commit", "branch", "dirty")
 SCOPE_FIELDS = ("feature", "scenario", "release", "machine_type")
@@ -141,6 +143,10 @@ class Unit:
     scenario: str
     release: str
     machine_type: str
+
+    @property
+    def pool(self) -> Pool:
+        return POOL_OF[self.machine_type]
 
     def as_dict(self) -> dict[str, str]:
         return {
@@ -288,10 +294,10 @@ class CampaignHeader:
     repo: RepoState = RepoState()
     filters: Filters = Filters()
     # The install source every job runs with, and how many lanes a runner
-    # may fill. Each attempt still records the source its own job actually
-    # used, which is what a verification rests on.
+    # may fill in each pool. Each attempt still records the source its own
+    # job actually used, which is what a verification rests on.
     install_from: str = DEFAULT_INSTALL_SOURCE
-    max_lanes: int = 1
+    lanes: Mapping[Pool, int] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -473,15 +479,17 @@ def _parse_campaign(body: dict[str, Any]) -> CampaignHeader:
         _text(body, "install_from", "campaign")
     )
 
-    max_lanes = body["max_lanes"]
-    if (
-        isinstance(max_lanes, bool)
-        or not isinstance(max_lanes, int)
-        or max_lanes < 1
-    ):
-        raise CampaignError(
-            "campaign field 'max_lanes' must be a positive integer"
-        )
+    lanes = body["lanes"]
+    if not isinstance(lanes, dict):
+        raise CampaignError("campaign field 'lanes' must be an object")
+    for pool, count in lanes.items():
+        if pool not in POOLS:
+            raise CampaignError(
+                "campaign lanes pool must be one of: {}".format(
+                    ", ".join(POOLS)
+                )
+            )
+        _check_lane_count(Pool(pool), count)
 
     return CampaignHeader(
         at=_text(body, "at", "campaign"),
@@ -494,8 +502,47 @@ def _parse_campaign(body: dict[str, Any]) -> CampaignHeader:
         ),
         filters=Filters(**values),
         install_from=install_from,
-        max_lanes=max_lanes,
+        lanes={Pool(pool): count for pool, count in lanes.items()},
     )
+
+
+def _check_lane_count(pool: Pool, count: Any) -> None:
+    if isinstance(count, bool) or not isinstance(count, int) or count < 1:
+        raise CampaignError(
+            "{} lanes must be a positive integer, got {!r}".format(pool, count)
+        )
+    if pool == Pool.WSL and count > MAX_WSL_JOBS:
+        raise CampaignError(
+            "wsl lanes may not exceed {}: WSL jobs share one Windows "
+            "host".format(MAX_WSL_JOBS)
+        )
+
+
+def resolve_lanes(
+    units: Iterable[Unit], requested: Mapping[Pool, int]
+) -> dict[Pool, int]:
+    """The lanes a campaign over ``units`` runs with, one entry per pool.
+
+    A pool the units draw on and the caller left out gets one lane. Lanes
+    for a pool no unit draws on are an error rather than ignored, because
+    they usually mean the scope is not what the caller thinks it is.
+    """
+    in_scope = {unit.pool for unit in units}
+    stray = sorted(set(requested) - in_scope)
+    if stray:
+        raise CampaignError(
+            "lanes were given for {}, but no unit in scope runs there".format(
+                ", ".join(str(pool) for pool in stray)
+            )
+        )
+    lanes = {}
+    for pool in Pool:
+        if pool not in in_scope:
+            continue
+        count = requested.get(pool, 1)
+        _check_lane_count(pool, count)
+        lanes[pool] = count
+    return lanes
 
 
 def parse_record(raw: Any) -> Record:
@@ -556,7 +603,7 @@ def encode_record(record: Record) -> dict[str, Any]:
             "repo": record.repo.as_dict(),
             "filters": record.filters.scope_as_dict(),
             "install_from": record.install_from,
-            "max_lanes": record.max_lanes,
+            "lanes": lanes_as_dict(record.lanes),
         }
 
     if isinstance(record, LifecycleRecord):
@@ -712,14 +759,36 @@ def is_schedulable(status: UnitStatus) -> bool:
 
 
 def select_schedulable(
-    statuses: Sequence[UnitStatus], limit: int
+    statuses: Sequence[UnitStatus], free: Mapping[Pool, int]
 ) -> list[UnitStatus]:
-    """The units a scheduler may open lanes for, untouched ones first."""
-    if limit < 1:
-        raise CampaignError("limit must be positive")
+    """The units a scheduler may open lanes for, untouched ones first.
+
+    Each pool fills only its own free lanes, so a full pool never holds
+    back units bound for another.
+    """
     ready = [s for s in statuses if is_schedulable(s)]
     ready.sort(key=lambda s: s.state != UnitState.UNATTEMPTED)
-    return ready[:limit]
+    taken = {pool: 0 for pool in free}
+    selected = []
+    for status in ready:
+        pool = status.unit.pool
+        if taken.get(pool, 0) < free.get(pool, 0):
+            taken[pool] += 1
+            selected.append(status)
+    return selected
+
+
+def lanes_as_dict(lanes: Mapping[Pool, int]) -> dict[str, int]:
+    return {pool.value: count for pool, count in lanes.items()}
+
+
+def busy_by_pool(statuses: Iterable[UnitStatus]) -> dict[Pool, int]:
+    counts: dict[Pool, int] = {}
+    for status in statuses:
+        if status.state == UnitState.RUNNING:
+            pool = status.unit.pool
+            counts[pool] = counts.get(pool, 0) + 1
+    return counts
 
 
 def count_states(statuses: Iterable[UnitStatus]) -> dict[str, int]:
@@ -995,7 +1064,7 @@ def plan_tick(
     *,
     records: Sequence[Record],
     lanes: Sequence[Lane],
-    max_lanes: int,
+    lane_limits: Mapping[Pool, int],
     at: str = "",
 ) -> TickPlan:
     """Decide what to do next. Pure: starts nothing and writes nothing.
@@ -1016,9 +1085,15 @@ def plan_tick(
     if state != Lifecycle.RUNNING:
         return TickPlan(record=classified, lifecycle=state)
 
-    busy = sum(1 for lane in lanes if not lane.finished)
-    free = max(max_lanes - busy, 0)
-    if not free:
+    busy: dict[Pool, int] = {}
+    for lane in lanes:
+        if not lane.finished:
+            busy[lane.unit.pool] = busy.get(lane.unit.pool, 0) + 1
+    free = {
+        pool: max(limit - busy.get(pool, 0), 0)
+        for pool, limit in lane_limits.items()
+    }
+    if not any(free.values()):
         return TickPlan(record=classified, lifecycle=state)
 
     # Only units that are untouched or have an explicit retry pending: a

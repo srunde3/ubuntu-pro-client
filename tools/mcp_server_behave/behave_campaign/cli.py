@@ -20,6 +20,7 @@ from typing import Any, Callable, Iterator, Sequence
 from pydantic import BaseModel
 
 from behave_mcp import layout
+from behave_mcp.pools import Pool
 
 from .adapters import (
     JsonlEventLog,
@@ -64,7 +65,7 @@ def _service(
         now=system_now,
         repo_state=repo_state,
         # Nothing here runs tests, so no lane ceiling applies.
-        max_lane_ceiling=None,
+        lane_ceiling=None,
     )
 
 
@@ -137,7 +138,11 @@ def _command_create(args: argparse.Namespace) -> BaseModel:
         feature_files=args.feature or (),
         scenarios=args.scenario or (),
         install_from=args.install_from,
-        max_lanes=args.max_lanes,
+        lanes={
+            pool: getattr(args, "{}_lanes".format(pool))
+            for pool in Pool
+            if getattr(args, "{}_lanes".format(pool)) is not None
+        },
     )
 
 
@@ -374,16 +379,19 @@ def build_parser() -> argparse.ArgumentParser:
             "(default: {})".format(DEFAULT_INSTALL_SOURCE)
         ),
     )
-    create.add_argument(
-        "--max-lanes",
-        default=1,
-        type=int,
-        dest="max_lanes",
-        help=(
-            "how many jobs a runner may keep in flight for this campaign "
-            "(default: 1)"
-        ),
-    )
+    for pool in Pool:
+        create.add_argument(
+            "--{}-lanes".format(pool),
+            type=int,
+            dest="{}_lanes".format(pool),
+            metavar="N",
+            help=(
+                "how many {} jobs a runner may keep in flight for this "
+                "campaign (default: 1 if the scope covers the {} pool)".format(
+                    pool, pool
+                )
+            ),
+        )
 
     record = _add_command(
         subparsers, "record", "append attempt results", _command_record

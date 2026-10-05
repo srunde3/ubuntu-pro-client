@@ -76,7 +76,7 @@ def test_a_campaign_runs_its_lanes_concurrently(monkeypatch, tmp_path):
         events=events,
         now=system_now,
         repo_state=repo_state,
-        max_lane_ceiling=settings.pool_limits[Pool.LXD],
+        lane_ceiling=settings.pool_limits,
     ).create_campaign(
         campaign_id=CAMPAIGN_ID,
         repo_root=repo_root,
@@ -84,7 +84,7 @@ def test_a_campaign_runs_its_lanes_concurrently(monkeypatch, tmp_path):
         machine_types=["lxd-container"],
         feature_files=[FEATURE],
         scenarios=[SCENARIO],
-        max_lanes=LANES,
+        lanes={Pool.LXD: LANES},
     )
     assert created.campaign.total_units == len(RELEASES)
 

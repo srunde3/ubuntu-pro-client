@@ -11,6 +11,7 @@ from behave_campaign.domain import (
     Unit,
 )
 from behave_campaign.service import CampaignService
+from behave_mcp.pools import Pool
 
 AT = "2026-09-12T12:00:00Z"
 REPO = RepoState(root="/repo", commit="abc123", branch="main", dirty=False)
@@ -64,7 +65,30 @@ def service(tmp_path, features, events):
         events=events,
         now=lambda: AT,
         repo_state=lambda root: REPO,
-        max_lane_ceiling=8,
+        lane_ceiling={Pool.LXD: 8, Pool.CLOUD: 2, Pool.WSL: 1},
+    )
+
+
+MIXED_UNITS = [
+    *UNITS,
+    Unit("features/c.feature", "C", "jammy", "aws.generic"),
+    Unit("features/d.feature", "D", "noble", "wsl"),
+]
+
+
+def _service_over(
+    tmp_path,
+    events,
+    units,
+    ceiling={Pool.LXD: 8, Pool.CLOUD: 2, Pool.WSL: 1},
+):
+    return CampaignService(
+        store=JsonlCampaignStore(tmp_path / "campaigns"),
+        features=FakeFeatureReader(units),
+        events=events,
+        now=lambda: AT,
+        repo_state=lambda root: REPO,
+        lane_ceiling=ceiling,
     )
 
 
@@ -89,13 +113,16 @@ class TestCreateCampaign:
 
     def test_it_records_how_the_campaign_was_built(self, service):
         result = create(
-            service, install_from="proposed", max_lanes=8, releases=["jammy"]
+            service,
+            install_from="proposed",
+            lanes={Pool.LXD: 8},
+            releases=["jammy"],
         )
 
         assert result.campaign.campaign_id == "1234567"
         assert result.campaign.created_at == AT
         assert result.campaign.install_from == "proposed"
-        assert result.campaign.max_lanes == 8
+        assert result.campaign.lanes == {"lxd": 8}
         assert result.campaign.repo.commit == "abc123"
         assert result.campaign.scope.release == ["jammy"]
 
@@ -151,18 +178,55 @@ class TestCreateCampaign:
 
     def test_more_lanes_than_the_server_allows_is_rejected(self, service):
         with pytest.raises(CampaignError) as error:
-            create(service, max_lanes=9)
+            create(service, lanes={Pool.LXD: 9})
 
-        assert "exceeds the server's concurrent job limit of 8" in str(
-            error.value
-        )
+        assert "lxd job limit of 8" in str(error.value)
 
     def test_the_server_limit_itself_is_allowed(self, service):
-        assert create(service, max_lanes=8).campaign.max_lanes == 8
+        result = create(service, lanes={Pool.LXD: 8})
+
+        assert result.campaign.lanes == {"lxd": 8}
+
+    def test_a_pool_left_out_gets_one_lane(self, service):
+        assert create(service).campaign.lanes == {"lxd": 1}
+
+    def test_lanes_are_kept_for_each_pool_in_scope(self, tmp_path, events):
+        service = _service_over(tmp_path, events, MIXED_UNITS)
+
+        result = create(service, lanes={Pool.LXD: 6, Pool.CLOUD: 2})
+
+        assert result.campaign.lanes == {"lxd": 6, "cloud": 2, "wsl": 1}
 
     def test_zero_lanes_is_rejected(self, service):
-        with pytest.raises(CampaignError):
-            create(service, max_lanes=0)
+        with pytest.raises(CampaignError, match="lxd lanes must be"):
+            create(service, lanes={Pool.LXD: 0})
+
+    def test_lanes_for_a_pool_out_of_scope_are_rejected(self, service):
+        with pytest.raises(CampaignError, match="no unit in scope"):
+            create(service, lanes={Pool.WSL: 1})
+
+    def test_more_than_one_wsl_lane_is_rejected(self, tmp_path, events):
+        service = _service_over(tmp_path, events, MIXED_UNITS)
+
+        with pytest.raises(CampaignError, match="wsl lanes may not exceed"):
+            create(service, lanes={Pool.WSL: 2})
+
+    def test_a_pool_the_server_disabled_is_rejected(self, tmp_path, events):
+        service = _service_over(
+            tmp_path, events, MIXED_UNITS, ceiling={Pool.LXD: 8, Pool.WSL: 1}
+        )
+
+        with pytest.raises(CampaignError, match="disabled the cloud pool"):
+            create(service)
+
+    def test_without_a_ceiling_any_lane_count_is_allowed(
+        self, tmp_path, events
+    ):
+        service = _service_over(tmp_path, events, UNITS, ceiling=None)
+
+        result = create(service, lanes={Pool.LXD: 64})
+
+        assert result.campaign.lanes == {"lxd": 64}
 
 
 class TestListUnits:
@@ -280,6 +344,25 @@ class TestCampaignStatus:
         assert status.state.counts.unattempted == 1
         assert status.problem_scenarios is None
 
+    def test_it_counts_busy_lanes_in_each_pool(self, tmp_path, events, store):
+        service = _service_over(tmp_path, events, MIXED_UNITS)
+        create(service)
+        store.append(
+            "1234567",
+            [
+                AttemptStarted(
+                    unit=MIXED_UNITS[-1],
+                    job_id="job1",
+                    install_from="proposed",
+                    at=AT,
+                ),
+            ],
+        )
+
+        status = service.campaign_status(campaign_id="1234567")
+
+        assert status.lanes_busy_by_pool == {"lxd": 0, "cloud": 0, "wsl": 1}
+
     def test_problems_can_be_grouped_by_scenario(self, service, store):
         create(service)
         store.append(
@@ -376,12 +459,12 @@ class TestCampaignStatus:
         assert [u.state for u in listed.units] == ["passed"]
 
     def test_it_reports_the_stored_header(self, service):
-        create(service, install_from="proposed", max_lanes=4)
+        create(service, install_from="proposed", lanes={Pool.LXD: 4})
 
         status = service.campaign_status(campaign_id="1234567")
 
         assert status.campaign.install_from == "proposed"
-        assert status.campaign.max_lanes == 4
+        assert status.campaign.lanes == {"lxd": 4}
         assert status.campaign.created_at == AT
 
 
@@ -624,14 +707,14 @@ class TestAwaitEvents:
         assert short.events[0].data["failures"][0]["step"] == "s"
 
     def test_creating_a_campaign_announces_it(self, service):
-        create(service, install_from="proposed", max_lanes=4)
+        create(service, install_from="proposed", lanes={Pool.LXD: 4})
 
         result = service.await_events(campaign_id="1234567")
 
         assert [e.kind for e in result.events] == ["campaign.created"]
         assert result.events[0].data["total_units"] == 3
         assert result.events[0].data["install_from"] == "proposed"
-        assert result.events[0].data["max_lanes"] == 4
+        assert result.events[0].data["lanes"] == {"lxd": 4}
 
     def test_the_cursor_advances_past_what_was_read(self, service):
         create(service)

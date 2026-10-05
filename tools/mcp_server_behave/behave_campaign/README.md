@@ -35,8 +35,9 @@ than a result the job reported.
 The `campaign` header captures how the campaign was built, so it can be
 recreated and audited later: the campaign id, the filters used, the checkout it
 was built from (root, commit, branch, dirty), and when. The header also records the
-`install_from` every job runs with and the `max_lanes` a runner may fill; both
-are required, so a campaign always says how it is meant to be run. Every record carries a
+`install_from` every job runs with and the `lanes` a runner may fill in each
+pool its units draw on; both are required, so a campaign always says how it is
+meant to be run. Every record carries a
 UTC timestamp, and every attempt records the install source the job ran with --
 the evidence an SRU verification actually rests on, which would otherwise only
 live in MCP job history that expires.
@@ -83,9 +84,9 @@ uv run behave-campaign create --campaign-id 1234567 \
 # With no filters, the campaign covers every feature file.
 uv run behave-campaign create --campaign-id 1234567
 
-# Record the install source and lane count for a runner to honour.
+# Record the install source and lanes per pool for a runner to honour.
 uv run behave-campaign create --campaign-id 1234567 \
-  --install-from proposed --max-lanes 8
+  --install-from proposed --lxd-lanes 6 --cloud-lanes 4 --wsl-lanes 1
 
 # Record started and finished attempts in batches.
 uv run behave-campaign record --campaign-id 1234567 --install-from proposed \
@@ -137,8 +138,20 @@ the state fields alone, since the header never changes. `status` reports
 counts, in-flight units and problems; `units` and `history` list individual
 units, capped at `--limit` and saying so.
 
-`create` optionally records `--install-from` and `--max-lanes` for a runner to
-honour later; both are omitted from the file when not given.
+`create` records `--install-from` (default `local`) and lanes for each pool
+the campaign's units draw on, for a runner to honour later:
+
+| Pool | Machine types | Flag |
+| --- | --- | --- |
+| `lxd` | `lxd-container`, `lxd-vm` | `--lxd-lanes` |
+| `cloud` | `aws.*`, `gcp.*`, `azure.*` | `--cloud-lanes` |
+| `wsl` | `wsl` | `--wsl-lanes` |
+
+A pool in scope that is not given gets one lane. Lanes for a pool no unit
+draws on are rejected, because they usually mean the scope is not what was
+meant, and `wsl` takes at most one lane because WSL jobs share one Windows
+host. The scheduler fills each pool separately, so a busy WSL lane never
+holds back LXD work.
 
 Splitting work across people happens out of band: each person creates their
 own campaign with the slice they agreed to run.
@@ -189,19 +202,21 @@ write the same files the CLI does, under the directory named by
 `campaigns/` subdirectory.
 
 - `create_campaign` -- plan a campaign and store it, starting nothing.
-  Returns the unit count so scope can be confirmed first. `max_lanes` may
-  not exceed `MCP_MAX_PARALLEL_JOBS`; a campaign that would silently run
-  serially is rejected instead.
+  Returns the unit count so scope can be confirmed first. `lanes` takes
+  `lxd`, `cloud` and `wsl`; each may not exceed the server's limit for that
+  pool (`MCP_MAX_LXD_JOBS` and so on), and a campaign with units in a pool
+  the server has disabled is rejected. A campaign that would silently run
+  slower than asked is rejected instead.
 - `list_campaigns` -- every stored campaign: its state, the header fields
   that identify it, and how many values each scope filter names.
-- `campaign_status` -- one campaign's counts, the units in flight, and the
-  units needing action, one unit per row or -- with `group_by=scenario` --
+- `campaign_status` -- one campaign's counts, the lanes busy in each pool,
+  the units in flight, and the units needing action, one unit per row or -- with `group_by=scenario` --
   one scenario per row with its units bucketed by state, which is how a
   scenario failing on every release reads at a glance. Either list is capped
   at `problems_limit` (50 over MCP; the CLI lists all) with `problems_total`
   alongside. Individual units are `unit_history`'s job.
 - `control_campaign` -- one tool, four actions. `start` begins scheduling:
-  the server then keeps up to `max_lanes` jobs in flight and fills a lane as
+  the server then keeps each pool's lanes full and fills a lane as
   soon as one frees, with no further calls needed to keep it moving. `pause`
   and `resume` stop and restart lane opening. `cancel` closes a campaign to
   further scheduling, including one that has already finished.

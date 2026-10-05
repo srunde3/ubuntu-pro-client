@@ -80,13 +80,14 @@ async def test_creating_the_same_campaign_twice_is_an_error(repo):
 
 @pytest.mark.asyncio
 async def test_more_lanes_than_the_server_allows_is_an_error(repo):
-    # MCP_MAX_PARALLEL_JOBS defaults to 1, so 8 lanes cannot be honoured.
+    # MCP_MAX_LXD_JOBS defaults to 1, so 8 lanes cannot be honoured.
     async with create_connected_server_and_client_session(mcp) as client:
         result = await client.call_tool(
-            "create_campaign", {"campaign_id": "1234567", "max_lanes": 8}
+            "create_campaign",
+            {"campaign_id": "1234567", "lanes": {"lxd": 8}},
         )
 
-    assert "concurrent job limit" in result_error_text(result)
+    assert "lxd job limit of 1" in result_error_text(result)
 
 
 @pytest.mark.asyncio
@@ -411,9 +412,7 @@ async def test_reopening_a_live_campaign_is_an_error(repo, runner):
 @pytest.mark.asyncio
 async def test_a_started_campaign_fills_lanes_on_its_tick(repo, runner):
     async with create_connected_server_and_client_session(mcp) as client:
-        await client.call_tool(
-            "create_campaign", {"campaign_id": "1234567", "max_lanes": 1}
-        )
+        await client.call_tool("create_campaign", {"campaign_id": "1234567"})
         await client.call_tool(
             "control_campaign", {"campaign_id": "1234567", "action": "start"}
         )
@@ -449,9 +448,7 @@ async def test_await_events_reports_the_campaign_being_created(repo, runner):
 @pytest.mark.asyncio
 async def test_unit_history_lists_every_attempt(repo, runner):
     async with create_connected_server_and_client_session(mcp) as client:
-        await client.call_tool(
-            "create_campaign", {"campaign_id": "1234567", "max_lanes": 1}
-        )
+        await client.call_tool("create_campaign", {"campaign_id": "1234567"})
         await client.call_tool(
             "control_campaign", {"campaign_id": "1234567", "action": "start"}
         )
@@ -474,9 +471,7 @@ async def test_unit_history_lists_every_attempt(repo, runner):
 @pytest.mark.asyncio
 async def test_await_events_defaults_to_what_needs_acting_on(repo, runner):
     async with create_connected_server_and_client_session(mcp) as client:
-        await client.call_tool(
-            "create_campaign", {"campaign_id": "1234567", "max_lanes": 1}
-        )
+        await client.call_tool("create_campaign", {"campaign_id": "1234567"})
         await client.call_tool(
             "control_campaign", {"campaign_id": "1234567", "action": "start"}
         )
@@ -501,9 +496,7 @@ async def test_await_events_defaults_to_what_needs_acting_on(repo, runner):
 @pytest.mark.asyncio
 async def test_await_events_follows_a_campaign_through_a_lane(repo, runner):
     async with create_connected_server_and_client_session(mcp) as client:
-        await client.call_tool(
-            "create_campaign", {"campaign_id": "1234567", "max_lanes": 1}
-        )
+        await client.call_tool("create_campaign", {"campaign_id": "1234567"})
         await client.call_tool(
             "control_campaign", {"campaign_id": "1234567", "action": "start"}
         )
@@ -621,7 +614,7 @@ async def test_retry_units_requeues_a_failure(repo, runner, monkeypatch):
     monkeypatch.setattr(runner.lanes, "poll", failing)
 
     async with create_connected_server_and_client_session(mcp) as client:
-        # max_lanes stays at 1: MCP_MAX_PARALLEL_JOBS defaults to 1, and a
+        # lanes stay at 1: MCP_MAX_LXD_JOBS defaults to 1, and a
         # campaign asking for more than the server allows is refused.
         await client.call_tool("create_campaign", {"campaign_id": "1234567"})
         await client.call_tool(

@@ -21,6 +21,7 @@ from behave_campaign.domain import (
     Record,
     Unit,
 )
+from behave_mcp.pools import Pool
 
 
 # These subclass CampaignError -- and so ValueError -- because they report a
@@ -99,7 +100,15 @@ class FeatureReader(Protocol):
 
 
 class LaneStartError(CampaignError):
-    """Raised when a lane could not be opened for a unit."""
+    """Raised when a lane could not be opened for a unit.
+
+    ``full_pool`` names the pool that had no room, when that is the reason;
+    the other pools may still have room.
+    """
+
+    def __init__(self, message: str, full_pool: Pool | None = None) -> None:
+        super().__init__(message)
+        self.full_pool = full_pool
 
 
 class LaneRunner(Protocol):
@@ -109,7 +118,7 @@ class LaneRunner(Protocol):
         """Start a job for ``unit`` and return its job id.
 
         Raises LaneStartError when no job could be started, including when
-        the runner is at capacity.
+        the unit's pool is at capacity.
         """
         ...
 

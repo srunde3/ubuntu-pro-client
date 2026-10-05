@@ -430,7 +430,7 @@ class CampaignRunner:
         plan = domain.plan_tick(
             records=records,
             lanes=lanes,
-            max_lanes=header.max_lanes,
+            lane_limits=header.lanes,
             at=self._now(),
         )
 
@@ -588,14 +588,18 @@ class CampaignRunner:
         repo_root = Path(header.repo.root)
         install_from = header.install_from
         started: list[AttemptStarted] = []
+        full: set[domain.Pool] = set()
         for unit in units:
+            if unit.pool in full:
+                continue
             try:
                 job_id = self._lanes.start(
                     unit, repo_root=repo_root, install_from=install_from
                 )
             except LaneStartError as error:
                 # Capacity or a bad start: leave the unit unattempted so a
-                # later tick picks it up, and say why.
+                # later tick picks it up, and say why. A full pool only
+                # stops that pool; anything else stops the tick.
                 problems.append(str(error))
                 starved.append(
                     NewEvent(
@@ -603,11 +607,15 @@ class CampaignRunner:
                         at=self._now(),
                         data={
                             **unit.as_dict(),
+                            "pool": unit.pool.value,
                             "reason": str(error),
                         },
                     )
                 )
-                break
+                if error.full_pool is None:
+                    break
+                full.add(error.full_pool)
+                continue
             started.append(
                 AttemptStarted(
                     unit=unit,

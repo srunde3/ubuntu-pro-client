@@ -87,7 +87,7 @@ class CampaignHeader(BaseModel):
     campaign_id: str = ""
     created_at: str = ""
     install_from: str = ""
-    max_lanes: int = 0
+    lanes: dict[str, int] = {}
     total_units: int = 0
     repo: CampaignRepo = CampaignRepo()
     scope: CampaignScope = CampaignScope()
@@ -120,7 +120,7 @@ class CampaignListing(CampaignState):
 
     created_at: str = ""
     install_from: str = ""
-    max_lanes: int = 0
+    lanes: dict[str, int] = {}
     total_units: int = 0
     scope_size: ScopeSize = ScopeSize()
 
@@ -159,6 +159,7 @@ class CampaignStatusResponse(BaseModel):
 
     campaign: CampaignHeader = CampaignHeader()
     state: CampaignState = CampaignState()
+    lanes_busy_by_pool: dict[str, int] = {}
     running: list[UnitView] = []
     problems: list[UnitView] | None = None
     problem_scenarios: list[ScenarioProblems] | None = None

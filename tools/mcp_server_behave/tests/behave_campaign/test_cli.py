@@ -112,6 +112,16 @@ class TestInit:
         history = run(["history"])
         assert [unit_of(unit) for unit in history["units"]] == [UNIT_A_NOBLE]
 
+    def test_lanes_are_set_per_pool(self, run):
+        result = run(["create", "--lxd-lanes", "4"])
+
+        assert result["campaign"]["lanes"] == {"lxd": 4}
+
+    def test_lanes_for_a_pool_out_of_scope_are_rejected(self, run):
+        error = run(["create", "--wsl-lanes", "1"], expect=2)
+
+        assert "no unit in scope" in error
+
     def test_initialising_twice_is_rejected(self, planned, run):
         error = run(["create"], expect=2)
 
@@ -546,7 +556,7 @@ class TestQueries:
         self, run, campaign_file
     ):
         # An absent file used to read as a fresh campaign with header
-        # defaults -- max_lanes 1, no repo -- which looks like a real one.
+        # defaults -- no lanes, no repo -- which looks like a real one.
         for command in (["status"], ["next"], ["history"], ["events"]):
             error = run(command, expect=2)
             assert str(campaign_file) in error, command

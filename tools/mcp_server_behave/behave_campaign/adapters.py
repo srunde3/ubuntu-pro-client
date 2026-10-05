@@ -39,6 +39,7 @@ from behave_campaign.ports import (
     LaneStartError,
 )
 from behave_mcp import layout
+from behave_mcp.pools import Pool
 
 CAMPAIGN_SUFFIX = layout.CAMPAIGN_SUFFIX
 EVENTS_SUFFIX = ".events" + CAMPAIGN_SUFFIX
@@ -410,8 +411,10 @@ class ServiceLaneRunner:
             install_from=install_from,
         )
         if getattr(result, "status", "") != "started":
+            full_pools = getattr(result, "full_pools", None) or []
             raise LaneStartError(
-                getattr(result, "error", "") or "could not start a job"
+                getattr(result, "error", "") or "could not start a job",
+                full_pool=Pool(full_pools[0].pool) if full_pools else None,
             )
         return str(result.job_id)
 

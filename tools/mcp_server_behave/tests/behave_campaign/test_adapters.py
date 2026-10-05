@@ -22,6 +22,7 @@ from behave_campaign.ports import (
     CampaignLockedError,
     CampaignNotFoundError,
 )
+from behave_mcp.pools import Pool
 
 UNIT_A = Unit("features/a.feature", "A", "jammy", "lxd-container")
 UNIT_B = Unit("features/b.feature", "B", "noble", "lxd-vm")
@@ -34,6 +35,7 @@ def header(**overrides):
         "campaign_id": "1234567",
         "repo": RepoState(root="/repo", commit="abc", branch="main"),
         "filters": Filters(release=("jammy",)),
+        "lanes": {Pool.LXD: 1},
     }
     fields.update(overrides)
     return CampaignHeader(**fields)
@@ -58,7 +60,7 @@ def _stored_header(drop=None, **overrides):
             "machine_type": [],
         },
         "install_from": "local",
-        "max_lanes": 1,
+        "lanes": {"lxd": 1},
     }
     stored.update(overrides)
     if drop is not None:
@@ -178,27 +180,27 @@ class TestJsonlCampaignStore:
 
         assert "install_from" in str(error.value)
 
-    def test_a_header_missing_max_lanes_is_rejected(self, tmp_path):
+    def test_a_header_missing_lanes_is_rejected(self, tmp_path):
         path = tmp_path / "1234567.jsonl"
-        path.write_text(json.dumps(_stored_header(drop="max_lanes")) + "\n")
+        path.write_text(json.dumps(_stored_header(drop="lanes")) + "\n")
 
         with pytest.raises(CampaignError) as error:
             JsonlCampaignStore(tmp_path).replay("1234567")
 
-        assert "max_lanes" in str(error.value)
+        assert "lanes" in str(error.value)
 
     def test_the_header_round_trips_both_fields(self, tmp_path):
         store = JsonlCampaignStore(tmp_path)
         store.create(
             "1234567",
-            header(install_from="proposed", max_lanes=8),
+            header(install_from="proposed", lanes={Pool.LXD: 8, Pool.WSL: 1}),
             plans(UNIT_A),
         )
 
         replayed = store.replay("1234567")[0]
 
         assert replayed.install_from == "proposed"
-        assert replayed.max_lanes == 8
+        assert replayed.lanes == {Pool.LXD: 8, Pool.WSL: 1}
 
     def test_the_header_always_states_them_on_disk(self, tmp_path):
         store = JsonlCampaignStore(tmp_path)
@@ -209,16 +211,24 @@ class TestJsonlCampaignStore:
         )
 
         assert stored["install_from"] == "local"
-        assert stored["max_lanes"] == 1
+        assert stored["lanes"] == {"lxd": 1}
 
-    def test_a_non_positive_max_lanes_on_disk_is_rejected(self, tmp_path):
+    @pytest.mark.parametrize(
+        "lanes, message",
+        [
+            ({"lxd": 0}, "lxd lanes must be a positive integer"),
+            ({"lxd": True}, "lxd lanes must be a positive integer"),
+            ({"wsl": 2}, "wsl lanes may not exceed 1"),
+            ({"toaster": 1}, "pool must be one of"),
+            ([1], "must be an object"),
+        ],
+    )
+    def test_bad_lanes_on_disk_are_rejected(self, tmp_path, lanes, message):
         path = tmp_path / "1234567.jsonl"
-        path.write_text(json.dumps(_stored_header(max_lanes=0)) + "\n")
+        path.write_text(json.dumps(_stored_header(lanes=lanes)) + "\n")
 
-        with pytest.raises(CampaignError) as error:
+        with pytest.raises(CampaignError, match=message):
             JsonlCampaignStore(tmp_path).replay("1234567")
-
-        assert "max_lanes" in str(error.value)
 
 
 class TestSingleFileCampaignStore:
