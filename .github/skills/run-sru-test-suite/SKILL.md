@@ -23,13 +23,18 @@ failure classes mean on this host.
    `machine_type` values. Do not translate aliases or invent values.
 3. Ask whether this is a full run or a named set of feature files or
    scenarios.
-4. `create_campaign` with the agreed scope, `install_from: proposed`, and a
-   `max_lanes` the host can stand.
-5. Report the unit count it returns and **get the user's confirmation before
-   starting**.
+4. `create_campaign` with the agreed scope, `install_from: proposed`, and
+   `lanes` for each pool the scope covers: `lxd` for `lxd-container` and
+   `lxd-vm`, `cloud` for `aws.*`, `gcp.*` and `azure.*`, `wsl` for `wsl`. A
+   pool left out gets 1 lane. Ask the user how many LXD and cloud lanes the
+   host and cloud accounts can take; `wsl` is always 1.
+5. Report the unit count and lanes it returns and **get the user's
+   confirmation before starting**.
 
-If `create_campaign` rejects the scope, resolve it with the user; do not work
-around it.
+If `create_campaign` rejects the scope or the lanes, resolve it with the
+user; do not work around it. A pool the server has disabled or limited below
+the lanes asked for is a server setting (`MCP_MAX_LXD_JOBS`,
+`MCP_MAX_CLOUD_JOBS`, `MCP_MAX_WSL_JOBS`) that only the user can change.
 
 ## Run it
 
