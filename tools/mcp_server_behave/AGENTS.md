@@ -8,7 +8,8 @@ It ships two top-level packages:
 - `behave_campaign` -- the durable record of test units and attempts a campaign runs
   through. See [behave_campaign/README.md](behave_campaign/README.md).
 
-`behave_campaign` imports `behave_mcp.parser` and `behave_mcp.layout`;
+`behave_campaign` imports `behave_mcp.parser`, `behave_mcp.layout` and
+`behave_mcp.pools`;
 nothing in `behave_mcp` imports `behave_campaign` except the tool wrappers
 in `server.py`. Keep that direction so the
 module graph stays acyclic and `behave_campaign` remains extractable.

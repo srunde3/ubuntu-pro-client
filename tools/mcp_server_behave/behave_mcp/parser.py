@@ -15,20 +15,9 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from behave.parser import parse_file
 
-ALLOWED_MACHINE_TYPES = {
-    "lxd-container",
-    "lxd-vm",
-    "aws.generic",
-    "gcp.generic",
-    "azure.generic",
-    "aws.pro",
-    "gcp.pro",
-    "azure.pro",
-    "aws.pro-fips",
-    "gcp.pro-fips",
-    "azure.pro-fips",
-    "wsl",
-}
+from behave_mcp.pools import POOL_OF
+
+ALLOWED_MACHINE_TYPES = frozenset(POOL_OF)
 
 
 @dataclass
