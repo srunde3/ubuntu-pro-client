@@ -91,6 +91,17 @@ async def test_more_lanes_than_the_server_allows_is_an_error(repo):
 
 
 @pytest.mark.asyncio
+async def test_more_than_one_wsl_lane_is_refused_by_the_schema(repo):
+    async with create_connected_server_and_client_session(mcp) as client:
+        result = await client.call_tool(
+            "create_campaign",
+            {"campaign_id": "1234567", "lanes": {"wsl": 2}},
+        )
+
+    assert "less than or equal to 1" in result_error_text(result)
+
+
+@pytest.mark.asyncio
 async def test_an_unknown_release_is_an_error(repo):
     async with create_connected_server_and_client_session(mcp) as client:
         result = await client.call_tool(

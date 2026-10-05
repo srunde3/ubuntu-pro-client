@@ -63,7 +63,7 @@ from behave_mcp.messages import (
     StartScenarioResult,
     WaitForCompletionResult,
 )
-from behave_mcp.pools import Pool
+from behave_mcp.pools import MAX_WSL_JOBS, Pool
 from behave_mcp.ports import JobRegistry
 from behave_mcp.service import BehaveService
 
@@ -109,16 +109,16 @@ def tool(**kwargs: Any) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
 
 
 class CampaignLanes(BaseModel):
-    """Lanes per pool for a campaign. A pool left out gets one lane."""
+    """Jobs at once per pool. A pool in scope left out gets 1."""
 
     lxd: int | None = Field(
-        default=None, description="Lanes for lxd-container and lxd-vm."
+        default=None, ge=1, description="lxd-container and lxd-vm."
     )
     cloud: int | None = Field(
-        default=None, description="Lanes for aws.*, gcp.* and azure.*."
+        default=None, ge=1, description="aws.*, gcp.* and azure.*."
     )
     wsl: int | None = Field(
-        default=None, description="Lanes for wsl; 1 at most."
+        default=None, ge=1, le=MAX_WSL_JOBS, description="wsl."
     )
 
     def requested(self) -> dict[Pool, int]:
@@ -729,9 +729,10 @@ def list_campaigns(repo_root: RepoRoot = "") -> ListCampaignsResponse:
 
 @tool(
     description=(
-        "Report one campaign's current state: counts by unit state, the "
-        "units in flight, and the units needing action (failed, skipped or "
-        "error) -- one unit per row, or with group_by='scenario' one "
+        "Report one campaign's current state: counts by unit state, lanes "
+        "busy in each pool, the units in flight, and the units needing "
+        "action (failed, skipped or error) -- one unit per row, or with "
+        "group_by='scenario' one "
         "scenario per row with its units bucketed by state, which is how "
         "to see a scenario failing on every release at a glance. The "
         "release, machine_type, feature, scenario and state filters narrow "
