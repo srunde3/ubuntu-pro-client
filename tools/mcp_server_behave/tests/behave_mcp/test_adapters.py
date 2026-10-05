@@ -11,7 +11,13 @@ from behave_mcp.adapters import (
     PopenLauncher,
 )
 from behave_mcp.messages import JobRecord
-from behave_mcp.ports import Job, LogFileOpenError, ProcessStartError
+from behave_mcp.pools import Pool
+from behave_mcp.ports import (
+    Job,
+    LogFileOpenError,
+    PoolUsage,
+    ProcessStartError,
+)
 from tests.conftest import FakeProcessHandle, make_repo_with_feature
 
 # ---- LocalFeatureFileReader ----
@@ -366,26 +372,79 @@ def test_is_pid_alive_false_for_nonexistent_pid():
 # ---- InMemoryJobRegistry ----
 
 
-def _job(job_id, tmp_path, handle=None, reserved=False) -> Job:
+def _job(
+    job_id, tmp_path, handle=None, reserved=False, pools=(Pool.LXD,)
+) -> Job:
     return Job(
         job_id=job_id,
         process_handle=handle,
         log_dir=tmp_path,
         reserved=reserved,
+        pools=frozenset(pools),
     )
+
+
+_ONE_EACH = {Pool.LXD: 1, Pool.CLOUD: 1, Pool.WSL: 1}
 
 
 def test_registry_try_reserve_respects_capacity(tmp_path):
     registry = InMemoryJobRegistry()
 
-    first = registry.try_reserve(_job("a", tmp_path, reserved=True), 1)
+    first = registry.try_reserve(_job("a", tmp_path, reserved=True), _ONE_EACH)
     assert first.reserved is True
-    assert first.running_jobs == 0
+    assert first.full == ()
 
-    second = registry.try_reserve(_job("b", tmp_path, reserved=True), 1)
+    second = registry.try_reserve(
+        _job("b", tmp_path, reserved=True), _ONE_EACH
+    )
     assert second.reserved is False
-    assert second.running_jobs == 1
-    assert second.max_parallel == 1
+    assert second.full == (PoolUsage(pool=Pool.LXD, limit=1, running=1),)
+
+
+def test_registry_counts_each_pool_separately(tmp_path):
+    registry = InMemoryJobRegistry()
+    registry.try_reserve(
+        _job("a", tmp_path, reserved=True, pools=[Pool.WSL]), _ONE_EACH
+    )
+
+    lxd = registry.try_reserve(_job("b", tmp_path, reserved=True), _ONE_EACH)
+    wsl = registry.try_reserve(
+        _job("c", tmp_path, reserved=True, pools=[Pool.WSL]), _ONE_EACH
+    )
+
+    assert lxd.reserved is True
+    assert wsl.reserved is False
+    assert wsl.full == (PoolUsage(pool=Pool.WSL, limit=1, running=1),)
+
+
+def test_registry_reserves_every_pool_a_job_spans_or_none(tmp_path):
+    registry = InMemoryJobRegistry()
+    registry.try_reserve(
+        _job("a", tmp_path, reserved=True, pools=[Pool.WSL]), _ONE_EACH
+    )
+
+    spanning = registry.try_reserve(
+        _job("b", tmp_path, reserved=True, pools=[Pool.LXD, Pool.WSL]),
+        _ONE_EACH,
+    )
+    lxd = registry.try_reserve(_job("c", tmp_path, reserved=True), _ONE_EACH)
+
+    assert spanning.reserved is False
+    assert [usage.pool for usage in spanning.full] == [Pool.WSL]
+    assert registry.get("b") is None
+    assert lxd.reserved is True
+
+
+def test_registry_rejects_a_pool_with_no_limit(tmp_path):
+    registry = InMemoryJobRegistry()
+
+    result = registry.try_reserve(
+        _job("a", tmp_path, reserved=True, pools=[Pool.CLOUD]),
+        {Pool.LXD: 4},
+    )
+
+    assert result.reserved is False
+    assert result.full == (PoolUsage(pool=Pool.CLOUD, limit=0, running=0),)
 
 
 def test_registry_counts_running_processes(tmp_path):
@@ -394,9 +453,11 @@ def test_registry_counts_running_processes(tmp_path):
         "a", _job("a", tmp_path, handle=FakeProcessHandle(returncode=None))
     )
 
-    result = registry.try_reserve(_job("b", tmp_path, reserved=True), 1)
+    result = registry.try_reserve(
+        _job("b", tmp_path, reserved=True), _ONE_EACH
+    )
     assert result.reserved is False
-    assert result.running_jobs == 1
+    assert result.full[0].running == 1
 
 
 def test_registry_ignores_completed_processes(tmp_path):
@@ -405,9 +466,10 @@ def test_registry_ignores_completed_processes(tmp_path):
         "a", _job("a", tmp_path, handle=FakeProcessHandle(returncode=0))
     )
 
-    result = registry.try_reserve(_job("b", tmp_path, reserved=True), 1)
+    result = registry.try_reserve(
+        _job("b", tmp_path, reserved=True), _ONE_EACH
+    )
     assert result.reserved is True
-    assert result.running_jobs == 0
 
 
 def test_registry_release_and_clear(tmp_path):

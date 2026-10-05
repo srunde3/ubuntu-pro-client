@@ -6,6 +6,7 @@ import os
 import subprocess
 import threading
 from collections import deque
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -13,9 +14,11 @@ from pydantic import ValidationError
 
 from behave_mcp import domain, layout, parser
 from behave_mcp.messages import Artifacts, ExistsFlags, JobRecord, RepoState
+from behave_mcp.pools import Pool
 from behave_mcp.ports import (
     Job,
     LogFileOpenError,
+    PoolUsage,
     ProcessStartError,
     ReservationResult,
     WriteTargets,
@@ -99,21 +102,23 @@ class InMemoryJobRegistry:
         self._jobs: dict[str, Job] = {}
         self._lock = threading.Lock()
 
-    def try_reserve(self, job: Job, max_parallel: int) -> ReservationResult:
+    def try_reserve(
+        self, job: Job, limits: Mapping[Pool, int]
+    ) -> ReservationResult:
         with self._lock:
-            running_jobs = self._count_running_or_reserved_locked()
-            if running_jobs >= max_parallel:
-                return ReservationResult(
-                    reserved=False,
-                    running_jobs=running_jobs,
-                    max_parallel=max_parallel,
-                )
+            active = self._active_jobs_locked()
+            full = []
+            for pool in sorted(job.pools):
+                running = sum(1 for other in active if pool in other.pools)
+                limit = limits.get(pool, 0)
+                if running >= limit:
+                    full.append(
+                        PoolUsage(pool=pool, limit=limit, running=running)
+                    )
+            if full:
+                return ReservationResult(reserved=False, full=tuple(full))
             self._jobs[job.job_id] = job
-            return ReservationResult(
-                reserved=True,
-                running_jobs=running_jobs,
-                max_parallel=max_parallel,
-            )
+            return ReservationResult(reserved=True)
 
     def register(self, job_id: str, job: Job) -> None:
         with self._lock:
@@ -135,11 +140,11 @@ class InMemoryJobRegistry:
         with self._lock:
             self._jobs.clear()
 
-    def _count_running_or_reserved_locked(self) -> int:
-        running_jobs = 0
+    def _active_jobs_locked(self) -> list[Job]:
+        active = []
         for job in self._jobs.values():
             if job.reserved:
-                running_jobs += 1
+                active.append(job)
                 continue
 
             handle = job.process_handle
@@ -147,9 +152,9 @@ class InMemoryJobRegistry:
                 continue
 
             if handle.poll() is None:
-                running_jobs += 1
+                active.append(job)
 
-        return running_jobs
+        return active
 
 
 class LocalFeatureFileReader:

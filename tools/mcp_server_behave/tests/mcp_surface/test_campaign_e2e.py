@@ -36,6 +36,7 @@ from behave_campaign.runner import CampaignRunner, ThreadTicker
 from behave_campaign.service import CampaignService
 from behave_mcp.adapters import InMemoryJobRegistry
 from behave_mcp.config import load_settings
+from behave_mcp.pools import Pool
 from behave_mcp.server import create_service
 
 FEATURE = "features/_version.feature"
@@ -66,9 +67,7 @@ def test_a_campaign_runs_its_lanes_concurrently(monkeypatch, tmp_path):
 
     # A service of its own, so the lane limit is this test's rather than
     # whatever the server process was started with.
-    settings = load_settings(
-        {**os.environ, "MCP_MAX_PARALLEL_JOBS": str(LANES)}
-    )
+    settings = load_settings({**os.environ, "MCP_MAX_LXD_JOBS": str(LANES)})
     service = create_service(settings, registry=InMemoryJobRegistry())
 
     created = CampaignService(
@@ -77,7 +76,7 @@ def test_a_campaign_runs_its_lanes_concurrently(monkeypatch, tmp_path):
         events=events,
         now=system_now,
         repo_state=repo_state,
-        max_lane_ceiling=settings.max_parallel_jobs,
+        max_lane_ceiling=settings.pool_limits[Pool.LXD],
     ).create_campaign(
         campaign_id=CAMPAIGN_ID,
         repo_root=repo_root,

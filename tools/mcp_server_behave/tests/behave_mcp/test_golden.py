@@ -12,6 +12,7 @@ from behave_mcp.adapters import (
     LocalJobResultStoreFactory,
 )
 from behave_mcp.config import Settings
+from behave_mcp.domain import DEFAULT_POOL_LIMITS
 from behave_mcp.messages import JobRecord
 from behave_mcp.ports import Job
 from behave_mcp.service import BehaveService
@@ -58,8 +59,7 @@ def test_append_index_event_byte_shape(tmp_path):
 
 
 _SETTINGS = Settings(
-    allow_cloud_machine_types=False,
-    max_parallel_jobs=1,
+    pool_limits=DEFAULT_POOL_LIMITS,
     campaign_poll_timeout=60,
     transport="stdio",
     host="127.0.0.1",

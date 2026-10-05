@@ -255,7 +255,7 @@ async def test_mcp_start_rejects_cloud_machine_types():
         )
 
     error_text = result_error_text(result)
-    assert "Cloud machine_types are disabled by default" in error_text
+    assert "MCP_MAX_CLOUD_JOBS" in error_text
 
 
 def test_main_uses_stdio_transport_by_default(monkeypatch):

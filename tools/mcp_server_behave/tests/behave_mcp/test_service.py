@@ -11,6 +11,7 @@ from behave_mcp.adapters import (
 )
 from behave_mcp.config import Settings
 from behave_mcp.messages import RepoState
+from behave_mcp.pools import Pool
 from behave_mcp.ports import Job, LogFileOpenError, ProcessStartError
 from behave_mcp.service import (
     BehaveService,
@@ -25,10 +26,9 @@ from tests.conftest import (
 )
 
 
-def _settings(*, allow_cloud=False, max_parallel_jobs=1) -> Settings:
+def _settings(*, lxd=1, cloud=0, wsl=1) -> Settings:
     return Settings(
-        allow_cloud_machine_types=allow_cloud,
-        max_parallel_jobs=max_parallel_jobs,
+        pool_limits={Pool.LXD: lxd, Pool.CLOUD: cloud, Pool.WSL: wsl},
         campaign_poll_timeout=60,
         transport="stdio",
         host="127.0.0.1",
@@ -460,7 +460,10 @@ def test_start_scenario_requires_machine_types(tmp_path):
         service.start_scenario("features/cli/attach.feature", [])
 
 
-def test_start_scenario_rejects_cloud_machine_type_by_default(tmp_path):
+@pytest.mark.parametrize("machine_type", ["azure.generic", "aws.pro-fips"])
+def test_start_scenario_rejects_cloud_machine_type_by_default(
+    tmp_path, machine_type
+):
     repo_root = make_repo_with_feature(tmp_path, "features/cli/attach.feature")
     service = _make_service(
         FakeWorkspace(repo_root=repo_root, log_dir=tmp_path)
@@ -468,18 +471,31 @@ def test_start_scenario_rejects_cloud_machine_type_by_default(tmp_path):
 
     with pytest.raises(
         BehaveServiceError,
-        match="Cloud machine_types are disabled by default",
+        match="cloud machine_types are disabled.*MCP_MAX_CLOUD_JOBS",
     ):
         service.start_scenario(
-            "features/cli/attach.feature", machine_types=["azure.generic"]
+            "features/cli/attach.feature", machine_types=[machine_type]
         )
 
 
-def test_start_scenario_allows_cloud_machine_type_with_toggle(tmp_path):
+def test_start_scenario_rejects_a_disabled_wsl_pool(tmp_path):
     repo_root = make_repo_with_feature(tmp_path, "features/cli/attach.feature")
     service = _make_service(
         FakeWorkspace(repo_root=repo_root, log_dir=tmp_path),
-        settings=_settings(allow_cloud=True),
+        settings=_settings(wsl=0),
+    )
+
+    with pytest.raises(BehaveServiceError, match="MCP_MAX_WSL_JOBS"):
+        service.start_scenario(
+            "features/cli/attach.feature", machine_types=["wsl"]
+        )
+
+
+def test_start_scenario_allows_cloud_machine_type_with_a_limit(tmp_path):
+    repo_root = make_repo_with_feature(tmp_path, "features/cli/attach.feature")
+    service = _make_service(
+        FakeWorkspace(repo_root=repo_root, log_dir=tmp_path),
+        settings=_settings(cloud=1),
     )
 
     result = service.start_scenario(
@@ -496,7 +512,7 @@ def test_start_scenario_fails_fast_when_capacity_reached(tmp_path):
     launcher = FakeLauncher(handle=FakeProcessHandle(returncode=None))
     service = _make_service(
         FakeWorkspace(repo_root=repo_root, log_dir=tmp_path),
-        settings=_settings(max_parallel_jobs=1),
+        settings=_settings(lxd=1),
         launcher=launcher,
         registry=registry,
         new_job_id=lambda: next(ids),
@@ -512,8 +528,35 @@ def test_start_scenario_fails_fast_when_capacity_reached(tmp_path):
     ).model_dump(mode="json")
     assert second_result["ok"] is False
     assert second_result["status"] == "capacity_exceeded"
-    assert second_result["capacity"]["max_parallel_jobs"] == 1
-    assert second_result["capacity"]["running_jobs"] == 1
+    assert second_result["full_pools"] == [
+        {"pool": "lxd", "limit": 1, "running": 1}
+    ]
+    assert "MCP_MAX_LXD_JOBS" in second_result["error"]
+
+
+def test_a_full_pool_leaves_other_pools_free(tmp_path):
+    repo_root = make_repo_with_feature(tmp_path, "features/cli/attach.feature")
+    ids = iter(["job1", "job2", "job3"])
+    service = _make_service(
+        FakeWorkspace(repo_root=repo_root, log_dir=tmp_path),
+        settings=_settings(lxd=2, wsl=1),
+        launcher=FakeLauncher(handle=FakeProcessHandle(returncode=None)),
+        registry=InMemoryJobRegistry(),
+        new_job_id=lambda: next(ids),
+    )
+
+    def start(machine_type):
+        return service.start_scenario(
+            "features/cli/attach.feature", machine_types=[machine_type]
+        ).model_dump(mode="json")
+
+    assert start("wsl")["ok"] is True
+    second_wsl = start("wsl")
+    assert second_wsl["status"] == "capacity_exceeded"
+    assert second_wsl["full_pools"] == [
+        {"pool": "wsl", "limit": 1, "running": 1}
+    ]
+    assert start("lxd-vm")["ok"] is True
 
 
 def test_start_scenario_releases_slot_when_process_start_fails(tmp_path):

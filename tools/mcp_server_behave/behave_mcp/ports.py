@@ -4,12 +4,14 @@ These Protocols describe the external interactions the application core depends
 on. Concrete adapters live in ``behave_mcp.adapters``; tests may inject fakes.
 """
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, NamedTuple, Protocol
 
 from behave_mcp.messages import Artifacts, ExistsFlags, JobRecord, RepoState
 from behave_mcp.parser import FeatureDetail
+from behave_mcp.pools import Pool
 
 
 class LogFileOpenError(Exception):
@@ -76,22 +78,36 @@ class Job:
     log_dir: Path
     reserved: bool = False
     pid: int | None = None
+    pools: frozenset[Pool] = frozenset()
+
+
+@dataclass(frozen=True)
+class PoolUsage:
+    """How many jobs a pool holds against its limit."""
+
+    pool: Pool
+    limit: int
+    running: int
 
 
 @dataclass
 class ReservationResult:
-    """Outcome of an atomic capacity check + slot reservation."""
+    """Outcome of an atomic capacity check + slot reservation.
+
+    ``full`` lists the pools the job draws on that had no room.
+    """
 
     reserved: bool
-    running_jobs: int
-    max_parallel: int
+    full: tuple[PoolUsage, ...] = ()
 
 
 class JobRegistry(Protocol):
     """Thread-safe registry tracking reserved and running behave jobs."""
 
-    def try_reserve(self, job: Job, max_parallel: int) -> ReservationResult:
-        """Atomically count active jobs and reserve a slot if there is room."""
+    def try_reserve(
+        self, job: Job, limits: Mapping[Pool, int]
+    ) -> ReservationResult:
+        """Reserve a slot in each of the job's pools, or in none."""
         ...
 
     def register(self, job_id: str, job: Job) -> None:

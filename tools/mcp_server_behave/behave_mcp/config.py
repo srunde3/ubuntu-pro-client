@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing import Literal, cast
 
 from behave_mcp import domain
+from behave_mcp.pools import Pool
 
 TRANSPORT_ENV_VAR = "MCP_TRANSPORT"
 HOST_ENV_VAR = "MCP_HOST"
@@ -17,7 +18,6 @@ _ALLOWED_TRANSPORTS: tuple[str, ...] = ("stdio", "sse", "streamable-http")
 _DEFAULT_TRANSPORT = "stdio"
 _DEFAULT_HOST = "127.0.0.1"
 _DEFAULT_PORT = 8000
-_TRUTHY_FLAG_VALUES = {"1", "true", "yes", "on"}
 
 Transport = Literal["stdio", "sse", "streamable-http"]
 
@@ -30,8 +30,7 @@ class ConfigError(Exception):
 class Settings:
     """Validated server settings parsed once at startup."""
 
-    allow_cloud_machine_types: bool
-    max_parallel_jobs: int
+    pool_limits: Mapping[Pool, int]
     campaign_poll_timeout: int
     transport: Transport
     host: str
@@ -43,11 +42,9 @@ def load_settings(environ: Mapping[str, str]) -> Settings:
 
     Raises ConfigError if any value is present but unusable.
     """
+    _reject_removed(environ)
     return Settings(
-        allow_cloud_machine_types=_parse_flag(
-            environ, domain.ALLOW_CLOUD_MACHINE_TYPES_ENV_VAR
-        ),
-        max_parallel_jobs=_parse_max_parallel_jobs(environ),
+        pool_limits={pool: _parse_pool_limit(environ, pool) for pool in Pool},
         campaign_poll_timeout=_parse_campaign_poll_timeout(environ),
         transport=_parse_transport(environ),
         host=environ.get(HOST_ENV_VAR, "").strip() or _DEFAULT_HOST,
@@ -55,28 +52,31 @@ def load_settings(environ: Mapping[str, str]) -> Settings:
     )
 
 
-def _parse_flag(environ: Mapping[str, str], name: str) -> bool:
-    return environ.get(name, "").strip().lower() in _TRUTHY_FLAG_VALUES
+def _reject_removed(environ: Mapping[str, str]) -> None:
+    for name, replacement in domain.REMOVED_ENV_VARS.items():
+        if environ.get(name, "").strip():
+            raise ConfigError(f"{name} is no longer read; use {replacement}")
 
 
-def _parse_max_parallel_jobs(environ: Mapping[str, str]) -> int:
-    raw = environ.get(domain.MAX_PARALLEL_JOBS_ENV_VAR, "").strip()
+def _parse_pool_limit(environ: Mapping[str, str], pool: Pool) -> int:
+    name = domain.POOL_LIMIT_ENV_VARS[pool]
+    raw = environ.get(name, "").strip()
     if not raw:
-        return domain.DEFAULT_MAX_PARALLEL_JOBS
+        return domain.DEFAULT_POOL_LIMITS[pool]
 
+    cap = domain.POOL_LIMIT_CAPS.get(pool)
+    expected = (
+        f"an integer between 0 and {cap}"
+        if cap is not None
+        else "a non-negative integer"
+    )
     try:
         value = int(raw)
     except ValueError:
-        raise ConfigError(
-            f"{domain.MAX_PARALLEL_JOBS_ENV_VAR} must be a positive "
-            f"integer, got {raw!r}"
-        )
+        raise ConfigError(f"{name} must be {expected}, got {raw!r}")
 
-    if value <= 0:
-        raise ConfigError(
-            f"{domain.MAX_PARALLEL_JOBS_ENV_VAR} must be a positive "
-            f"integer, got {raw!r}"
-        )
+    if value < 0 or (cap is not None and value > cap):
+        raise ConfigError(f"{name} must be {expected}, got {raw!r}")
 
     return value
 

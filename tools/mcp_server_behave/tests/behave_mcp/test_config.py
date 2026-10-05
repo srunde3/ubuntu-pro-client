@@ -1,13 +1,13 @@
 import pytest
 
 from behave_mcp.config import ConfigError, Settings, load_settings
+from behave_mcp.pools import Pool
 
 
 def test_load_settings_defaults():
     settings = load_settings({})
     assert settings == Settings(
-        allow_cloud_machine_types=False,
-        max_parallel_jobs=1,
+        pool_limits={Pool.LXD: 1, Pool.CLOUD: 0, Pool.WSL: 1},
         campaign_poll_timeout=60,
         transport="stdio",
         host="127.0.0.1",
@@ -15,33 +15,45 @@ def test_load_settings_defaults():
     )
 
 
-def test_load_settings_allow_cloud_toggle():
-    assert (
-        load_settings(
-            {"MCP_ALLOW_CLOUD_MACHINE_TYPES": "yes"}
-        ).allow_cloud_machine_types
-        is True
+def test_load_settings_pool_limits():
+    settings = load_settings(
+        {
+            "MCP_MAX_LXD_JOBS": "8",
+            "MCP_MAX_CLOUD_JOBS": "6",
+            "MCP_MAX_WSL_JOBS": "0",
+        }
     )
-    assert (
-        load_settings(
-            {"MCP_ALLOW_CLOUD_MACHINE_TYPES": "no"}
-        ).allow_cloud_machine_types
-        is False
-    )
+    assert settings.pool_limits == {
+        Pool.LXD: 8,
+        Pool.CLOUD: 6,
+        Pool.WSL: 0,
+    }
 
 
-def test_load_settings_max_parallel_valid():
-    assert load_settings({"MCP_MAX_PARALLEL_JOBS": "4"}).max_parallel_jobs == 4
+@pytest.mark.parametrize(
+    "name", ["MCP_MAX_LXD_JOBS", "MCP_MAX_CLOUD_JOBS", "MCP_MAX_WSL_JOBS"]
+)
+@pytest.mark.parametrize("raw", ["abc", "-1"])
+def test_load_settings_pool_limit_invalid_raises(name, raw):
+    with pytest.raises(ConfigError, match=name):
+        load_settings({name: raw})
 
 
-def test_load_settings_max_parallel_non_integer_raises():
-    with pytest.raises(ConfigError, match="positive integer"):
-        load_settings({"MCP_MAX_PARALLEL_JOBS": "abc"})
+def test_load_settings_wsl_limit_above_one_raises():
+    with pytest.raises(ConfigError, match="between 0 and 1"):
+        load_settings({"MCP_MAX_WSL_JOBS": "2"})
 
 
-def test_load_settings_max_parallel_non_positive_raises():
-    with pytest.raises(ConfigError, match="positive integer"):
-        load_settings({"MCP_MAX_PARALLEL_JOBS": "0"})
+@pytest.mark.parametrize(
+    "name, replacement",
+    [
+        ("MCP_MAX_PARALLEL_JOBS", "MCP_MAX_LXD_JOBS"),
+        ("MCP_ALLOW_CLOUD_MACHINE_TYPES", "MCP_MAX_CLOUD_JOBS"),
+    ],
+)
+def test_load_settings_removed_variable_raises(name, replacement):
+    with pytest.raises(ConfigError, match=f"{name}.*{replacement}"):
+        load_settings({name: "1"})
 
 
 def test_load_settings_transport_override():

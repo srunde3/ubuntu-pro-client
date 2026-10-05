@@ -254,7 +254,7 @@ def campaign_service(repo_root: str) -> CampaignService:
         events=campaign_events(campaign_dir),
         now=system_now,
         repo_state=read_repo_state,
-        max_lane_ceiling=_settings.max_parallel_jobs,
+        max_lane_ceiling=sum(_settings.pool_limits.values()),
     )
 
 
@@ -360,9 +360,9 @@ def find_scenarios(
     description=(
         "Start a listed behave scenario through tox in the background and "
         "return a job_id immediately. feature_file must be a path returned "
-        "by list_features. machine_types is required (lxd-container, "
-        "lxd-vm; cloud machine types are blocked unless "
-        "MCP_ALLOW_CLOUD_MACHINE_TYPES is set). scenario_name (substring) "
+        "by list_features. machine_types is required; each draws on the "
+        "lxd, cloud or wsl pool, and a pool whose MCP_MAX_*_JOBS limit is "
+        "0 is disabled (cloud is by default). scenario_name (substring) "
         "and releases are optional filters onto the feature's Examples "
         "rows. install_from controls where ubuntu-pro-client is installed "
         "from (defaults to 'local'; set to 'proposed' to test the "
@@ -378,9 +378,8 @@ def start_scenario(
         list[str],
         Field(
             description=(
-                "Required. Allowed values: lxd-container, lxd-vm. Cloud "
-                "types (e.g. aws.generic) are blocked unless "
-                "MCP_ALLOW_CLOUD_MACHINE_TYPES is set."
+                "Required. lxd-container and lxd-vm use the lxd pool, "
+                "aws.*/gcp.*/azure.* the cloud pool, wsl the wsl pool."
             )
         ),
     ],
@@ -639,7 +638,7 @@ def get_scenario_artifacts(
         "the whole suite. Use list_dimensions first to discover valid "
         "release and machine_type values. Returns the unit count so the "
         "scope can be confirmed before any test runs. max_lanes may not "
-        "exceed MCP_MAX_PARALLEL_JOBS."
+        "exceed the server's job limits."
     )
 )
 def create_campaign(
@@ -680,7 +679,7 @@ def create_campaign(
             default=1,
             description=(
                 "How many behave jobs the campaign may run at once. Must "
-                "not exceed MCP_MAX_PARALLEL_JOBS."
+                "not exceed the server's job limits."
             ),
         ),
     ] = 1,

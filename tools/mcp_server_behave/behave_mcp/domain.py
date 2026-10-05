@@ -8,7 +8,7 @@ also live here.
 import re
 from enum import Enum
 from pathlib import Path
-from typing import Any, NamedTuple, Sequence
+from typing import Any, Mapping, NamedTuple, Sequence
 
 from behave_mcp import parser
 from behave_mcp.messages import (
@@ -25,17 +25,26 @@ from behave_mcp.messages import (
     ScenarioSummary,
 )
 from behave_mcp.parser import ALLOWED_MACHINE_TYPES
+from behave_mcp.pools import MAX_WSL_JOBS, POOL_OF, Pool
 
-CLOUD_MACHINE_TYPES = {
-    "aws.generic",
-    "gcp.generic",
-    "azure.generic",
-    "aws.pro",
-    "gcp.pro",
-    "azure.pro",
+POOL_LIMIT_ENV_VARS: dict[Pool, str] = {
+    Pool.LXD: "MCP_MAX_LXD_JOBS",
+    Pool.CLOUD: "MCP_MAX_CLOUD_JOBS",
+    Pool.WSL: "MCP_MAX_WSL_JOBS",
 }
-ALLOW_CLOUD_MACHINE_TYPES_ENV_VAR = "MCP_ALLOW_CLOUD_MACHINE_TYPES"
-MAX_PARALLEL_JOBS_ENV_VAR = "MCP_MAX_PARALLEL_JOBS"
+# Cloud jobs cost money, so they stay off until a limit is set.
+DEFAULT_POOL_LIMITS: dict[Pool, int] = {
+    Pool.LXD: 1,
+    Pool.CLOUD: 0,
+    Pool.WSL: 1,
+}
+POOL_LIMIT_CAPS: dict[Pool, int] = {Pool.WSL: MAX_WSL_JOBS}
+REMOVED_ENV_VARS: dict[str, str] = {
+    "MCP_MAX_PARALLEL_JOBS": (
+        "MCP_MAX_LXD_JOBS, MCP_MAX_CLOUD_JOBS and MCP_MAX_WSL_JOBS"
+    ),
+    "MCP_ALLOW_CLOUD_MACHINE_TYPES": "MCP_MAX_CLOUD_JOBS",
+}
 # Everything the server writes lives under one directory, one subdirectory
 # per kind of artifact, so a checkout has a single place to look and a single
 # thing to ignore or delete.
@@ -84,7 +93,6 @@ JOB_INDEX_FILE_NAME = "index.jsonl"
 STDOUT_LOG_SUFFIX = "_stdout.log"
 JSON_REPORT_SUFFIX = "_report.json"
 METADATA_SUFFIX = "_meta.json"
-DEFAULT_MAX_PARALLEL_JOBS = 1
 DEFAULT_JOB_LIST_LIMIT = 20
 MAX_JOB_LIST_LIMIT = 500
 DEFAULT_RESULTS_LIMIT = 20
@@ -151,7 +159,7 @@ def to_dimensions(dimensions: parser.Dimensions) -> Dimensions:
 
 
 def validate_machine_types(
-    machine_types: list[str], allow_cloud: bool
+    machine_types: list[str], pool_limits: Mapping[Pool, int]
 ) -> str | None:
     if not machine_types:
         return (
@@ -170,19 +178,18 @@ def validate_machine_types(
             "Allowed values: lxd-container,lxd-vm"
         )
 
-    cloud_machine_types = sorted(
-        machine_type
-        for machine_type in machine_types
-        if machine_type in CLOUD_MACHINE_TYPES
-    )
-    if cloud_machine_types and not allow_cloud:
-        return (
-            "Cloud machine_types are disabled by default. "
-            "Set "
-            f"{ALLOW_CLOUD_MACHINE_TYPES_ENV_VAR}=1 "
-            "to allow: "
-            f"{','.join(cloud_machine_types)}"
+    for pool in Pool:
+        disabled = sorted(
+            machine_type
+            for machine_type in machine_types
+            if POOL_OF[machine_type] == pool and not pool_limits.get(pool)
         )
+        if disabled:
+            return (
+                f"{pool} machine_types are disabled on this server. Set "
+                f"{POOL_LIMIT_ENV_VARS[pool]} to a positive integer to "
+                f"allow: {','.join(disabled)}"
+            )
 
     return None
 

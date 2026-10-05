@@ -134,11 +134,12 @@ class JobRecord(BaseModel):
     artifacts: Artifacts | None = None
 
 
-class Capacity(BaseModel):
-    """Parallel-job capacity reported when a start is rejected."""
+class PoolCapacity(BaseModel):
+    """A pool that had no room when a start was rejected."""
 
-    max_parallel_jobs: int
-    running_jobs: int
+    pool: str
+    limit: int
+    running: int
 
 
 class Failure(BaseModel):
@@ -212,7 +213,7 @@ class CapacityExceededResponse(BaseModel):
     status: Literal["capacity_exceeded"] = "capacity_exceeded"
     ok: bool = False
     error: str = ""
-    capacity: Capacity | None = None
+    full_pools: list[PoolCapacity] = []
 
 
 StartScenarioResult = Annotated[

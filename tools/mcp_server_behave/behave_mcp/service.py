@@ -7,7 +7,6 @@ from behave_mcp import domain, parser
 from behave_mcp.config import Settings
 from behave_mcp.messages import (
     ArtifactsResponse,
-    Capacity,
     CapacityExceededResponse,
     CompletedResponse,
     DescribeFeatureResponse,
@@ -24,6 +23,7 @@ from behave_mcp.messages import (
     LogRegionView,
     LogsResponse,
     LogSummaryView,
+    PoolCapacity,
     ResultsResponse,
     RunningResponse,
     RunStatus,
@@ -34,6 +34,7 @@ from behave_mcp.messages import (
     TimeoutResponse,
     WaitForCompletionResult,
 )
+from behave_mcp.pools import pools_of
 from behave_mcp.ports import (
     FeatureFileReader,
     Job,
@@ -300,7 +301,7 @@ class BehaveService:
             )
 
         machine_type_error = domain.validate_machine_types(
-            machine_types, self._settings.allow_cloud_machine_types
+            machine_types, self._settings.pool_limits
         )
         if machine_type_error:
             raise BehaveServiceError(machine_type_error)
@@ -316,26 +317,36 @@ class BehaveService:
         job_id = self._new_job_id()
         write_targets = results.write_targets(job_id)
 
+        pools = pools_of(machine_types)
         reserved_job = Job(
             job_id=job_id,
             process_handle=None,
             log_dir=log_dir,
             reserved=True,
+            pools=pools,
         )
         reservation = self._registry.try_reserve(
-            reserved_job, self._settings.max_parallel_jobs
+            reserved_job, self._settings.pool_limits
         )
         if not reservation.reserved:
+            names = ", ".join(str(usage.pool) for usage in reservation.full)
+            env_vars = ", ".join(
+                domain.POOL_LIMIT_ENV_VARS[usage.pool]
+                for usage in reservation.full
+            )
             return CapacityExceededResponse(
                 error=(
-                    "Maximum parallel behave jobs reached. "
-                    f"Set {domain.MAX_PARALLEL_JOBS_ENV_VAR} to a "
-                    "higher value or wait for an active job to complete."
+                    f"No room in the {names} pool. Wait for an active job "
+                    f"to complete, or raise {env_vars}."
                 ),
-                capacity=Capacity(
-                    max_parallel_jobs=reservation.max_parallel,
-                    running_jobs=reservation.running_jobs,
-                ),
+                full_pools=[
+                    PoolCapacity(
+                        pool=usage.pool.value,
+                        limit=usage.limit,
+                        running=usage.running,
+                    )
+                    for usage in reservation.full
+                ],
             )
 
         command = domain.build_command(
@@ -374,6 +385,7 @@ class BehaveService:
                 log_dir=log_dir,
                 reserved=False,
                 pid=handle.pid,
+                pools=pools,
             ),
         )
 

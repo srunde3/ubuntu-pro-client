@@ -197,8 +197,28 @@ when configuring an MCP client.
 
 The server also reads these variables at startup:
 
-- `MCP_ALLOW_CLOUD_MACHINE_TYPES`: defaults to disabled. Set to `1` (or `true`/`yes`/`on`) to allow cloud machine types (`aws.generic`, `gcp.generic`, `azure.generic`, `aws.pro`, `gcp.pro`, `azure.pro`).
-- `MCP_MAX_PARALLEL_JOBS`: positive integer limit for concurrently running behave jobs. Defaults to `1` when unset. When the limit is reached, `start_scenario` fails fast with `status: capacity_exceeded`.
+- `MCP_MAX_LXD_JOBS`, `MCP_MAX_CLOUD_JOBS`, `MCP_MAX_WSL_JOBS`: how many
+  behave jobs may run at once in each pool. Defaults are `1`, `0` and `1`.
+  `0` disables the pool, so cloud machine types are off until
+  `MCP_MAX_CLOUD_JOBS` is set. `MCP_MAX_WSL_JOBS` may only be `0` or `1`,
+  because WSL jobs share one Windows host.
+
+Each machine type draws on one pool:
+
+| Pool | Machine types |
+| --- | --- |
+| `lxd` | `lxd-container`, `lxd-vm` |
+| `cloud` | `aws.*`, `gcp.*`, `azure.*`, including `pro` and `pro-fips` |
+| `wsl` | `wsl` |
+
+A job holds one slot in every pool its `machine_types` draw on. When a pool
+is full, `start_scenario` fails fast with `status: capacity_exceeded` and
+`full_pools` naming each full pool with its limit and running count. Starting
+the server with the removed `MCP_MAX_PARALLEL_JOBS` or
+`MCP_ALLOW_CLOUD_MACHINE_TYPES` is an error that names their replacements.
+
+Other startup variables:
+
 - `MCP_TRANSPORT`: one of `stdio` (default), `sse`, or `streamable-http`.
 - `MCP_HOST`: host to bind when using the `sse`/`streamable-http` transports. Defaults to `127.0.0.1`. Ignored for `stdio`.
 - `MCP_PORT`: port to bind when using the `sse`/`streamable-http` transports. Defaults to `8000`. Ignored for `stdio`.
@@ -225,8 +245,8 @@ One more variable is read per call rather than at startup, because it follows
 
 - `feature_file` must be one of the paths returned by `list_features`.
 - `machine_types` is required.
-- Cloud machine types are blocked by default and require setting `MCP_ALLOW_CLOUD_MACHINE_TYPES=1`.
-- Parallel behave starts are capped at `1` by default, and can be adjusted with `MCP_MAX_PARALLEL_JOBS`.
+- Cloud machine types are blocked by default and require setting `MCP_MAX_CLOUD_JOBS`.
+- Concurrent jobs are capped per pool: one LXD job and one WSL job by default.
 
 ## TODOs
 
