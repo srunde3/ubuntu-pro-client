@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+import signal
 import subprocess
 import threading
 from collections import deque
@@ -46,7 +47,10 @@ class SubprocessHandle:
             self._log_file.close()
 
     def terminate(self) -> None:
-        self._process.terminate()
+        try:
+            os.killpg(self._process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
 
 
 class PopenLauncher:
@@ -69,9 +73,11 @@ class PopenLauncher:
                 command,
                 cwd=cwd,
                 env=env,
+                stdin=subprocess.DEVNULL,
                 stdout=log_file,
                 stderr=subprocess.STDOUT,
                 text=True,
+                start_new_session=True,
             )
         except Exception as exc:
             log_file.close()

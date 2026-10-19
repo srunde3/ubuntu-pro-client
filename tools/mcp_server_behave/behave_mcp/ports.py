@@ -39,7 +39,7 @@ class ProcessHandle(Protocol):
         ...
 
     def terminate(self) -> None:
-        """Terminate the underlying process."""
+        """Terminate the underlying process and every process it started."""
         ...
 
 

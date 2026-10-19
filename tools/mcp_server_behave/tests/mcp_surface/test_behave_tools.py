@@ -138,7 +138,7 @@ async def test_mcp_start_wait_and_log_flow(monkeypatch, tmp_path):
     monkeypatch.setenv("UBUNTU_PRO_CLIENT_REPO", str(_REPO_ROOT))
     monkeypatch.setenv("MCP_STATE_DIR", str(tmp_path))
 
-    def fake_popen(command, cwd, env, stdout, stderr, text):
+    def fake_popen(command, cwd, env, stdout, stderr, text, **_):
         report_path = Path(command[command.index("-o") + 1])
         stdout.write("line1\nline2\nline3\n")
         stdout.flush()

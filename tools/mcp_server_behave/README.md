@@ -19,6 +19,7 @@ The server exposes these MCP tools:
   - `limit` caps the matches (default 50), with `total` and `truncated` alongside; `limit_clamped` is set when a value above the server max was capped.
 - `start_scenario` -- starts a behave scenario in the background.
   - Returns a `job_id`.
+  - The job runs in its own session with no stdin, so `kill_job` stops it and everything it started.
   - Optional `install_from` controls where `ubuntu-pro-client` is installed from before the scenario runs (sets `UACLIENT_BEHAVE_INSTALL_FROM` for the behave subprocess). Allowed values: `local` (default), `archive`, `daily`, `staging`, `stable`, `proposed`.
   - Returns `repo_state`: `repo_root`'s git `commit`, `branch`, and `dirty` flag at launch time (all `null` when `repo_root` isn't a git checkout), so results can be correlated back to the exact code tested. Also persisted on the job record.
 - `list_scenario_jobs` -- lists active jobs plus a bounded window of recently completed ones.

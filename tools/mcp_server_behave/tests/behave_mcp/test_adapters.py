@@ -1,4 +1,5 @@
 import subprocess
+import time
 
 import pytest
 
@@ -303,13 +304,17 @@ def test_repo_state_returns_all_none_outside_a_git_checkout(tmp_path):
 def test_launcher_success(tmp_path, monkeypatch):
     calls = {}
 
-    def fake_popen(command, cwd, env, stdout, stderr, text):
+    def fake_popen(
+        command, cwd, env, stdin, stdout, stderr, text, start_new_session
+    ):
         calls["command"] = command
         calls["cwd"] = cwd
         calls["env"] = env
+        calls["stdin"] = stdin
         calls["stdout"] = stdout
         calls["stderr"] = stderr
         calls["text"] = text
+        calls["start_new_session"] = start_new_session
         return FakeProcessHandle(pid=4321)
 
     monkeypatch.setattr(adapters_module.subprocess, "Popen", fake_popen)
@@ -321,14 +326,68 @@ def test_launcher_success(tmp_path, monkeypatch):
     assert calls["command"] == ["tox"]
     assert calls["cwd"] == str(tmp_path)
     assert calls["env"] == {"A": "B"}
+    assert calls["stdin"] == subprocess.DEVNULL
     assert calls["stderr"] == subprocess.STDOUT
     assert calls["text"] is True
+    assert calls["start_new_session"] is True
     assert handle.poll() is None
     assert handle.pid == 4321
 
     handle.close()
     assert calls["stdout"].closed is True
+
+
+def test_launched_job_reads_no_stdin_from_the_server(tmp_path):
+    log_path = tmp_path / "out.log"
+    handle = PopenLauncher().launch(
+        ["sh", "-c", "read line; echo got=$line"],
+        str(tmp_path),
+        {"PATH": "/usr/bin:/bin"},
+        log_path,
+    )
+    assert _eventually(lambda: handle.poll() is not None)
+    handle.close()
+
+    assert log_path.read_text().strip() == "got="
+
+
+def test_terminate_stops_processes_the_job_started(tmp_path):
+    launcher = PopenLauncher()
+    pid_file = tmp_path / "child.pid"
+    handle = launcher.launch(
+        ["sh", "-c", "sleep 30 & echo $! > {}; wait".format(pid_file)],
+        str(tmp_path),
+        {"PATH": "/usr/bin:/bin"},
+        tmp_path / "out.log",
+    )
+    assert _eventually(
+        lambda: pid_file.exists() and pid_file.read_text().strip()
+    )
+    child = int(pid_file.read_text())
+
     handle.terminate()
+
+    assert _eventually(lambda: not launcher.is_pid_alive(child))
+    handle.close()
+
+
+def test_terminate_after_exit_is_harmless(tmp_path):
+    handle = PopenLauncher().launch(
+        ["true"], str(tmp_path), {"PATH": "/usr/bin:/bin"}, tmp_path / "o"
+    )
+    assert _eventually(lambda: handle.poll() is not None)
+
+    handle.terminate()
+    handle.close()
+
+
+def _eventually(condition, timeout=5.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if condition():
+            return True
+        time.sleep(0.05)
+    return False
 
 
 def test_launcher_log_open_failure(tmp_path):
