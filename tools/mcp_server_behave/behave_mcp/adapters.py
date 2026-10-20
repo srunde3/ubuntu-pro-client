@@ -13,7 +13,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from behave_mcp import domain, layout, parser
+from behave_mcp import layout, parser
 from behave_mcp.messages import Artifacts, ExistsFlags, JobRecord, RepoState
 from behave_mcp.pools import Pool
 from behave_mcp.ports import (
@@ -192,8 +192,8 @@ class LocalJobResultStore:
     def __init__(self, log_dir: Path) -> None:
         self._log_dir = log_dir
 
-    def _paths(self, job_id: str) -> domain.JobArtifactPaths:
-        return domain.job_artifact_paths(self._log_dir, job_id)
+    def _paths(self, job_id: str) -> layout.JobArtifactPaths:
+        return layout.job_artifact_paths(self._log_dir, job_id)
 
     def write_targets(self, job_id: str) -> WriteTargets:
         paths = self._paths(job_id)
@@ -243,7 +243,7 @@ class LocalJobResultStore:
             return
 
     def append_event(self, event: dict[str, Any]) -> None:
-        index_path = self._log_dir / domain.JOB_INDEX_FILE_NAME
+        index_path = self._log_dir / layout.JOB_INDEX_FILE_NAME
         try:
             with index_path.open("a", encoding="utf-8") as index_stream:
                 index_stream.write(
@@ -295,7 +295,7 @@ class LocalJobResultStore:
     def list_job_ids(self) -> list[str]:
         if not self._log_dir.exists():
             return []
-        suffix = domain.METADATA_SUFFIX
+        suffix = layout.METADATA_SUFFIX
         return sorted(
             path.name[: -len(suffix)]
             for path in self._log_dir.glob(f"*{suffix}")
@@ -338,7 +338,11 @@ class LocalWorkspace:
         Read per call rather than once at startup, because repo_root varies
         per call and the state directory follows it.
         """
-        return layout.state_dir(repo_root)
+        configured = os.environ.get(layout.STATE_DIR_ENV_VAR)
+        return layout.state_dir(
+            repo_root,
+            Path(configured).expanduser().resolve() if configured else None,
+        )
 
     def resolve_log_dir(self, repo_root: Path) -> Path:
         return self._subdir(repo_root, layout.JOBS_SUBDIR)

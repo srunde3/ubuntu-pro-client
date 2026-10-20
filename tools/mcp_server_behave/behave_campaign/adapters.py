@@ -42,7 +42,6 @@ from behave_campaign.ports import (
     CampaignNotFoundError,
     LaneStartError,
 )
-from behave_mcp import domain as job_domain
 from behave_mcp import layout
 from behave_mcp.pools import Pool
 
@@ -490,9 +489,9 @@ class FileCampaignRunLock:
 
 
 _JOB_FILE_SUFFIXES = {
-    "meta.json": job_domain.METADATA_SUFFIX,
-    "report.json": job_domain.JSON_REPORT_SUFFIX,
-    "stdout.log": job_domain.STDOUT_LOG_SUFFIX,
+    "meta.json": layout.METADATA_SUFFIX,
+    "report.json": layout.JSON_REPORT_SUFFIX,
+    "stdout.log": layout.STDOUT_LOG_SUFFIX,
 }
 
 

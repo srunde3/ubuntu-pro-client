@@ -92,6 +92,15 @@ def _repo_root(args: argparse.Namespace) -> Path:
     return Path(given).expanduser().resolve()
 
 
+def _state_dir(args: argparse.Namespace) -> Path:
+    """Where the server keeps its state for this checkout."""
+    configured = os.environ.get(layout.STATE_DIR_ENV_VAR)
+    return layout.state_dir(
+        _repo_root(args),
+        Path(configured).expanduser().resolve() if configured else None,
+    )
+
+
 def _campaign_file(args: argparse.Namespace) -> Path:
     """The campaign's file: given outright, or the server's file for an id.
 
@@ -100,7 +109,7 @@ def _campaign_file(args: argparse.Namespace) -> Path:
     """
     if args.campaign_file is not None:
         return args.campaign_file
-    return layout.campaign_file(_repo_root(args), args.campaign_id)
+    return layout.campaign_file(_state_dir(args), args.campaign_id)
 
 
 def _campaign_id(args: argparse.Namespace) -> str:
@@ -197,15 +206,15 @@ def _command_complete(args: argparse.Namespace) -> BaseModel:
 
 
 def _command_export(args: argparse.Namespace) -> BaseModel:
-    repo_root = _repo_root(args)
+    state = _state_dir(args)
     campaign_id = _campaign_id(args)
-    output = args.output or layout.export_file(repo_root, campaign_id)
+    output = args.output or layout.export_file(state, campaign_id)
     return _service(
         _campaign_file(args), events=_event_log(_campaign_file(args))
     ).export_campaign(
         campaign_id=campaign_id,
         output=Path(output).expanduser().resolve(),
-        jobs=JobDirFiles(layout.jobs_dir(repo_root)),
+        jobs=JobDirFiles(layout.jobs_dir(state)),
         writer=TarBundleWriter(),
     )
 

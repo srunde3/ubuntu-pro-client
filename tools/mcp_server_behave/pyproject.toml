@@ -94,8 +94,6 @@ forbidden_modules = [
   "behave_mcp.server",
   "behave_mcp.service",
 ]
-# Export reads the job file suffixes.
-ignore_imports = ["behave_campaign.adapters -> behave_mcp.domain"]
 
 [[tool.importlinter.contracts]]
 name = "behave_mcp layers"
@@ -127,6 +125,7 @@ name = "Domain and service modules do no direct I/O"
 type = "forbidden"
 source_modules = [
   "behave_mcp.domain",
+  "behave_mcp.layout",
   "behave_mcp.pools",
   "behave_mcp.service",
   "behave_campaign.domain",

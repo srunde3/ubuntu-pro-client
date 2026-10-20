@@ -14,8 +14,6 @@ description: Architecture and design rules for tools/mcp_server_behave, the beha
 
 `behave_campaign` may import `behave_mcp.parser`, `behave_mcp.pools` and `behave_mcp.layout`. Nothing in `behave_mcp` imports `behave_campaign`, except the tool wrappers in `behave_mcp/server.py`. Keep it that way, so the module graph stays acyclic and `behave_campaign` can be extracted.
 
-One exception exists today: `behave_campaign/adapters.py` reads the job file suffixes from `behave_mcp.domain` for export. Do not add more.
-
 `uv run lint-imports` enforces these rules and the layer table below, using the contracts under `[tool.importlinter]` in `pyproject.toml`. If a change breaks a contract, first move the code to the layer it belongs in. Change a contract only when the architecture itself changes, in the same commit, with the reason in the commit message.
 
 ## Layers
@@ -24,13 +22,13 @@ Both packages use ports and adapters, with one module per layer.
 
 | Layer | `behave_mcp` | `behave_campaign` | Rule |
 | --- | --- | --- | --- |
-| Domain | `domain.py`, `parser.py`, `pools.py` | `domain.py`, `discovery.py`, `export.py` | Pure rules. No file, process or network I/O, except reading feature files through `parser.py`. |
+| Domain | `domain.py`, `parser.py`, `pools.py`, `layout.py` | `domain.py`, `discovery.py`, `export.py` | Pure rules. No file, process or network I/O, except reading feature files through `parser.py`. |
 | Ports | `ports.py` | `ports.py` | `Protocol` interfaces the services depend on. |
 | Adapters | `adapters.py` | `adapters.py`, `repo.py` | Implement the ports with the filesystem, `subprocess`, `fcntl` and git. |
 | Services | `service.py` (`BehaveService`) | `service.py` (`CampaignService`), `runner.py` (`CampaignRunner`) | Orchestrate domain and ports. Most behaviour changes belong here. |
 | DTOs | `messages.py` | `messages.py`, `views.py` | Pydantic models returned to front-ends; `views.py` builds them from records. |
 | Front-ends | `server.py` | `cli.py` | Thin wrappers: parse arguments, call one service method, serialise the result. |
-| Config | `config.py`, `layout.py` | none | Env vars parsed once into `Settings`; `layout.py` names the state paths. |
+| Config | `config.py` | none | Env vars parsed once into `Settings`. |
 
 Small collaborators are passed as plain callables, not ports: the clock (`now_utc`, `now`, `monotonic`), `sleep`, `new_job_id` and the git read (`repo_state`). Tests replace them with lambdas.
 
@@ -44,7 +42,7 @@ Small collaborators are passed as plain callables, not ports: the clock (`now_ut
 | A new MCP tool | a wrapper in `server.py` registered with the local `@tool`, plus the README and the agent skills |
 | A new CLI command | a wrapper in `cli.py` over a `CampaignService` method |
 | A new env var | `config.py` (`Settings` and its parser) and the README's environment section |
-| A new path under the state directory | `layout.py` |
+| A new path under the state directory | `layout.py`, which names paths and reads no env vars. The caller resolves `MCP_STATE_DIR` and passes it in. |
 
 Register MCP tools with the local `@tool` decorator in `server.py`, never with `@mcp.tool`. It returns one compact JSON text block and publishes no output schema, which keeps results and the tool list small.
 
