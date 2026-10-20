@@ -19,6 +19,7 @@ The server exposes these MCP tools:
   - `limit` caps the matches (default 50), with `total` and `truncated` alongside; `limit_clamped` is set when a value above the server max was capped.
 - `start_scenario` -- starts a behave scenario in the background.
   - Returns a `job_id`.
+  - Optional `scenario_name` is a scenario's exact name, as `describe_feature` lists it; the job runs that scenario's rows and no other scenario. A name the feature does not have is rejected.
   - The job runs in its own session with no stdin, so `kill_job` stops it and everything it started.
   - Optional `install_from` controls where `ubuntu-pro-client` is installed from before the scenario runs (sets `UACLIENT_BEHAVE_INSTALL_FROM` for the behave subprocess). Allowed values: `local` (default), `archive`, `daily`, `staging`, `stable`, `proposed`.
   - Returns `repo_state`: `repo_root`'s git `commit`, `branch`, and `dirty` flag at launch time (all `null` when `repo_root` isn't a git checkout), so results can be correlated back to the exact code tested. Also persisted on the job record.
@@ -72,14 +73,14 @@ runs for days is recorded there instead.
 `create_campaign` plans one and stores it without starting anything;
 `list_campaigns` and `campaign_status` report on them. `control_campaign`
 with `action: start` then schedules it: the server keeps up to the campaign's
-`max_lanes` behave jobs in flight, records every outcome, and fills a lane as
+`lanes` behave jobs in flight in each pool, records every outcome, and fills a lane as
 soon as one frees, with no further calls needed to keep it moving. The same
 tool's `pause`, `resume` and `cancel` actions control it; pause and cancel
 both let in-flight jobs finish rather than killing them. `reopen_campaign`
 takes a cancellation back, for one made by mistake.
 
-Only one campaign schedules at a time, held by an advisory lock so a
-concurrent CLI fails cleanly instead of interleaving writes.
+Only one campaign schedules at a time, held by an advisory lock so a second
+server cannot schedule it too. The CLI does not take the lock.
 
 `await_campaign_events` is how a caller follows a running campaign: it blocks
 until something happens, returns every event after a cursor, and always
@@ -181,11 +182,15 @@ This package is not covered by the repo-root `tox.ini` lint/type envs
 
 ```bash
 uv sync --extra lint
-uv run black --check behave_mcp tests
-uv run isort --check-only behave_mcp tests
-uv run flake8 behave_mcp tests
-uv run mypy behave_mcp
+uv run black --check behave_mcp behave_campaign tests
+uv run isort --check-only behave_mcp behave_campaign tests
+uv run flake8 behave_mcp behave_campaign tests
+uv run mypy behave_mcp behave_campaign
+uv run lint-imports
 ```
+
+`lint-imports` checks the import contracts in `pyproject.toml`: which
+modules may import which, within and between the two packages.
 
 ## Environment variables
 
@@ -251,7 +256,6 @@ One more variable is read per call rather than at startup, because it follows
 
 ## TODOs
 
-- Add way to kill jobs if they are known to be hanging
 - Improve the job recovery mechanism; it's a little verbose on logs.
 
 Known limitation: job liveness after a server restart is determined by checking whether the recorded PID is still alive (`os.kill(pid, 0)`). If that PID has since been reused by an unrelated process, a dead job can be misreported as still running. This is considered an acceptable tradeoff for a local dev tool.

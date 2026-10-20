@@ -14,12 +14,14 @@ from behave_campaign.domain import (
     Lifecycle,
     LifecycleRecord,
     PlanRecord,
+    RetryRecord,
     Unit,
     classify_result,
     detect_signals,
     elapsed_seconds,
     last_state_reason,
     lifecycle,
+    outstanding,
     plan_tick,
 )
 from behave_mcp.pools import Pool
@@ -111,7 +113,7 @@ class TestLifecycle:
 
         assert lifecycle(records) == Lifecycle.RUNNING
 
-    def test_running_with_nothing_left_is_complete(self):
+    def test_running_with_nothing_left_stays_running_until_marked(self):
         records = [
             *plan(UNIT_A, UNIT_B),
             LifecycleRecord(Lifecycle.RUNNING, AT),
@@ -119,11 +121,21 @@ class TestLifecycle:
             attempt(UNIT_B, "passed"),
         ]
 
+        assert lifecycle(records) == Lifecycle.RUNNING
+        assert outstanding(records) == []
+
+    def test_a_written_complete_is_complete(self):
+        records = [
+            *plan(UNIT_A),
+            LifecycleRecord(Lifecycle.RUNNING, AT),
+            attempt(UNIT_A, "passed"),
+            LifecycleRecord(Lifecycle.COMPLETE, AT),
+        ]
+
         assert lifecycle(records) == Lifecycle.COMPLETE
 
     def test_problem_units_do_not_count_as_remaining_work(self):
-        # Nothing retries a failure on its own, so a campaign whose units
-        # all finished is complete even when some of them failed.
+        # Nothing retries a failure on its own.
         records = [
             *plan(UNIT_A, UNIT_B),
             LifecycleRecord(Lifecycle.RUNNING, AT),
@@ -131,7 +143,21 @@ class TestLifecycle:
             attempt(UNIT_B, "skipped"),
         ]
 
-        assert lifecycle(records) == Lifecycle.COMPLETE
+        assert outstanding(records) == []
+
+    def test_unattempted_running_and_retried_units_are_outstanding(self):
+        records = [
+            *plan(UNIT_A, UNIT_B, UNIT_C),
+            attempt(UNIT_A, "running"),
+            attempt(UNIT_B, "failed"),
+            RetryRecord(unit=UNIT_B, at=AT),
+        ]
+
+        assert [s.unit for s in outstanding(records)] == [
+            UNIT_A,
+            UNIT_B,
+            UNIT_C,
+        ]
 
     def test_a_paused_campaign_with_nothing_left_stays_paused(self):
         records = [
@@ -389,6 +415,7 @@ class TestPlanTick:
 
         assert tick.start == ()
         assert tick.lifecycle == Lifecycle.COMPLETE
+        assert tick.complete
 
     def test_a_paused_campaign_records_but_starts_nothing(self):
         records = [

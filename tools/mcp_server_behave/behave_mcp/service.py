@@ -1,6 +1,7 @@
 """Application service orchestrating behave jobs via injected ports."""
 
 import logging
+from pathlib import Path
 from typing import Callable
 
 from behave_mcp import domain, parser
@@ -39,6 +40,7 @@ from behave_mcp.ports import (
     FeatureFileReader,
     Job,
     JobRegistry,
+    JobResultStore,
     JobResultStoreFactory,
     LogFileOpenError,
     ProcessLauncher,
@@ -299,6 +301,14 @@ class BehaveService:
             raise BehaveServiceError(
                 f"Feature is not listed by list_features: {feature_file}"
             )
+        if scenario_name and scenario_name not in self._scenario_names(
+            resolved_repo_root, normalized
+        ):
+            raise BehaveServiceError(
+                f"No scenario named {scenario_name!r} in {feature_file}. "
+                "scenario_name must be a scenario's exact name, as "
+                "describe_feature lists it."
+            )
 
         machine_type_error = domain.validate_machine_types(
             machine_types, self._settings.pool_limits
@@ -430,6 +440,12 @@ class BehaveService:
             artifacts=artifacts,
             repo_state=repo_state,
         )
+
+    def _scenario_names(self, repo_root: Path, feature_file: str) -> set[str]:
+        for detail in self._feature_reader.discover_feature_details(repo_root):
+            if detail.path == feature_file:
+                return {scenario.name for scenario in detail.scenarios}
+        return set()
 
     def kill_job(self, job_id: str, repo_root: str = "") -> KillJobResponse:
         """Terminate a running job.
@@ -846,6 +862,10 @@ class BehaveService:
                 pid_alive=pid_alive,
             )
             status, ok = classification.status, classification.ok
+            if status == RunStatus.COMPLETED:
+                record = self._record_completion(
+                    job_id, results, returncode=returncode, ok=bool(ok)
+                )
 
         return JobSummary(
             job_id=job_id,
@@ -931,8 +951,10 @@ class BehaveService:
 
         ok_value = bool(classification.ok)
         artifacts = results.artifacts(job_id)
-        record = results.read_record(job_id)
-        response = CompletedResponse(
+        record = self._record_completion(
+            job_id, results, returncode=returncode, ok=ok_value
+        )
+        return CompletedResponse(
             ok=ok_value,
             job_id=job_id,
             returncode=returncode,
@@ -950,26 +972,38 @@ class BehaveService:
             ),
         )
 
-        artifacts_dict = artifacts.model_dump(mode="json")
+    def _record_completion(
+        self,
+        job_id: str,
+        results: JobResultStore,
+        *,
+        returncode: int | None,
+        ok: bool,
+    ) -> JobRecord:
+        """Write a job's completion the first time it is seen finished."""
+        record = results.read_record(job_id)
+        if record.status == JobStatus.COMPLETED:
+            return record
+
+        artifacts = results.artifacts(job_id)
         record.job_id = job_id
         record.status = JobStatus.COMPLETED
         record.completed_at = self._now_utc()
         record.returncode = returncode
-        record.ok = ok_value
+        record.ok = ok
         record.artifacts = artifacts
         results.write_record(job_id, record)
         results.append_event(
             {
                 "event": "completed",
-                "timestamp": self._now_utc(),
+                "timestamp": record.completed_at,
                 "job_id": job_id,
-                "ok": ok_value,
+                "ok": ok,
                 "returncode": returncode,
-                "artifacts": artifacts_dict,
+                "artifacts": artifacts.model_dump(mode="json"),
             },
         )
-
-        return response
+        return record
 
     def _recover_job(
         self, job_id: str, repo_root_override: str | None

@@ -1,9 +1,13 @@
 """Plain unit tests for pure domain logic."""
 
+import subprocess
+import sys
+
 import pytest
 
 from behave_mcp import domain
 from behave_mcp.messages import JobRecord
+from behave_mcp.pools import Pool
 
 
 def test_build_command_escapes_scenario_name_for_behave_regex(tmp_path):
@@ -16,8 +20,65 @@ def test_build_command_escapes_scenario_name_for_behave_regex(tmp_path):
     )
 
     assert command[command.index("--name") + 1] == (
-        r"apt_http\(s\)_proxy\ still\ works"
+        r"^apt_http\(s\)_proxy\ still\ works(?: -- @.*)?$"
     )
+
+
+def test_exact_name_pattern_selects_one_scenario_and_its_rows(tmp_path):
+    features = tmp_path / "features"
+    (features / "steps").mkdir(parents=True)
+    (features / "steps" / "steps.py").write_text(
+        "from behave import given\n"
+        "@given('step {x}')\n"
+        "def step(context, x):\n"
+        "    pass\n"
+    )
+    (features / "x.feature").write_text(
+        "Feature: x\n"
+        "  Scenario Outline: Attach command\n"
+        "    Given step <release>\n"
+        "    Examples: ubuntu release\n"
+        "      | release |\n"
+        "      | jammy   |\n"
+        "      | noble   |\n"
+        "\n"
+        "  Scenario Outline: Attach command with token\n"
+        "    Given step <release>\n"
+        "    Examples:\n"
+        "      | release |\n"
+        "      | jammy   |\n"
+        "\n"
+        "  Scenario: Attach command (plain)\n"
+        "    Given step x\n"
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "behave",
+            "--dry-run",
+            "--no-summary",
+            "-f",
+            "plain",
+            "--name",
+            domain.exact_name_pattern("Attach command"),
+        ],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    selected = [
+        line.strip()
+        for line in result.stdout.splitlines()
+        if "Scenario" in line
+    ]
+    assert selected == [
+        "Scenario Outline: Attach command -- @1.1 ubuntu release",
+        "Scenario Outline: Attach command -- @1.2 ubuntu release",
+    ]
 
 
 def test_classify_job_state_live_handle_running():
@@ -561,3 +622,16 @@ class TestDigestLog:
 
         assert len(digest.errors) == domain.DIGEST_MAX_REGIONS
         assert digest.errors_total == domain.DIGEST_MAX_REGIONS + 2
+
+
+def test_machine_type_errors_list_every_allowed_machine_type():
+    limits = {pool: 1 for pool in Pool}
+
+    missing = domain.validate_machine_types([], limits)
+    unknown = domain.validate_machine_types(["lxd-ctr"], limits)
+
+    for message in (missing, unknown):
+        assert message is not None
+        assert "aws.pro-fips" in message
+        assert "lxd-vm" in message
+        assert "wsl" in message

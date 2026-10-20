@@ -9,15 +9,19 @@ serialisation and locking helpers below, so there is one on-disk format.
 from __future__ import annotations
 
 import fcntl
+import gzip
+import io
 import json
 import os
+import tarfile
+import tempfile
 import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import IO, Any, Sequence
+from typing import IO, Any, Mapping, Sequence
 
-from behave_campaign import discovery
+from behave_campaign import discovery, export
 from behave_campaign.domain import (
     CampaignError,
     CampaignHeader,
@@ -38,6 +42,7 @@ from behave_campaign.ports import (
     CampaignNotFoundError,
     LaneStartError,
 )
+from behave_mcp import domain as job_domain
 from behave_mcp import layout
 from behave_mcp.pools import Pool
 
@@ -390,6 +395,9 @@ class NullEventLog:
     def latest_seq(self, campaign_id: str) -> int:
         return 0
 
+    def path_for(self, campaign_id: str) -> Path | None:
+        return None
+
 
 class ServiceLaneRunner:
     """Opens lanes by starting behave jobs through ``BehaveService``.
@@ -479,3 +487,86 @@ class FileCampaignRunLock:
                 return True
             fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
         return False
+
+
+_JOB_FILE_SUFFIXES = {
+    "meta.json": job_domain.METADATA_SUFFIX,
+    "report.json": job_domain.JSON_REPORT_SUFFIX,
+    "stdout.log": job_domain.STDOUT_LOG_SUFFIX,
+}
+
+
+class JobDirFiles:
+    """Reads job files from the behave MCP's shared ``jobs/`` directory."""
+
+    def __init__(self, jobs_dir: Path) -> None:
+        self._jobs_dir = jobs_dir
+
+    def _path(self, job_id: str, name: str) -> Path:
+        return self._jobs_dir / (job_id + _JOB_FILE_SUFFIXES[name])
+
+    def files(self, job_id: str) -> Mapping[str, Path]:
+        found = {}
+        for name in export.JOB_FILES:
+            path = self._path(job_id, name)
+            if path.is_file():
+                found[name] = path
+        return found
+
+
+class TarBundleWriter:
+    """Writes a gzipped tarball whose bytes depend only on its entries."""
+
+    def write(
+        self, output: Path, top: str, entries: Sequence[export.BundleEntry]
+    ) -> list[str]:
+        if output.exists():
+            raise CampaignError(
+                "{} already exists; choose another --output".format(output)
+            )
+        output.parent.mkdir(parents=True, exist_ok=True)
+        handle, temp_name = tempfile.mkstemp(
+            dir=output.parent, prefix=".export-", suffix=".tmp"
+        )
+        temp = Path(temp_name)
+        try:
+            with os.fdopen(handle, "wb") as raw:
+                skipped = self._write_archive(raw, top, entries)
+            # mkstemp makes the file private; use the umask's mode instead.
+            umask = os.umask(0)
+            os.umask(umask)
+            temp.chmod(0o666 & ~umask)
+            # Unlike a rename, a link never replaces an existing file.
+            try:
+                os.link(temp, output)
+            except FileExistsError:
+                raise CampaignError(
+                    "{} already exists; choose another --output".format(output)
+                ) from None
+        finally:
+            temp.unlink(missing_ok=True)
+        return skipped
+
+    @staticmethod
+    def _write_archive(
+        raw: IO[bytes], top: str, entries: Sequence[export.BundleEntry]
+    ) -> list[str]:
+        skipped = []
+        with gzip.GzipFile(fileobj=raw, mode="wb", mtime=0) as zipped:
+            with tarfile.open(fileobj=zipped, mode="w") as archive:
+                for entry in sorted(entries, key=lambda e: e.name):
+                    if entry.data is not None:
+                        data = entry.data
+                    elif entry.source is not None and entry.source.is_file():
+                        data = entry.source.read_bytes()
+                    else:
+                        skipped.append(entry.name)
+                        continue
+                    info = tarfile.TarInfo("{}/{}".format(top, entry.name))
+                    info.size = len(data)
+                    info.mode = 0o644
+                    info.mtime = 0
+                    info.uid = info.gid = 0
+                    info.uname = info.gname = ""
+                    archive.addfile(info, io.BytesIO(data))
+        return skipped

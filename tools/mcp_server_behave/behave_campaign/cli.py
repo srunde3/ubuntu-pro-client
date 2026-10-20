@@ -23,10 +23,12 @@ from behave_mcp import layout
 from behave_mcp.pools import Pool
 
 from .adapters import (
+    JobDirFiles,
     JsonlEventLog,
     NullEventLog,
     ParserFeatureReader,
     SingleFileCampaignStore,
+    TarBundleWriter,
     system_now,
 )
 from .domain import (
@@ -185,6 +187,26 @@ def _command_history(args: argparse.Namespace) -> BaseModel:
         campaign_id=_campaign_id(args),
         filters=_filters(args),
         limit=args.limit,
+    )
+
+
+def _command_complete(args: argparse.Namespace) -> BaseModel:
+    return _service(_campaign_file(args)).complete_campaign(
+        campaign_id=_campaign_id(args)
+    )
+
+
+def _command_export(args: argparse.Namespace) -> BaseModel:
+    repo_root = _repo_root(args)
+    campaign_id = _campaign_id(args)
+    output = args.output or layout.export_file(repo_root, campaign_id)
+    return _service(
+        _campaign_file(args), events=_event_log(_campaign_file(args))
+    ).export_campaign(
+        campaign_id=campaign_id,
+        output=Path(output).expanduser().resolve(),
+        jobs=JobDirFiles(layout.jobs_dir(repo_root)),
+        writer=TarBundleWriter(),
     )
 
 
@@ -452,6 +474,34 @@ def build_parser() -> argparse.ArgumentParser:
     )
     history.add_argument("--limit", type=int, default=DEFAULT_UNITS_LIMIT)
     _add_format(history, _attempt_rows)
+
+    complete = subparsers.add_parser(
+        "complete",
+        help="mark a campaign complete once no unit is left to run or retry",
+    )
+    _add_campaign(complete)
+    complete.set_defaults(handler=_command_complete)
+
+    exported = subparsers.add_parser(
+        "export",
+        help=(
+            "write a complete campaign's evidence bundle: a summary for "
+            "review, plus every job's files and the raw records"
+        ),
+    )
+    _add_campaign(exported)
+    exported.add_argument(
+        "--output",
+        type=Path,
+        metavar="PATH",
+        help=(
+            "where to write the .tar.gz; an existing file is never "
+            "replaced (default: <state dir>/{}/ID.tar.gz)".format(
+                layout.EXPORTS_SUBDIR
+            )
+        ),
+    )
+    exported.set_defaults(handler=_command_export)
 
     events = subparsers.add_parser(
         "events", help="read the events a running server has announced"

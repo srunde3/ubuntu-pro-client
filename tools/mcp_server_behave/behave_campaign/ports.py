@@ -9,7 +9,7 @@ callables rather than Protocols, matching ``behave_mcp.service``.
 """
 
 from pathlib import Path
-from typing import Any, Callable, Protocol, Sequence
+from typing import Any, Callable, Mapping, Protocol, Sequence
 
 from behave_campaign.domain import (
     CampaignError,
@@ -21,6 +21,7 @@ from behave_campaign.domain import (
     Record,
     Unit,
 )
+from behave_campaign.export import BundleEntry
 from behave_mcp.pools import Pool
 
 
@@ -80,6 +81,10 @@ class CampaignStore(Protocol):
 
     def list_ids(self) -> list[str]:
         """Return every stored campaign id, sorted."""
+        ...
+
+    def path_for(self, campaign_id: str) -> Path:
+        """Return the file holding the campaign's records."""
         ...
 
 
@@ -176,6 +181,10 @@ class EventLog(Protocol):
         """Return the highest seq stored, or 0 when there are none."""
         ...
 
+    def path_for(self, campaign_id: str) -> Path | None:
+        """Return the file holding the events, or None if none is kept."""
+        ...
+
 
 class Ticker(Protocol):
     """Calls a function repeatedly until it reports it is done.
@@ -222,4 +231,31 @@ class CampaignRunLock(Protocol):
 
     def held_by_other(self, campaign_id: str) -> bool:
         """Return whether some other process currently holds the lock."""
+        ...
+
+
+class JobFiles(Protocol):
+    """Finds what the behave jobs left behind, by job id."""
+
+    def files(self, job_id: str) -> Mapping[str, Path]:
+        """Return the job's files that exist, keyed by their bundle name.
+
+        The names are those in ``export.JOB_FILES``. A file the job never
+        wrote is absent from the mapping rather than an error.
+        """
+        ...
+
+
+class BundleWriter(Protocol):
+    """Writes an export bundle as one archive."""
+
+    def write(
+        self, output: Path, top: str, entries: Sequence[BundleEntry]
+    ) -> list[str]:
+        """Write ``entries`` under the directory ``top`` into ``output``.
+
+        Returns the names of entries whose source file did not exist; those
+        are left out. Never replaces an existing file: raises CampaignError
+        instead, and leaves nothing behind on any failure.
+        """
         ...

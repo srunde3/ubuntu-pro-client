@@ -107,6 +107,10 @@ uv run behave-campaign history --campaign-id 1234567 \
 # Follow a campaign a server is running, from a terminal.
 uv run behave-campaign events --campaign-id 1234567 --kinds actionable --follow
 
+# Close a campaign recorded by hand, then bundle its evidence.
+uv run behave-campaign complete --campaign-id 1234567
+uv run behave-campaign export --campaign-id 1234567
+
 # A campaign file anywhere else: its id is the file's name.
 uv run behave-campaign status --campaign /tmp/T.jsonl
 ```
@@ -273,14 +277,17 @@ heartbeat anyway.
 ## Lifecycle
 
 A campaign is `created` until it is started, then `running`, and `complete`
-once nothing is unattempted or in flight. `paused` and `cancelled` are asked
-for; `complete` is derived from the counts, so it can never disagree with the
-units.
+once nothing is unattempted, in flight, or waiting on a retry. Every state but
+`created` is a written `lifecycle` record. The server writes `complete` on the
+tick where the last lane finishes; for a campaign recorded by hand,
+`behave-campaign complete` writes it, and refuses while work is left.
+`paused` and `cancelled` are asked for.
 
 The latest `lifecycle` record is the current state, so a state is a position
 rather than a door that locks behind you. `reopen_campaign` uses that: it
-appends a `running` record after a `cancelled` one, leaving both in the file,
-so a campaign closed by mistake reads as one that was closed and reopened.
+appends a `running` record after a `cancelled` one -- or `complete`, when
+nothing is left -- leaving both in the file, so a campaign closed by mistake
+reads as one that was closed and reopened.
 
 Both `pause` and `cancel` **drain**: they stop opening lanes, but jobs already
 in flight run to completion and their results are still recorded. `lanes_busy`
@@ -293,8 +300,9 @@ flaky-or-real is not something an unattended loop should decide.
 `retry_units` is how that ask is made. It appends a `retry` record, so a unit
 becomes schedulable again when it carries one newer than its last attempt --
 the file still says who asked and when, and running it appends a `running`
-attempt that clears the request. Retrying a campaign that had finished starts
-it scheduling again; a paused one accepts the request and stays paused.
+attempt that clears the request. Retrying a `complete` campaign writes
+`running` and starts it scheduling again; a paused one accepts the request
+and stays paused.
 
 Cancelling is what closes a campaign against being picked up this way, which
 is the only thing `cancel` does that `pause` cannot -- a finished campaign
@@ -347,7 +355,7 @@ Same hexagonal layering as [behave_mcp](../behave_mcp), one module per layer:
   the order remaining work is taken up in. No I/O.
 - `ports.py` -- the Protocols the service and runner depend on:
   `CampaignStore`, `FeatureReader`, `LaneRunner`, `EventLog`, `Ticker`,
-  `CampaignRunLock`.
+  `CampaignRunLock`, `JobFiles`, `BundleWriter`.
 - `adapters.py` -- concrete implementations. Two stores satisfy
   `CampaignStore`: the MCP names a campaign by id inside a campaign
   directory, the CLI can also be pointed at a file. Both share one
@@ -355,6 +363,8 @@ Same hexagonal layering as [behave_mcp](../behave_mcp), one module per layer:
   is where the directory convention lives.
 - `service.py` -- `CampaignService`, driven by both the MCP tool wrappers and
   the CLI. Where behaviour changes belong.
+- `export.py` -- pure rules for a complete campaign's evidence bundle: what
+  goes in it, and rendering `SUMMARY.md`, `campaign.json` and `units.csv`.
 - `messages.py` -- pydantic DTOs returned across the MCP boundary.
 - `discovery.py` -- builds units from the feature files via
   `behave_mcp.parser`.
@@ -370,8 +380,8 @@ Same hexagonal layering as [behave_mcp](../behave_mcp), one module per layer:
   so the CLI and the MCP tools cannot drift apart.
 
 The run lock is an advisory `flock` on `<campaign_id>.lock`, held for as long
-as a campaign is actively scheduling, so a concurrent CLI fails cleanly
-instead of interleaving writes. The kernel drops it if the holder dies.
+as a campaign is actively scheduling, so a second server cannot schedule it
+too. The CLI does not take it. The kernel drops it if the holder dies.
 
 ## Build, test, lint
 

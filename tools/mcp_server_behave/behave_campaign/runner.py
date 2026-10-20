@@ -293,14 +293,15 @@ class CampaignRunner:
                 )
                 for status in stranded
             ]
+            rescheduling = bool(domain.outstanding([*records, *abandoned]))
             reopened = LifecycleRecord(
-                state=domain.Lifecycle.RUNNING, at=at, reason=reason
-            )
-            # Asked of the domain before anything is written, because the
-            # lock is only worth taking for a campaign that will schedule.
-            rescheduling = (
-                domain.lifecycle([*records, *abandoned, reopened])
-                == domain.Lifecycle.RUNNING
+                state=(
+                    domain.Lifecycle.RUNNING
+                    if rescheduling
+                    else domain.Lifecycle.COMPLETE
+                ),
+                at=at,
+                reason=reason,
             )
             taking_lock = rescheduling and self._active != campaign_id
             if taking_lock:
@@ -402,6 +403,8 @@ class CampaignRunner:
                 ],
             )
 
+            if state == domain.Lifecycle.COMPLETE:
+                self._append_state(campaign_id, domain.Lifecycle.RUNNING)
             lifecycle = domain.lifecycle(self._store.replay(campaign_id))
             rescheduling = lifecycle == domain.Lifecycle.RUNNING
             if rescheduling:
@@ -422,7 +425,15 @@ class CampaignRunner:
     # -- the tick ---------------------------------------------------------
 
     def tick(self, campaign_id: str) -> TickReport:
-        """Advance a campaign by one step. Safe to call directly in tests."""
+        """Advance a campaign by one step. Safe to call directly in tests.
+
+        Holds the same guard as the control verbs, so a pause or retry
+        lands wholly before or wholly after a tick.
+        """
+        with self._guard:
+            return self._tick_locked(campaign_id)
+
+    def _tick_locked(self, campaign_id: str) -> TickReport:
         records = self._store.replay(campaign_id)
         header = _header_of(records)
         lanes = self._read_lanes(records)
@@ -445,11 +456,11 @@ class CampaignRunner:
             )
             emitted.extend(self._outcome_events(plan.record, lanes))
 
-        starved: list[NewEvent] = []
+        starved: list[domain.Signal] = []
         started = self._open_lanes(
             campaign_id, header, plan.start, problems, starved
         )
-        emitted.extend(starved)
+        emitted.extend(self._signal_events(campaign_id, starved))
         emitted.extend(
             NewEvent(
                 kind=domain.EventKind.LANE_STARTED,
@@ -464,6 +475,8 @@ class CampaignRunner:
         )
 
         busy = sum(1 for lane in lanes if not lane.finished) + len(started)
+        if plan.complete:
+            self._append_state(campaign_id, domain.Lifecycle.COMPLETE)
         settled = self._store.replay(campaign_id)
         lifecycle = domain.lifecycle(settled)
         emitted.extend(
@@ -583,7 +596,7 @@ class CampaignRunner:
         header: domain.CampaignHeader,
         units: Sequence[Unit],
         problems: list[str],
-        starved: list[NewEvent],
+        starved: list[domain.Signal],
     ) -> list[AttemptStarted]:
         repo_root = Path(header.repo.root)
         install_from = header.install_from
@@ -602,9 +615,9 @@ class CampaignRunner:
                 # stops that pool; anything else stops the tick.
                 problems.append(str(error))
                 starved.append(
-                    NewEvent(
+                    domain.Signal(
                         kind=domain.EventKind.ANOMALY_CAPACITY_STARVED,
-                        at=self._now(),
+                        key=unit.pool.value,
                         data={
                             **unit.as_dict(),
                             "pool": unit.pool.value,
@@ -616,6 +629,9 @@ class CampaignRunner:
                     break
                 full.add(error.full_pool)
                 continue
+            self._reported.discard(
+                (domain.EventKind.ANOMALY_CAPACITY_STARVED, unit.pool.value)
+            )
             started.append(
                 AttemptStarted(
                     unit=unit,

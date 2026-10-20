@@ -18,6 +18,7 @@ from behave_campaign.domain import (
     LifecycleRecord,
     PlanRecord,
     RepoState,
+    RetryRecord,
     Unit,
     lifecycle,
     reduce_units,
@@ -46,6 +47,14 @@ WSL_UNITS = [
     Unit("features/w.feature", "W", "jammy", "wsl"),
     Unit("features/w.feature", "W", "noble", "wsl"),
 ]
+
+
+def written_states(store, campaign_id="1234567"):
+    return [
+        record.state
+        for record in store.replay(campaign_id)
+        if isinstance(record, LifecycleRecord)
+    ]
 
 
 def completed(passed=1, failed=0, job_id="job"):
@@ -470,6 +479,10 @@ class TestTick:
         assert report.lifecycle == Lifecycle.COMPLETE
         assert report.finished
         assert report.lanes_busy == 0
+        assert written_states(store) == [
+            Lifecycle.RUNNING,
+            Lifecycle.COMPLETE,
+        ]
 
     def test_a_campaign_with_work_left_is_not_finished(
         self, runner, store, lanes
@@ -663,6 +676,7 @@ class TestReopen:
         # which is exactly what reopening it was for.
         assert response.lifecycle == Lifecycle.COMPLETE
         assert not response.rescheduling
+        assert written_states(store)[-1] == Lifecycle.COMPLETE
         assert runner.retry_units("1234567").requeued == 1
 
     def test_reopening_a_campaign_that_was_not_cancelled_is_rejected(
@@ -1153,6 +1167,23 @@ class TestRetryUnits:
         lanes.finish(job_id, **kwargs)
         runner.tick("1234567")
 
+    def test_retrying_a_complete_campaign_writes_running(
+        self, runner, store, lanes
+    ):
+        create(store, units=[UNITS[0]], lxd_lanes=1)
+        runner.start("1234567")
+        self._finish(runner, lanes, "job1", passed=0, failed=1)
+
+        response = runner.retry_units("1234567")
+
+        assert response.rescheduling
+        assert response.lifecycle == Lifecycle.RUNNING
+        assert written_states(store) == [
+            Lifecycle.RUNNING,
+            Lifecycle.COMPLETE,
+            Lifecycle.RUNNING,
+        ]
+
     def test_a_failed_unit_becomes_schedulable_again(
         self, runner, store, lanes
     ):
@@ -1201,8 +1232,10 @@ class TestRetryUnits:
 
         runner.retry_units("1234567", reason="looked flaky")
 
-        stored = store.replay("1234567")[-1]
-        assert stored.reason == "looked flaky"
+        retries = [
+            r for r in store.replay("1234567") if isinstance(r, RetryRecord)
+        ]
+        assert retries[-1].reason == "looked flaky"
 
     def test_it_defaults_to_the_problem_states(self, runner, store, lanes):
         create(store, lxd_lanes=3)
@@ -1374,6 +1407,58 @@ class TestSignals:
 
         assert len(starved) == 1
         assert starved[0].data["reason"]
+
+    def test_starvation_is_reported_once_per_episode(
+        self, store, lock, events
+    ):
+        lanes = FakeLanes(full_pools={Pool.LXD})
+        runner = CampaignRunner(
+            store=store,
+            lanes=lanes,
+            lock=lock,
+            events=events,
+            now=lambda: AT,
+            ticker=FakeTicker(),
+        )
+        create(store, lxd_lanes=1)
+        runner.start("1234567")
+
+        def starved():
+            return events.read(
+                "1234567",
+                since_seq=0,
+                kinds=["anomaly.capacity_starved"],
+                limit=10,
+            )
+
+        runner.tick("1234567")
+        runner.tick("1234567")
+        runner.tick("1234567")
+        assert len(starved()) == 1
+
+        lanes.full_pools.clear()
+        runner.tick("1234567")
+        lanes.finish("job1")
+        lanes.full_pools.add(Pool.LXD)
+        runner.tick("1234567")
+        runner.tick("1234567")
+
+        assert len(starved()) == 2
+
+    def test_a_tick_waits_for_a_control_verb_in_progress(self, runner, store):
+        create(store)
+        runner.start("1234567")
+        ticked = threading.Event()
+
+        with runner._guard:
+            thread = threading.Thread(
+                target=lambda: (runner.tick("1234567"), ticked.set())
+            )
+            thread.start()
+            assert not ticked.wait(0.2)
+
+        assert ticked.wait(5)
+        thread.join(5)
 
     def test_a_scenario_failing_across_releases_is_reported(
         self, runner, store, lanes

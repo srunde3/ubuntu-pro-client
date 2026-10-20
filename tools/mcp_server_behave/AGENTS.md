@@ -1,113 +1,24 @@
-# AGENTS.md -- tools/mcp_server_behave
+# AGENTS.md for tools/mcp_server_behave
 
-This subproject is a standalone `uv`-managed project with its own
-`pyproject.toml`, virtualenv, and CI job, separate from the rest of the repo.
-It ships two top-level packages:
+This is a standalone `uv` project with two packages: `behave_mcp` runs behave jobs, serves the feature catalog and hosts the MCP server, and `behave_campaign` keeps the campaign record, schedules its jobs and provides the `behave-campaign` CLI. It is a local project with no consumers. Nothing here runs in CI.
 
-- `behave_mcp` -- a host-side MCP server for running behave scenarios.
-- `behave_campaign` -- the durable record of test units and attempts a campaign runs
-  through. See [behave_campaign/README.md](behave_campaign/README.md).
+## Read before changing code
 
-`behave_campaign` imports `behave_mcp.parser`, `behave_mcp.layout` and
-`behave_mcp.pools`;
-nothing in `behave_mcp` imports `behave_campaign` except the tool wrappers
-in `server.py`. Keep that direction so the
-module graph stays acyclic and `behave_campaign` remains extractable.
+| Skill | Read it when |
+| --- | --- |
+| [behave-mcp-architecture](.claude/skills/behave-mcp-architecture/SKILL.md) | before any change. It covers the layers, where a change goes, the design and change rules, the test layout, and the checks every change must pass. |
+| [behave-mcp-unit-tests](.claude/skills/behave-mcp-unit-tests/SKILL.md) | writing or reviewing tests for one layer |
+| [behave-mcp-integration-tests](.claude/skills/behave-mcp-integration-tests/SKILL.md) | testing an MCP tool, a CLI command, server wiring, startup, or the real feature files |
+| [behave-mcp-e2e-tests](.claude/skills/behave-mcp-e2e-tests/SKILL.md) | a change that needs real behave jobs to prove it |
 
-The root [AGENTS.md](../../AGENTS.md) still applies (terminology, safety
-rules), **except**: this package targets modern Python (>=3.10) and is not
-constrained by the root's Python 3.5/Xenial compatibility requirement.
+[README.md](README.md) documents the tool surface, env vars and defaults for people running the server.
 
-## Architecture
+## Where the root AGENTS.md does not apply
 
-Hexagonal/ports-and-adapters, one module per layer. `behave_campaign` follows
-the same layering; its modules are listed in its own README.
+The root [AGENTS.md](../../AGENTS.md) applies here, terminology and safety rules included, with these exceptions:
 
-`behave_mcp`:
-
-- `domain.py` -- pure logic (command building, validation, report summarizing).
-  No I/O, no framework imports.
-- `ports.py` -- `Protocol` interfaces the domain/service layer depends on
-  (`ProcessLauncher`, job registry, artifact store, workspace).
-- `adapters.py` -- concrete implementations of those ports (`subprocess.Popen`,
-  filesystem, in-memory registry). Tests inject fakes instead of these.
-- `service.py` -- `BehaveService`, orchestrates domain + ports into the actual
-  tool behaviors. This is where most business logic changes belong.
-- `server.py` -- the tool wrappers; thin, just parses/serializes and
-  calls into `_service`. Register them with the local `@tool`, not
-  `@mcp.tool`: it answers with one compact JSON text block and publishes
-  no outputSchema, which is what keeps results and the tool list small.
-- `config.py` -- startup env var parsing into a validated `Settings` dataclass.
-- `messages.py` -- pydantic DTOs returned across the MCP boundary.
-
-When adding behavior, prefer changing `domain.py`/`service.py` over `server.py`.
-
-## Build, test, lint
-
-```bash
-uv sync --extra test          # or --extra lint
-uv run pytest -q -m "not e2e" # fast tests; e2e need real LXD + a contract token
-uv run black --check behave_mcp behave_campaign tests
-uv run isort --check-only behave_mcp behave_campaign tests
-uv run flake8 behave_mcp behave_campaign tests
-uv run mypy behave_mcp behave_campaign
-```
-
-CI (`.github/workflows/mcp-server-behave.yaml`) runs these on changes under
-this path only.
-
-## Test conventions
-
-`tests/` is laid out so it is obvious what a failure implicates:
-
-- `tests/behave_mcp/` -- unit tests for that package's layers, one file per
-  layer (`test_domain.py`, `test_adapters.py`, `test_service.py`, ...).
-  `test_service.py` exercises `BehaveService` directly (real adapters, fakes
-  for the launcher/workspace), not the MCP tool layer. `test_golden.py` holds
-  byte-shape tests for on-disk serialization; treat failures there as a
-  deliberate format change, not a bug to silence.
-- `tests/behave_campaign/` -- the same, for that package.
-- `tests/shared/` -- code both packages depend on. `parser.py` lives in
-  `behave_mcp` but `behave_campaign` builds every campaign plan with it, so a
-  parser change breaks both and its tests sit apart from either.
-- `tests/mcp_surface/` -- `server.py`'s tool wrappers over the real MCP
-  protocol, spanning both packages. Two e2e tests there run real
-  subprocesses: `test_e2e.py` needs LXD and a contract token, while
-  `test_campaign_e2e.py` needs neither -- it drives a real campaign through
-  the real scheduler over `features/_version.feature`, whose scenarios skip
-  without `check_version` config, so it proves concurrency without
-  provisioning anything. The rest run in process.
-
-Run the campaign e2e when changing the scheduler, the lane runner, or
-anything about how jobs are started; it is the only test where behave
-subprocesses really run at once:
-
-```bash
-uv run pytest -q -m "e2e and long_running" \
-  tests/mcp_surface/test_campaign_e2e.py
-```
-
-Each directory is a package (`__init__.py`), so the two `test_domain.py` files
-coexist without a naming dance, and `tests` itself is one so nothing there can
-shadow an installed module.
-
-Shared fixtures and test doubles live in `tests/conftest.py`
-(`make_repo_with_feature`, `FakeWorkspace`, `FakeProcess`, `result_json`,
-`result_error_text`), imported as `from tests.conftest import ...`. Reuse them
-instead of adding another per-file copy.
-
-## Docs
-
-`README.md` is the source of truth for the tool surface, env vars, and safety
-constraints. Update it alongside any change to tool signatures, config, or
-defaults.
-
-## Code conventions
-
-- DO NOT write long comments explaining behavior. Behavior should be obvious from the code. If behavior is not obvious, raise it to the user.
-- NEVER include historical decisions/narrative in code as comments or docstrings. Code should ONLY describe the current state.
-- ALWAYS make commit messages concise, and use conventional commit format.
-
-## Project status
-
-This project is currently WIP with no consumers. Breaking changes are OK, just flag them to the user. Breaking changes must be justified with an improvement in some aspect like maintainability, feature surface, duplication, etc.
+- The package targets Python 3.10 or later. The root's Python 3.5 requirement does not apply.
+- Dependencies are declared in this `pyproject.toml` and locked in `uv.lock`. Run everything with `uv`, not `tox`.
+- Tests MUST use hand-written fakes and `monkeypatch`, not `mock`/`unittest.mock`. A mock is acceptable only when the test cares that a call happened and nothing about what the call does.
+- Tests MAY be plain functions. Grouping them in classes is optional.
+- The checks in the architecture skill replace `tox -e test` and the root's lint envs. All of them MUST pass before a change is done.

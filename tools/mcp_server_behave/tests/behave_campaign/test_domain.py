@@ -357,10 +357,6 @@ class TestStringEnums:
             "running",
         }
 
-    def test_only_three_lifecycle_states_are_ever_written(self):
-        # created is the absence of a record; complete is derived.
-        assert set(WRITABLE_LIFECYCLE) == {
-            Lifecycle.RUNNING,
-            Lifecycle.PAUSED,
-            Lifecycle.CANCELLED,
-        }
+    def test_every_state_but_created_is_written(self):
+        # created is the absence of a record.
+        assert set(WRITABLE_LIFECYCLE) == set(Lifecycle) - {Lifecycle.CREATED}

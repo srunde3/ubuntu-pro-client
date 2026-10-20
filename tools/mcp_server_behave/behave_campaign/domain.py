@@ -75,8 +75,8 @@ class UnitState(_StringEnum):
 class Lifecycle(_StringEnum):
     """Where a campaign is in its life.
 
-    CREATED is the absence of any lifecycle record and COMPLETE is derived
-    from the counts, so neither is ever written; the other three are.
+    CREATED is the absence of any lifecycle record; every other state is
+    written.
     """
 
     CREATED = "created"
@@ -86,11 +86,11 @@ class Lifecycle(_StringEnum):
     COMPLETE = "complete"
 
 
-# The states a caller can ask for, as opposed to the two that are derived.
 WRITABLE_LIFECYCLE = (
     Lifecycle.RUNNING,
     Lifecycle.PAUSED,
     Lifecycle.CANCELLED,
+    Lifecycle.COMPLETE,
 )
 # Outcomes worth another look. A unit in one of these is only ever re-run
 # when someone asks.
@@ -941,34 +941,29 @@ def describe_units(units: Iterable[Unit], limit: int = 5) -> str:
 
 
 def lifecycle(records: Sequence[Record]) -> str:
-    """Return a campaign's current lifecycle state.
+    """Return a campaign's current lifecycle state: the latest one written.
 
-    ``complete`` is derived rather than written: a running campaign with
-    nothing left unattempted and nothing in flight is finished, whether or
-    not anyone noticed. Problem units do not count as remaining work,
-    because a non-passing unit is only ever retried when asked for.
-
-    The latest lifecycle record wins, which is what lets a cancellation be
-    reversed: the ``cancelled`` record stays where it is and a ``running``
-    one is appended after it, so the campaign goes back to work with both
-    still readable.
+    Earlier records stay readable, so a campaign cancelled and reopened
+    still reads as one that was closed and reopened.
     """
     current = Lifecycle.CREATED
     for record in records:
         if isinstance(record, LifecycleRecord):
             current = record.state
+    return current
 
-    if current != Lifecycle.RUNNING:
-        return current
 
-    statuses = reduce_units(records)
-    outstanding = [
+def outstanding(records: Sequence[Record]) -> list[UnitStatus]:
+    """Units with work left: never attempted, in flight, or asked to retry.
+
+    Problem units do not count, because one is only re-run when asked for.
+    """
+    return [
         status
-        for status in statuses
+        for status in reduce_units(records)
         if status.state in (UnitState.UNATTEMPTED, UnitState.RUNNING)
         or status.retry_pending
     ]
-    return Lifecycle.RUNNING if outstanding else Lifecycle.COMPLETE
 
 
 def last_state_reason(records: Sequence[Record]) -> str:
@@ -1048,12 +1043,14 @@ class TickPlan:
 
     ``record`` holds the finished lanes, classified. ``start`` holds the
     units to open new lanes for. Both are empty when there is nothing to do,
-    which is the common case.
+    which is the common case. ``complete`` means a running campaign has no
+    work left and should be marked complete.
     """
 
     record: tuple[Classification, ...] = ()
     start: tuple[Unit, ...] = ()
     lifecycle: str = Lifecycle.CREATED
+    complete: bool = False
 
     @property
     def idle(self) -> bool:
@@ -1084,6 +1081,10 @@ def plan_tick(
     state = lifecycle(after)
     if state != Lifecycle.RUNNING:
         return TickPlan(record=classified, lifecycle=state)
+    if not outstanding(after):
+        return TickPlan(
+            record=classified, lifecycle=Lifecycle.COMPLETE, complete=True
+        )
 
     busy: dict[Pool, int] = {}
     for lane in lanes:

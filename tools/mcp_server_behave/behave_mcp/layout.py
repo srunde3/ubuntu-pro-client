@@ -14,6 +14,7 @@ STATE_DIR_ENV_VAR = "MCP_STATE_DIR"
 DEFAULT_STATE_DIR_NAME = ".mcp_server_behave"
 JOBS_SUBDIR = "jobs"
 CAMPAIGNS_SUBDIR = "campaigns"
+EXPORTS_SUBDIR = "exports"
 CAMPAIGN_SUFFIX = ".jsonl"
 
 
@@ -31,3 +32,11 @@ def campaign_dir(repo_root: Path) -> Path:
 
 def campaign_file(repo_root: Path, campaign_id: str) -> Path:
     return campaign_dir(repo_root) / (campaign_id + CAMPAIGN_SUFFIX)
+
+
+def jobs_dir(repo_root: Path) -> Path:
+    return state_dir(repo_root) / JOBS_SUBDIR
+
+
+def export_file(repo_root: Path, campaign_id: str) -> Path:
+    return state_dir(repo_root) / EXPORTS_SUBDIR / (campaign_id + ".tar.gz")

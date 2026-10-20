@@ -100,3 +100,12 @@ of <total> units. Install source: <install_from>. Checkout: <branch>@<commit>.
 
 Campaign id: <id>. Job ids above open with get_scenario_errors.
 ```
+
+Then write the evidence bundle with the CLI, from `tools/mcp_server_behave`:
+
+```bash
+uv run behave-campaign export --campaign-id <id>
+```
+
+Give the user the bundle's `path` to attach to the SRU bug, and pass on any
+`missing_files` it lists. Do not attach it or post to Launchpad yourself.

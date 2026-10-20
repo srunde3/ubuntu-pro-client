@@ -1,11 +1,15 @@
 import json
+import os
+import tarfile
 
 import pytest
 
 from behave_campaign.adapters import (
     FileCampaignRunLock,
+    JobDirFiles,
     JsonlCampaignStore,
     SingleFileCampaignStore,
+    TarBundleWriter,
 )
 from behave_campaign.domain import (
     AttemptFinished,
@@ -17,6 +21,7 @@ from behave_campaign.domain import (
     RepoState,
     Unit,
 )
+from behave_campaign.export import BundleEntry
 from behave_campaign.ports import (
     CampaignExistsError,
     CampaignLockedError,
@@ -320,3 +325,85 @@ class TestSystemNow:
         assert stamp.endswith("Z")
         assert "." not in stamp
         assert datetime.strptime(stamp, "%Y-%m-%dT%H:%M:%SZ")
+
+
+class TestJobDirFiles:
+    def test_lists_only_the_files_a_job_wrote(self, tmp_path):
+        (tmp_path / "abc_meta.json").write_text("{}")
+        (tmp_path / "abc_stdout.log").write_text("log")
+
+        found = JobDirFiles(tmp_path).files("abc")
+
+        assert found == {
+            "meta.json": tmp_path / "abc_meta.json",
+            "stdout.log": tmp_path / "abc_stdout.log",
+        }
+
+
+class TestTarBundleWriter:
+    def entries(self, tmp_path):
+        source = tmp_path / "source.log"
+        source.write_text("copied")
+        return [
+            BundleEntry(name="b.txt", data=b"rendered"),
+            BundleEntry(name="jobs/x/stdout.log", source=source),
+        ]
+
+    def test_writes_entries_under_one_top_directory(self, tmp_path):
+        output = tmp_path / "out" / "bundle.tar.gz"
+
+        skipped = TarBundleWriter().write(
+            output, "LP-1", self.entries(tmp_path)
+        )
+
+        assert skipped == []
+        with tarfile.open(output) as archive:
+            assert archive.getnames() == [
+                "LP-1/b.txt",
+                "LP-1/jobs/x/stdout.log",
+            ]
+            member = archive.extractfile("LP-1/jobs/x/stdout.log")
+            assert member.read() == b"copied"
+
+    def test_same_entries_give_the_same_bytes(self, tmp_path):
+        first, second = tmp_path / "1.tar.gz", tmp_path / "2.tar.gz"
+        entries = self.entries(tmp_path)
+
+        TarBundleWriter().write(first, "LP-1", entries)
+        TarBundleWriter().write(second, "LP-1", list(reversed(entries)))
+
+        assert first.read_bytes() == second.read_bytes()
+
+    def test_missing_source_is_skipped_and_reported(self, tmp_path):
+        output = tmp_path / "bundle.tar.gz"
+        entries = [BundleEntry(name="gone", source=tmp_path / "absent")]
+
+        assert TarBundleWriter().write(output, "LP-1", entries) == ["gone"]
+
+    def test_never_replaces_an_existing_file(self, tmp_path):
+        output = tmp_path / "bundle.tar.gz"
+        output.write_bytes(b"precious")
+
+        with pytest.raises(CampaignError, match="already exists"):
+            TarBundleWriter().write(output, "LP-1", self.entries(tmp_path))
+
+        assert output.read_bytes() == b"precious"
+
+    def test_leaves_no_temporary_file(self, tmp_path):
+        output = tmp_path / "out" / "bundle.tar.gz"
+
+        TarBundleWriter().write(output, "LP-1", self.entries(tmp_path))
+
+        assert [path.name for path in output.parent.iterdir()] == [
+            "bundle.tar.gz"
+        ]
+
+    def test_file_is_readable_by_others_under_the_umask(self, tmp_path):
+        output = tmp_path / "bundle.tar.gz"
+        previous = os.umask(0o022)
+        try:
+            TarBundleWriter().write(output, "LP-1", self.entries(tmp_path))
+        finally:
+            os.umask(previous)
+
+        assert output.stat().st_mode & 0o777 == 0o644

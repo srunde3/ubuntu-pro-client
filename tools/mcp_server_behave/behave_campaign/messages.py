@@ -295,3 +295,13 @@ class RetryUnitsResponse(CampaignState):
     requeued: int = 0
     units: list[UnitView] = []
     rescheduling: bool = False
+
+
+class ExportCampaignResponse(BaseModel):
+    """Where an export was written, and what it says."""
+
+    campaign_id: str = ""
+    path: str = ""
+    counts: StateCounts = StateCounts()
+    jobs: int = 0
+    missing_files: list[str] = []

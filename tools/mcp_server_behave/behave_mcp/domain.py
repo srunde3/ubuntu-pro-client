@@ -161,10 +161,9 @@ def to_dimensions(dimensions: parser.Dimensions) -> Dimensions:
 def validate_machine_types(
     machine_types: list[str], pool_limits: Mapping[Pool, int]
 ) -> str | None:
+    allowed = ",".join(sorted(ALLOWED_MACHINE_TYPES))
     if not machine_types:
-        return (
-            "machine_types is required. Allowed values: lxd-container,lxd-vm"
-        )
+        return f"machine_types is required. Allowed values: {allowed}"
 
     invalid_machine_types = sorted(
         machine_type
@@ -175,7 +174,7 @@ def validate_machine_types(
         return (
             "Unsupported machine_types: "
             f"{','.join(invalid_machine_types)}. "
-            "Allowed values: lxd-container,lxd-vm"
+            f"Allowed values: {allowed}"
         )
 
     for pool in Pool:
@@ -276,6 +275,15 @@ def classify_job_state(
     )
 
 
+def exact_name_pattern(scenario_name: str) -> str:
+    """A behave ``--name`` regex matching this scenario and nothing else.
+
+    behave names each Scenario Outline row ``<name> -- @<row> <examples>``,
+    so the row suffix is allowed; any other longer name is not.
+    """
+    return "^{}(?: -- @.*)?$".format(re.escape(scenario_name))
+
+
 def build_command(
     feature_file: str,
     machine_types: list[str],
@@ -285,7 +293,7 @@ def build_command(
 ) -> list[str]:
     command = ["tox", "-e", "behave", "--", feature_file]
     if scenario_name:
-        command.extend(["--name", re.escape(scenario_name)])
+        command.extend(["--name", exact_name_pattern(scenario_name)])
     if releases:
         command.extend(["-D", f"releases={','.join(releases)}"])
     command.extend(["-D", f"machine_types={','.join(machine_types)}"])
@@ -508,7 +516,7 @@ def job_matches_result_filters(
     release: str | None,
     machine_type: str | None,
 ) -> bool:
-    """Return whether a job's record satisfies ``summarize_scenario_results``
+    """Return whether a job's record satisfies ``get_scenario_results``
     filters. Only ``job_ids`` inspects ``job_id`` directly; the rest read
     fields already present in that job's record.
     """
@@ -524,16 +532,6 @@ def job_matches_result_filters(
     if machine_type is not None and machine_type not in record.machine_types:
         return False
     return True
-
-
-def _empty_grouped_count() -> dict[str, Any]:
-    return {
-        "total": 0,
-        "passed": 0,
-        "failed": 0,
-        "skipped": 0,
-        "unknown": 0,
-    }
 
 
 class LogSelection(NamedTuple):

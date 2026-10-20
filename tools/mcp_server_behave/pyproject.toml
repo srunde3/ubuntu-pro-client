@@ -21,6 +21,7 @@ lint = [
   "isort==5.12.0",
   "flake8",
   "mypy",
+  "import-linter>=2.15",
 ]
 
 [project.scripts]
@@ -67,3 +68,89 @@ no_implicit_optional = true
 # Matches the root pyproject.toml override: behave ships no type stubs.
 module = ["behave.*"]
 ignore_missing_imports = "true"
+
+# Run with `uv run lint-imports`. Each contract is a rule from AGENTS.md.
+[tool.importlinter]
+root_packages = ["behave_mcp", "behave_campaign"]
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "behave_mcp imports behave_campaign only in the server.py tool wrappers"
+type = "forbidden"
+source_modules = ["behave_mcp"]
+forbidden_modules = ["behave_campaign"]
+ignore_imports = ["behave_mcp.server -> behave_campaign.**"]
+
+[[tool.importlinter.contracts]]
+name = "behave_campaign uses only parser, pools and layout from behave_mcp"
+type = "forbidden"
+source_modules = ["behave_campaign"]
+forbidden_modules = [
+  "behave_mcp.adapters",
+  "behave_mcp.config",
+  "behave_mcp.domain",
+  "behave_mcp.messages",
+  "behave_mcp.ports",
+  "behave_mcp.server",
+  "behave_mcp.service",
+]
+# Export reads the job file suffixes.
+ignore_imports = ["behave_campaign.adapters -> behave_mcp.domain"]
+
+[[tool.importlinter.contracts]]
+name = "behave_mcp layers"
+type = "layers"
+containers = ["behave_mcp"]
+layers = [
+  "server",
+  "service | adapters",
+  "ports | config",
+  "domain",
+  "parser",
+  "messages | pools | layout",
+]
+
+[[tool.importlinter.contracts]]
+name = "behave_campaign layers"
+type = "layers"
+containers = ["behave_campaign"]
+layers = [
+  "cli",
+  "service | runner | adapters | repo",
+  "views | ports | discovery",
+  "export",
+  "domain | messages",
+]
+
+[[tool.importlinter.contracts]]
+name = "Domain and service modules do no direct I/O"
+type = "forbidden"
+source_modules = [
+  "behave_mcp.domain",
+  "behave_mcp.pools",
+  "behave_mcp.service",
+  "behave_campaign.domain",
+  "behave_campaign.discovery",
+  "behave_campaign.export",
+  "behave_campaign.service",
+  "behave_campaign.runner",
+]
+forbidden_modules = [
+  "fcntl",
+  "gzip",
+  "os",
+  "signal",
+  "subprocess",
+  "tarfile",
+  "tempfile",
+]
+
+[[tool.importlinter.contracts]]
+name = "Only server.py imports the MCP framework"
+type = "forbidden"
+source_modules = ["behave_mcp", "behave_campaign"]
+forbidden_modules = ["mcp", "starlette", "uvicorn"]
+ignore_imports = [
+  "behave_mcp.server -> mcp",
+  "behave_mcp.server -> starlette",
+]

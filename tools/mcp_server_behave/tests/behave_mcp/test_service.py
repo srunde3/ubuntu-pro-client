@@ -280,8 +280,35 @@ def test_start_scenario_accepts_normalized_listed_feature(tmp_path):
     assert result["artifacts"]["metadata"].endswith("_meta.json")
 
 
+def test_start_scenario_refuses_a_name_the_feature_lacks(tmp_path):
+    repo_root = make_repo_with_feature(tmp_path, "features/cli/attach.feature")
+    (repo_root / "features/cli/attach.feature").write_text(
+        "Feature: attach\n"
+        "  Scenario: Attach command with token\n"
+        "    Given a step\n",
+        encoding="utf-8",
+    )
+    launcher = FakeLauncher()
+    service = _make_service(
+        FakeWorkspace(repo_root=repo_root, log_dir=tmp_path),
+        launcher=launcher,
+    )
+
+    with pytest.raises(BehaveServiceError, match="exact name"):
+        service.start_scenario(
+            "features/cli/attach.feature",
+            machine_types=["lxd-container"],
+            scenario_name="Attach command",
+        )
+    assert launcher.calls == []
+
+
 def test_start_scenario_builds_command(tmp_path):
     repo_root = make_repo_with_feature(tmp_path, "features/cli/attach.feature")
+    (repo_root / "features/cli/attach.feature").write_text(
+        "Feature: attach\n  Scenario: attach\n    Given a step\n",
+        encoding="utf-8",
+    )
     launcher = FakeLauncher()
     service = _make_service(
         FakeWorkspace(
@@ -725,7 +752,7 @@ def test_wait_for_completion_timeout(tmp_path):
     assert "still running" in timeout["recent_output"]
 
 
-def test_completed_job_remains_in_registry_and_reemits_events(tmp_path):
+def test_completion_is_recorded_once_however_often_it_is_polled(tmp_path):
     registry = InMemoryJobRegistry()
     job_id = "jobkeep"
     stdout_log = tmp_path / f"{job_id}_stdout.log"
@@ -749,10 +776,15 @@ def test_completed_job_remains_in_registry_and_reemits_events(tmp_path):
     ).model_dump(mode="json")
     assert first["status"] == "completed"
     assert registry.get(job_id) is not None
+    completed_at = json.loads(
+        (tmp_path / f"{job_id}_meta.json").read_text(encoding="utf-8")
+    )["completed_at"]
 
     service.wait_for_completion(
         job_id, max_wait_seconds=5, poll_interval_seconds=0.01
     )
+    service.list_jobs()
+    service.get_results()
 
     index_path = tmp_path / "index.jsonl"
     events = [
@@ -760,7 +792,37 @@ def test_completed_job_remains_in_registry_and_reemits_events(tmp_path):
         for line in index_path.read_text(encoding="utf-8").splitlines()
     ]
     completed_events = [e for e in events if e.get("event") == "completed"]
-    assert len(completed_events) == 2
+    assert len(completed_events) == 1
+    meta = json.loads(
+        (tmp_path / f"{job_id}_meta.json").read_text(encoding="utf-8")
+    )
+    assert meta["completed_at"] == completed_at
+
+
+def test_listing_records_completion_of_a_job_nobody_waited_on(tmp_path):
+    registry = InMemoryJobRegistry()
+    job_id = "jobnowait"
+    (tmp_path / f"{job_id}_stdout.log").write_text("done\n", encoding="utf-8")
+    registry.register(
+        job_id,
+        Job(
+            job_id=job_id,
+            process_handle=FakeProcessHandle(returncode=0),
+            log_dir=tmp_path,
+        ),
+    )
+    service = _make_service(
+        FakeWorkspace(repo_root=tmp_path, log_dir=tmp_path),
+        registry=registry,
+    )
+
+    service.list_jobs()
+
+    meta = json.loads(
+        (tmp_path / f"{job_id}_meta.json").read_text(encoding="utf-8")
+    )
+    assert meta["status"] == "completed"
+    assert meta["ok"] is True
 
 
 def test_get_logs_returns_tail(tmp_path):

@@ -14,13 +14,14 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
-from behave_campaign import domain
+from behave_campaign import domain, export
 from behave_campaign.domain import (
     AttemptFinished,
     AttemptStarted,
     CampaignError,
     CampaignHeader,
     Filters,
+    LifecycleRecord,
     PlanRecord,
     Record,
     RepoState,
@@ -33,22 +34,31 @@ from behave_campaign.messages import (
     MAX_EVENTS_LIMIT,
     MAX_UNITS_LIMIT,
     AwaitEventsResponse,
+    CampaignState,
     CampaignStatusResponse,
     CreateCampaignResponse,
     DimensionsResponse,
     DimensionValue,
     EventView,
+    ExportCampaignResponse,
     ListCampaignsResponse,
     NextUnitsResponse,
     RecordAttemptsResponse,
     UnitHistoryResponse,
     UnitsResponse,
 )
-from behave_campaign.ports import CampaignStore, EventLog, FeatureReader
+from behave_campaign.ports import (
+    BundleWriter,
+    CampaignStore,
+    EventLog,
+    FeatureReader,
+    JobFiles,
+)
 from behave_campaign.views import (
     campaign_header,
     campaign_listing,
     campaign_state,
+    header_of,
     lanes_busy_by_pool,
     scenario_problems,
     unit_history_view,
@@ -219,6 +229,52 @@ class CampaignService:
                 unit_view(status) for status in domain.problems(statuses)
             ],
         )
+
+    def complete_campaign(self, *, campaign_id: str) -> CampaignState:
+        """Mark a campaign complete once it has no work left.
+
+        This is the transition for a campaign recorded by hand; a server
+        writes it on its own when the last lane finishes.
+        """
+        records = self._store.replay(campaign_id)
+        state = domain.lifecycle(records)
+        if state == domain.Lifecycle.COMPLETE:
+            return campaign_state(campaign_id, records)
+        if state == domain.Lifecycle.CANCELLED:
+            raise CampaignError(
+                "campaign {!r} was cancelled; reopen it instead".format(
+                    campaign_id
+                )
+            )
+        left = domain.outstanding(records)
+        if left:
+            raise CampaignError(
+                "campaign {!r} has {} unit(s) left to run or retry: {}".format(
+                    campaign_id,
+                    len(left),
+                    domain.describe_units(status.unit for status in left),
+                )
+            )
+
+        at = self._now()
+        record = LifecycleRecord(state=domain.Lifecycle.COMPLETE, at=at)
+        self._store.append(campaign_id, [record])
+        settled = [*records, record]
+        self._events.append(
+            campaign_id,
+            [
+                domain.NewEvent(
+                    kind=domain.EventKind.CAMPAIGN_COMPLETE,
+                    at=at,
+                    data={
+                        "counts": domain.count_states(
+                            domain.reduce_units(settled)
+                        )
+                    },
+                )
+            ],
+        )
+        return campaign_state(campaign_id, settled)
 
     # -- reporting --------------------------------------------------------
 
@@ -404,6 +460,106 @@ class CampaignService:
             machine_types=[
                 DimensionValue(**value) for value in raw["machine_types"]
             ],
+        )
+
+    # -- exporting --------------------------------------------------------
+
+    def export_campaign(
+        self,
+        *,
+        campaign_id: str,
+        output: Path,
+        jobs: JobFiles,
+        writer: BundleWriter,
+    ) -> ExportCampaignResponse:
+        """Write a complete campaign's evidence bundle to ``output``.
+
+        The bundle holds SUMMARY.md, campaign.json and units.csv for a
+        reviewer, every attempt's job files under ``jobs/``, and the raw
+        campaign record and event log under ``audit/``. Only a complete
+        campaign exports: evidence is a finished record, never a snapshot.
+        """
+        records = self._store.replay(campaign_id)
+        lifecycle = domain.lifecycle(records)
+        statuses = domain.reduce_units(records)
+        if lifecycle != domain.Lifecycle.COMPLETE:
+            counts = domain.count_states(statuses)
+            raise CampaignError(
+                "campaign {!r} is {} with {} running and {} unattempted "
+                "units; only a complete campaign can be exported".format(
+                    campaign_id,
+                    lifecycle,
+                    counts[domain.UnitState.RUNNING],
+                    counts[domain.UnitState.UNATTEMPTED],
+                )
+            )
+        header = header_of(records) or domain.CampaignHeader()
+
+        entries: list[export.BundleEntry] = []
+        missing: list[str] = []
+        missing_jobs: set[str] = set()
+        all_jobs = export.job_ids(statuses)
+        for job_id in all_jobs:
+            found = jobs.files(job_id)
+            for name in export.JOB_FILES:
+                bundled = "{}/{}/{}".format(export.JOBS_DIR, job_id, name)
+                if name in found:
+                    entries.append(
+                        export.BundleEntry(name=bundled, source=found[name])
+                    )
+                else:
+                    missing.append(bundled)
+                    missing_jobs.add(job_id)
+
+        audit = [
+            (export.AUDIT_CAMPAIGN_NAME, self._store.path_for(campaign_id)),
+            (export.AUDIT_EVENTS_NAME, self._events.path_for(campaign_id)),
+        ]
+        for name, source in audit:
+            if source is not None:
+                entries.append(
+                    export.BundleEntry(
+                        name="{}/{}".format(export.AUDIT_DIR, name),
+                        source=source,
+                    )
+                )
+
+        entries += [
+            export.BundleEntry(
+                name=export.SUMMARY_NAME,
+                data=export.render_summary(
+                    campaign_id, header, statuses, missing_jobs
+                ).encode(),
+            ),
+            export.BundleEntry(
+                name=export.CAMPAIGN_JSON_NAME,
+                data=export.render_campaign_json(
+                    campaign_id, header, lifecycle, statuses
+                ).encode(),
+            ),
+            export.BundleEntry(
+                name=export.UNITS_CSV_NAME,
+                data=export.render_units_csv(statuses).encode(),
+            ),
+        ]
+        skipped = writer.write(output, campaign_id, entries)
+
+        return ExportCampaignResponse(
+            campaign_id=campaign_id,
+            path=str(output),
+            counts=campaign_state(campaign_id, records).counts,
+            jobs=len(all_jobs),
+            # A campaign created outside a server has no event log.
+            missing_files=sorted(
+                [
+                    *missing,
+                    *(
+                        name
+                        for name in skipped
+                        if not name.startswith(export.AUDIT_DIR + "/")
+                    ),
+                ]
+            ),
         )
 
     # -- internals --------------------------------------------------------

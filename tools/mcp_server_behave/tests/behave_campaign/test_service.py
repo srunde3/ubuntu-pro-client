@@ -6,6 +6,8 @@ from behave_campaign.domain import (
     AttemptStarted,
     CampaignError,
     Filters,
+    Lifecycle,
+    LifecycleRecord,
     NewEvent,
     RepoState,
     Unit,
@@ -759,3 +761,179 @@ class TestAwaitEvents:
 
         with pytest.raises(CampaignError):
             service.await_events(campaign_id="1234567", limit=0)
+
+
+class FakeJobFiles:
+    """Job files by id, all present except those named in ``without``."""
+
+    def __init__(self, tmp_path, without=()):
+        self.tmp_path = tmp_path
+        self.without = set(without)
+
+    def files(self, job_id):
+        found = {}
+        for name in ("meta.json", "report.json", "stdout.log"):
+            if (job_id, name) in self.without:
+                continue
+            path = self.tmp_path / "jobs" / job_id / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(name)
+            found[name] = path
+        return found
+
+
+class FakeBundleWriter:
+    """Keeps what would have been written, by bundle name."""
+
+    def __init__(self):
+        self.output = None
+        self.top = None
+        self.entries = {}
+
+    def write(self, output, top, entries):
+        self.output, self.top = output, top
+        self.entries = {entry.name: entry for entry in entries}
+        return []
+
+
+def finish(store, unit, job_id, outcome):
+    store.append(
+        "1234567",
+        [
+            AttemptStarted(
+                unit=unit, job_id=job_id, install_from="proposed", at=AT
+            ),
+            AttemptFinished(unit=unit, job_id=job_id, outcome=outcome, at=AT),
+        ],
+    )
+
+
+@pytest.fixture
+def completed(service, store):
+    """A campaign that ran, retried one unit, and finished."""
+    create(service, install_from="proposed")
+    store.append("1234567", [LifecycleRecord(state=Lifecycle.RUNNING, at=AT)])
+    finish(store, UNITS[0], "a1", "failed")
+    finish(store, UNITS[0], "a2", "passed")
+    finish(store, UNITS[1], "n1", "passed")
+    finish(store, UNITS[2], "b1", "error")
+    service.complete_campaign(campaign_id="1234567")
+    return "1234567"
+
+
+def export(service, tmp_path, jobs=None, writer=None):
+    writer = writer or FakeBundleWriter()
+    response = service.export_campaign(
+        campaign_id="1234567",
+        output=tmp_path / "out.tar.gz",
+        jobs=jobs or FakeJobFiles(tmp_path),
+        writer=writer,
+    )
+    return response, writer
+
+
+class TestExportCampaign:
+    def test_only_a_complete_campaign_exports(self, service, store, tmp_path):
+        create(service)
+        store.append(
+            "1234567", [LifecycleRecord(state=Lifecycle.RUNNING, at=AT)]
+        )
+        finish(store, UNITS[0], "a1", "passed")
+
+        with pytest.raises(CampaignError, match="2 unattempted"):
+            export(service, tmp_path)
+
+    def test_bundles_every_attempt_and_the_raw_records(
+        self, service, completed, tmp_path
+    ):
+        response, writer = export(service, tmp_path)
+
+        assert writer.top == "1234567"
+        assert response.jobs == 4
+        for job_id in ("a1", "a2", "n1", "b1"):
+            for name in ("meta.json", "report.json", "stdout.log"):
+                assert "jobs/{}/{}".format(job_id, name) in writer.entries
+        assert "audit/campaign.jsonl" in writer.entries
+        assert "audit/events.jsonl" in writer.entries
+        for name in ("SUMMARY.md", "campaign.json", "units.csv"):
+            assert writer.entries[name].data
+
+    def test_summary_shows_each_unit_once_in_its_final_state(
+        self, service, completed, tmp_path
+    ):
+        response, writer = export(service, tmp_path)
+        summary = writer.entries["SUMMARY.md"].data.decode()
+
+        assert response.counts.passed == 2
+        assert response.counts.error == 1
+        assert "## Passed (2)" in summary
+        assert "## Not passed (1)" in summary
+        assert "a1" not in summary
+        assert "(error, job b1)" in summary
+
+    def test_missing_job_files_are_reported(
+        self, service, completed, tmp_path
+    ):
+        jobs = FakeJobFiles(tmp_path, without=[("b1", "report.json")])
+
+        response, writer = export(service, tmp_path, jobs=jobs)
+
+        assert response.missing_files == ["jobs/b1/report.json"]
+        assert "jobs/b1/report.json" not in writer.entries
+        summary = writer.entries["SUMMARY.md"].data.decode()
+        assert "(error, job b1, files missing)" in summary
+
+
+class TestCompleteCampaign:
+    def test_marks_a_campaign_with_no_work_left_complete(
+        self, service, store, events
+    ):
+        create(service)
+        for number, unit in enumerate(UNITS):
+            finish(store, unit, "j{}".format(number), "failed")
+
+        state = service.complete_campaign(campaign_id="1234567")
+
+        assert state.lifecycle == "complete"
+        assert store.replay("1234567")[-1] == LifecycleRecord(
+            state=Lifecycle.COMPLETE, at=AT
+        )
+        done = events.read(
+            "1234567", since_seq=0, kinds=["campaign.complete"], limit=10
+        )
+        assert done[0].data["counts"]["failed"] == 3
+
+    def test_refuses_while_units_are_left(self, service, store):
+        create(service)
+        finish(store, UNITS[0], "j1", "passed")
+
+        with pytest.raises(CampaignError, match="2 unit"):
+            service.complete_campaign(campaign_id="1234567")
+
+        assert "complete" not in [
+            getattr(r, "state", None) for r in store.replay("1234567")
+        ]
+
+    def test_refuses_a_cancelled_campaign(self, service, store):
+        create(service)
+        store.append(
+            "1234567", [LifecycleRecord(state=Lifecycle.CANCELLED, at=AT)]
+        )
+
+        with pytest.raises(CampaignError, match="reopen"):
+            service.complete_campaign(campaign_id="1234567")
+
+    def test_completing_twice_writes_once(self, service, store):
+        create(service)
+        for number, unit in enumerate(UNITS):
+            finish(store, unit, "j{}".format(number), "passed")
+
+        service.complete_campaign(campaign_id="1234567")
+        service.complete_campaign(campaign_id="1234567")
+
+        written = [
+            r
+            for r in store.replay("1234567")
+            if isinstance(r, LifecycleRecord)
+        ]
+        assert len(written) == 1

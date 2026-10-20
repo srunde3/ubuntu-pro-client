@@ -284,11 +284,81 @@ uv run behave-campaign events --campaign-id 1234567 \
 
 Errors: an unknown kind, family, or preset.
 
+## complete
+
+Mark a campaign `complete` once no unit is unattempted, in flight, or waiting
+on a retry. A server writes this itself when its last lane finishes; use this
+command for a campaign recorded with `record`. Completing a campaign that is
+already complete changes nothing.
+
+Required arguments:
+
+* One of:
+  * `--campaign-id ID`: The campaign, by the name the server uses.
+  * `--campaign FILE`: A campaign file anywhere; its id is the file's name.
+
+Optional arguments:
+
+* `--repo-root DIR`: The checkout whose state holds the campaign, for
+  `--campaign-id`. Defaults to `$UBUNTU_PRO_CLIENT_REPO`.
+
+```bash
+uv run behave-campaign complete --campaign-id 1234567
+```
+
+Errors: units left to run or retry, and a cancelled campaign (reopen it
+instead).
+
+## export
+
+Write a complete campaign's evidence bundle as a `.tar.gz`, for attaching to
+an SRU bug. Prints the bundle's path, the counts by state, how many jobs were
+bundled, and any job files that were missing.
+
+Required arguments:
+
+* One of:
+  * `--campaign-id ID`: The campaign, by the name the server uses.
+  * `--campaign FILE`: A campaign file anywhere; its id is the file's name.
+* `--repo-root DIR`: The checkout whose state holds the campaign and its job
+  files. Defaults to `$UBUNTU_PRO_CLIENT_REPO`.
+
+Optional arguments:
+
+* `--output PATH`: Where to write the bundle. Defaults to
+  `<state dir>/exports/<id>.tar.gz`.
+
+The bundle unpacks to one directory named after the campaign:
+
+| Path | Contents |
+| --- | --- |
+| `SUMMARY.md` | Counts and scope, then every unit by feature, scenario and release: passed units, then the rest with their state and job id |
+| `campaign.json` | Scope, install source, lanes, lifecycle, counts |
+| `units.csv` | One row per unit: `feature, scenario, release, machine_type, state, job_id, finished_at` |
+| `jobs/<job_id>/` | `meta.json`, `report.json`, `stdout.log` for every attempt, including superseded ones |
+| `audit/campaign.jsonl` | The campaign record as stored |
+| `audit/events.jsonl` | The event log, when the campaign has one |
+
+Each unit appears once, in the state its attempts ended in; the summary never
+shows attempt counts. Repo state is left out of the review files, because
+nothing ties a campaign's jobs to one commit; the raw records under `jobs/`
+and `audit/` still carry it. Exporting the same campaign twice gives
+identical bytes.
+
+```bash
+uv run behave-campaign export --campaign-id 1234567
+```
+
+Errors: a campaign that is not `complete` (see `complete`), and an output
+path that already exists. Missing job files are not an error; they are listed in the output
+and marked `files missing` in the summary.
+
 ## Files
 
 | File                          | Written by            | Contents                                   |
 | ----------------------------- | --------------------- | ------------------------------------------ |
-| `<id>.jsonl`                  | `create`, `record`, the server | The campaign record, append-only   |
+| `<id>.jsonl`                  | `create`, `record`, `complete`, the server | The campaign record, append-only |
 | `<id>.events.jsonl`           | the server            | Numbered events; `events` reads it         |
 | `<id>.lock`                   | the server            | Advisory lock while the campaign schedules |
+| `../exports/<id>.tar.gz`      | `export`              | The evidence bundle, by default            |
 

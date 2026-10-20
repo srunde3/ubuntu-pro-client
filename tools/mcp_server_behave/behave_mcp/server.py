@@ -388,12 +388,12 @@ def find_scenarios(
         "return a job_id immediately. feature_file must be a path returned "
         "by list_features. machine_types is required; each draws on the "
         "lxd, cloud or wsl pool, and a pool whose MCP_MAX_*_JOBS limit is "
-        "0 is disabled (cloud is by default). scenario_name (substring) "
-        "and releases are optional filters onto the feature's Examples "
-        "rows. install_from controls where ubuntu-pro-client is installed "
-        "from (defaults to 'local'; set to 'proposed' to test the "
-        "-proposed pocket). Call wait_for_scenario_completion to wait for "
-        "completion."
+        "0 is disabled (cloud is by default). scenario_name (a "
+        "scenario's exact name, from describe_feature) and releases are "
+        "optional filters onto the feature's Examples rows. install_from "
+        "controls where ubuntu-pro-client is installed from (defaults to "
+        "'local'; set to 'proposed' to test the -proposed pocket). Call "
+        "wait_for_scenario_completion to wait for completion."
     )
 )
 def start_scenario(
@@ -414,8 +414,8 @@ def start_scenario(
         Field(
             default="",
             description=(
-                "Optional substring filter on scenario name, to run only "
-                "matching Examples rows within feature_file."
+                "Optional exact scenario name, to run only that "
+                "scenario's Examples rows within feature_file."
             ),
         ),
     ] = "",
@@ -892,7 +892,8 @@ def control_campaign(
         "campaign with units still unattempted starts scheduling again; "
         "one whose units were all attempted comes back complete, which is "
         "what lets retry_units reach its failed and skipped units -- so "
-        "reopening is usually followed by retry_units, not start_campaign. "
+        "reopening is usually followed by retry_units, not "
+        "control_campaign start. "
         "If a cancel left jobs in flight that no running server is "
         "watching any more, this refuses and names those units; pass "
         "abandon_in_flight to record them as errored and reopen anyway."

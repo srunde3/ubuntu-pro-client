@@ -1,4 +1,5 @@
 import json
+import tarfile
 
 import pytest
 
@@ -7,6 +8,7 @@ from behave_campaign.cli import main
 UNIT_A_JAMMY = ["features/a.feature", "A", "jammy", "lxd-container"]
 UNIT_A_NOBLE = ["features/a.feature", "A", "noble", "lxd-vm"]
 UNIT_B_JAMMY = ["features/b.feature", "B", "jammy", "lxd-container"]
+AT = "2026-10-06T00:00:00Z"
 
 FEATURE_A = """Feature: A feature
 
@@ -634,8 +636,8 @@ class TestEvents:
         from behave_campaign.adapters import SingleFileCampaignStore
         from behave_campaign.domain import Lifecycle, LifecycleRecord
 
-        # Started, every unit attempted, nothing in flight: complete, so a
-        # follower prints what there is and returns.
+        # Every unit attempted and marked complete, so a follower prints
+        # what there is and returns.
         SingleFileCampaignStore(campaign_file).append(
             "records",
             [
@@ -652,6 +654,7 @@ class TestEvents:
                 attempt(UNIT_B_JAMMY, "passed", "j3"),
             ],
         )
+        run(["complete"])
         log.append(
             "records", [self.new("unit.passed"), self.new("unit.passed")]
         )
@@ -674,3 +677,117 @@ class TestEvents:
         batches = [json.loads(line) for line in out.splitlines()]
         assert [b["events"][0]["seq"] for b in batches] == [1, 2]
         assert batches[-1]["lifecycle"] == "complete"
+
+
+class TestExport:
+    @pytest.fixture
+    def finished(self, run, repo):
+        """A campaign the server ran to completion, with its job files."""
+        run(
+            [
+                "create",
+                "--campaign-id",
+                "1234567",
+                "--install-from",
+                "proposed",
+            ]
+        )
+        state = repo / ".mcp_server_behave"
+        lines = [
+            {"type": "lifecycle", "state": "running", "at": AT, "reason": ""}
+        ]
+        for unit, job_id in (
+            (UNIT_A_JAMMY, "j1"),
+            (UNIT_A_NOBLE, "n1"),
+            (UNIT_B_JAMMY, "b1"),
+        ):
+            done = attempt(unit, "passed", job_id)
+            lines.append({**done, "type": "finished", "at": AT})
+            for suffix in ("_meta.json", "_report.json", "_stdout.log"):
+                path = state / "jobs" / (job_id + suffix)
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("[]" if suffix == "_report.json" else "x")
+        with (state / "campaigns" / "1234567.jsonl").open("a") as stream:
+            for line in lines:
+                stream.write(json.dumps(line) + "\n")
+        run(["complete", "--campaign-id", "1234567", "--repo-root", str(repo)])
+        return state
+
+    def export(self, run, repo, *extra):
+        return run(
+            [
+                "export",
+                "--campaign-id",
+                "1234567",
+                "--repo-root",
+                str(repo),
+                *extra,
+            ]
+        )
+
+    def test_writes_the_bundle_to_the_state_dir(self, finished, run, repo):
+        result = self.export(run, repo)
+
+        output = finished / "exports" / "1234567.tar.gz"
+        assert result["path"] == str(output)
+        assert result["counts"]["passed"] == 3
+        assert result["missing_files"] == []
+        with tarfile.open(output) as archive:
+            names = archive.getnames()
+        assert "1234567/SUMMARY.md" in names
+        assert "1234567/jobs/j1/stdout.log" in names
+        assert "1234567/audit/campaign.jsonl" in names
+
+    def test_an_existing_output_is_refused(
+        self, finished, run, repo, tmp_path
+    ):
+        output = tmp_path / "taken.tar.gz"
+        output.write_text("keep")
+
+        error = run(
+            [
+                "export",
+                "--campaign-id",
+                "1234567",
+                "--repo-root",
+                str(repo),
+                "--output",
+                str(output),
+            ],
+            expect=2,
+        )
+
+        assert "already exists" in error
+        assert output.read_text() == "keep"
+
+    def test_an_unfinished_campaign_is_refused(self, run, repo):
+        run(["create", "--campaign-id", "1234567"])
+
+        error = run(
+            ["export", "--campaign-id", "1234567", "--repo-root", str(repo)],
+            expect=2,
+        )
+
+        assert "only a complete campaign can be exported" in error
+
+
+class TestComplete:
+    def test_completes_a_campaign_recorded_by_hand(self, planned, run):
+        run(
+            ["record"],
+            payload=[
+                attempt(UNIT_A_JAMMY, "passed", "j1"),
+                attempt(UNIT_A_NOBLE, "failed", "j2"),
+                attempt(UNIT_B_JAMMY, "skipped", "j3"),
+            ],
+        )
+
+        result = run(["complete"])
+
+        assert result["lifecycle"] == "complete"
+        assert run(["status"])["state"]["lifecycle"] == "complete"
+
+    def test_refuses_with_units_left(self, planned, run):
+        error = run(["complete"], expect=2)
+
+        assert "3 unit(s) left" in error
