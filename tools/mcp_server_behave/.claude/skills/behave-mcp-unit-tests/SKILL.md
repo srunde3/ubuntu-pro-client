@@ -252,7 +252,7 @@ def test_every_outcome():
 - Its name states the behaviour: `test_starvation_is_reported_once_per_episode`.
 - It fails for one reason, and the failure says which.
 - It asserts on what the layer returns or writes, not on how it got there.
-- It reuses the shared doubles in `tests/conftest.py` before defining another.
+- It uses the fakes in `tests/conftest.py`. When a test needs a fake to do more, it extends that fake, so each port keeps exactly one.
 - When a fix changes behaviour that a test pinned, the test changes to the correct behaviour, and its name changes if the name described the old one.
 
 Run the unit and integration tests together with `uv run pytest -q -m "not e2e"`.

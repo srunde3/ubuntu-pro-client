@@ -4,7 +4,13 @@ import pytest
 from mcp.shared.memory import create_connected_server_and_client_session
 
 from behave_mcp.server import mcp
-from tests.conftest import result_error_text, result_json
+from tests.conftest import (
+    FakeLanes,
+    FakeLock,
+    FakeTicker,
+    result_error_text,
+    result_json,
+)
 
 FEATURE = """Feature: Example feature
 
@@ -190,69 +196,6 @@ async def test_campaign_status_on_an_unknown_campaign_is_an_error(repo):
     assert "no campaign" in result_error_text(result)
 
 
-class StubLanes:
-    """Stands in for real behave jobs: starts them, finishes on first poll."""
-
-    def __init__(self):
-        self.started = []
-        self.done = set()
-
-    def start(self, unit, *, repo_root, install_from):
-        job_id = "job{}".format(len(self.started) + 1)
-        self.started.append(unit)
-        return job_id
-
-    def poll(self, job_id):
-        if job_id not in self.done:
-            self.done.add(job_id)
-            return None
-        return {
-            "status": "completed",
-            "ok": True,
-            "job_id": job_id,
-            "summary": {
-                "scenarios": {"passed": 1, "failed": 0, "skipped": 0},
-                "features": {},
-            },
-        }
-
-
-class StubTicker:
-    """Captures the tick callable so no thread runs during a test.
-
-    ``drive`` stands in for the real loop: it ticks until the runner says
-    the campaign is finished, rather than a count the test guessed.
-    """
-
-    # Only a runaway guard. A campaign of a few units finishes in a handful
-    # of ticks; this exists so a bug loops finitely.
-    MAX_TICKS = 200
-
-    def __init__(self):
-        self.tick = None
-
-    def start(self, tick):
-        self.tick = tick
-
-    def stop(self):
-        self.tick = None
-
-    def is_running(self):
-        return self.tick is not None
-
-    def drive(self):
-        """Tick until the campaign reports itself done, as the thread does."""
-        assert self.tick is not None, "the ticker was never started"
-        for _ in range(self.MAX_TICKS):
-            if self.tick is None:
-                return
-            if self.tick():
-                return
-        raise AssertionError(
-            "campaign still unfinished after {} ticks".format(self.MAX_TICKS)
-        )
-
-
 @pytest.fixture
 def runner(repo, monkeypatch, tmp_path):
     """Replace the server's runner with one that launches no real jobs."""
@@ -264,15 +207,15 @@ def runner(repo, monkeypatch, tmp_path):
     )
     from behave_campaign.runner import CampaignRunner
 
-    lanes = StubLanes()
-    ticker = StubTicker()
+    lanes = FakeLanes(auto_finish={})
+    ticker = FakeTicker()
     # The same log the server's own service reads, so events the runner
     # emits are visible to await_campaign_events.
     events = JsonlEventLog(tmp_path / "state" / "campaigns")
     replacement = CampaignRunner(
         store=JsonlCampaignStore(tmp_path / "state" / "campaigns"),
         lanes=lanes,
-        lock=_FakeLock(),
+        lock=FakeLock(),
         events=events,
         now=system_now,
         ticker=ticker,
@@ -282,17 +225,6 @@ def runner(repo, monkeypatch, tmp_path):
     replacement.lanes = lanes
     replacement.ticker = ticker
     return replacement
-
-
-class _FakeLock:
-    def acquire(self, campaign_id):
-        pass
-
-    def release(self, campaign_id):
-        pass
-
-    def held_by_other(self, campaign_id):
-        return False
 
 
 @pytest.mark.asyncio
@@ -600,29 +532,18 @@ async def test_a_timeout_beyond_the_server_limit_is_refused(repo, runner):
 
 
 @pytest.mark.asyncio
-async def test_retry_units_requeues_a_failure(repo, runner, monkeypatch):
-    def failing(job_id):
-        if job_id not in runner.lanes.done:
-            runner.lanes.done.add(job_id)
-            return None
-        return {
-            "status": "completed",
-            "ok": False,
-            "job_id": job_id,
-            "summary": {
-                "scenarios": {"passed": 0, "failed": 1, "skipped": 0},
-                "features": {},
-            },
-            "failures": [
-                {
-                    "step": "Then it works",
-                    "status": "failed",
-                    "error_message": "it did not",
-                }
-            ],
-        }
-
-    monkeypatch.setattr(runner.lanes, "poll", failing)
+async def test_retry_units_requeues_a_failure(repo, runner):
+    runner.lanes.auto_finish = dict(
+        passed=0,
+        failed=1,
+        failures=[
+            {
+                "step": "Then it works",
+                "status": "failed",
+                "error_message": "it did not",
+            }
+        ],
+    )
 
     async with create_connected_server_and_client_session(mcp) as client:
         # lanes stay at 1: MCP_MAX_LXD_JOBS defaults to 1, and a

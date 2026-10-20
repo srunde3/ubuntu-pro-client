@@ -23,9 +23,10 @@ from behave_campaign.domain import (
     lifecycle,
     reduce_units,
 )
-from behave_campaign.ports import CampaignLockedError, LaneStartError
+from behave_campaign.ports import CampaignLockedError
 from behave_campaign.runner import RESTART_REASON, CampaignRunner, ThreadTicker
 from behave_mcp.pools import Pool
+from tests.conftest import FakeLanes, FakeLock, FakeTicker
 
 AT = "2026-09-12T12:00:00Z"
 
@@ -55,95 +56,6 @@ def written_states(store, campaign_id="1234567"):
         for record in store.replay(campaign_id)
         if isinstance(record, LifecycleRecord)
     ]
-
-
-def completed(passed=1, failed=0, job_id="job"):
-    return {
-        "status": "completed",
-        "ok": failed == 0,
-        "job_id": job_id,
-        "summary": {
-            "scenarios": {"passed": passed, "failed": failed, "skipped": 0},
-            "features": {},
-        },
-    }
-
-
-class FakeLanes:
-    """Records what was started, and finishes jobs only when told to."""
-
-    def __init__(self, max_starts=None, full_pools=()):
-        self.started = []
-        self.results = {}
-        self.max_starts = max_starts
-        self.full_pools = set(full_pools)
-        self.refusals = 0
-
-    def start(self, unit, *, repo_root, install_from):
-        if unit.pool in self.full_pools:
-            self.refusals += 1
-            raise LaneStartError("pool is full", full_pool=unit.pool)
-        if (
-            self.max_starts is not None
-            and len(self.started) >= self.max_starts
-        ):
-            self.refusals += 1
-            raise LaneStartError("at capacity")
-        job_id = "job{}".format(len(self.started) + 1)
-        self.started.append((unit, job_id, install_from, repo_root))
-        return job_id
-
-    def poll(self, job_id):
-        return self.results.get(job_id)
-
-    def finish(self, job_id, **kwargs):
-        self.results[job_id] = completed(job_id=job_id, **kwargs)
-
-    @property
-    def started_units(self):
-        return [unit for unit, _, _, _ in self.started]
-
-
-class FakeTicker:
-    """Captures the tick callable without ever calling it.
-
-    Tests drive ``runner.tick`` themselves, so nothing races them.
-    """
-
-    def __init__(self):
-        self.tick = None
-        self.stopped = 0
-
-    def start(self, tick):
-        self.tick = tick
-
-    def stop(self):
-        self.stopped += 1
-        self.tick = None
-
-    def is_running(self):
-        return self.tick is not None
-
-
-class FakeLock:
-    def __init__(self, taken_by_other=False):
-        self.held = set()
-        self.acquired = []
-        self.released = []
-        self._taken_by_other = taken_by_other
-
-    def acquire(self, campaign_id):
-        if self._taken_by_other:
-            raise CampaignLockedError("held elsewhere")
-        self.held.add(campaign_id)
-        self.acquired.append(campaign_id)
-
-    def release(self, campaign_id):
-        self.held.discard(campaign_id)
-        self.released.append(campaign_id)
-
-    def held_by_other(self, campaign_id):
-        return self._taken_by_other
 
 
 @pytest.fixture
@@ -892,22 +804,13 @@ class TestTheWholeLoop:
     a thread, a sliding window, and a campaign that finishes on its own.
     """
 
-    class AutoLanes(FakeLanes):
-        """Jobs that complete the moment they are first polled."""
-
-        def poll(self, job_id):
-            if job_id not in self.results:
-                self.finish(job_id)
-                return None
-            return self.results[job_id]
-
     def test_a_campaign_runs_itself_to_completion(self, store, tmp_path):
         units = [
             Unit("features/f{}.feature".format(n), "S", "jammy", "lxd-vm")
             for n in range(12)
         ]
         create(store, units=units, lxd_lanes=4)
-        lanes = self.AutoLanes()
+        lanes = FakeLanes(auto_finish={})
         runner = CampaignRunner(
             store=store,
             lanes=lanes,
@@ -938,7 +841,7 @@ class TestTheWholeLoop:
             for n in range(20)
         ]
         create(store, units=units, lxd_lanes=3)
-        lanes = self.AutoLanes()
+        lanes = FakeLanes(auto_finish={})
         runner = CampaignRunner(
             store=store,
             lanes=lanes,
@@ -962,7 +865,7 @@ class TestTheWholeLoop:
             for n in range(40)
         ]
         create(store, units=units, lxd_lanes=2)
-        lanes = self.AutoLanes()
+        lanes = FakeLanes(auto_finish={})
         runner = CampaignRunner(
             store=store,
             lanes=lanes,

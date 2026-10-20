@@ -104,7 +104,7 @@ The test tree mirrors the packages, so a failing file says which part broke:
 | `tests/shared/` | tests of `parser.py` and `pools.py`, which both packages depend on |
 | `tests/mcp_surface/` | the tools over the real MCP protocol, and the two e2e tests |
 
-Each directory is a Python package, so test files with the same name can coexist. Shared fakes and helpers live in `tests/conftest.py`. The `behave-mcp-unit-tests`, `behave-mcp-integration-tests` and `behave-mcp-e2e-tests` skills describe what each tier tests.
+Each directory is a Python package, so test files with the same name can coexist. Every fake lives in `tests/conftest.py`, one per port, so tests across tiers share it. The `behave-mcp-unit-tests`, `behave-mcp-integration-tests` and `behave-mcp-e2e-tests` skills describe what each tier tests.
 
 ## Checks
 

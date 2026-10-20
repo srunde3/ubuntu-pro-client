@@ -14,6 +14,7 @@ from behave_campaign.domain import (
 )
 from behave_campaign.service import CampaignService
 from behave_mcp.pools import Pool
+from tests.conftest import FakeBundleWriter, FakeFeatureReader, FakeJobFiles
 
 AT = "2026-09-12T12:00:00Z"
 REPO = RepoState(root="/repo", commit="abc123", branch="main", dirty=False)
@@ -25,33 +26,9 @@ UNITS = [
 ]
 
 
-class FakeFeatureReader:
-    """Returns a fixed unit list, filtered the way discovery would."""
-
-    def __init__(self, units=None):
-        self.units = UNITS if units is None else units
-        self.seen_filters = None
-
-    def discover_units(self, repo_root, filters):
-        self.seen_filters = filters
-        return [unit for unit in self.units if filters.matches_unit(unit)]
-
-    def available_dimensions(self, repo_root):
-        return {
-            "releases": [
-                {"name": "jammy", "scenario_count": 2},
-                {"name": "noble", "scenario_count": 1},
-            ],
-            "machine_types": [
-                {"name": "lxd-container", "scenario_count": 2},
-                {"name": "lxd-vm", "scenario_count": 1},
-            ],
-        }
-
-
 @pytest.fixture
 def features():
-    return FakeFeatureReader()
+    return FakeFeatureReader(UNITS)
 
 
 @pytest.fixture
@@ -761,39 +738,6 @@ class TestAwaitEvents:
 
         with pytest.raises(CampaignError):
             service.await_events(campaign_id="1234567", limit=0)
-
-
-class FakeJobFiles:
-    """Job files by id, all present except those named in ``without``."""
-
-    def __init__(self, tmp_path, without=()):
-        self.tmp_path = tmp_path
-        self.without = set(without)
-
-    def files(self, job_id):
-        found = {}
-        for name in ("meta.json", "report.json", "stdout.log"):
-            if (job_id, name) in self.without:
-                continue
-            path = self.tmp_path / "jobs" / job_id / name
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(name)
-            found[name] = path
-        return found
-
-
-class FakeBundleWriter:
-    """Keeps what would have been written, by bundle name."""
-
-    def __init__(self):
-        self.output = None
-        self.top = None
-        self.entries = {}
-
-    def write(self, output, top, entries):
-        self.output, self.top = output, top
-        self.entries = {entry.name: entry for entry in entries}
-        return []
 
 
 def finish(store, unit, job_id, outcome):
