@@ -183,6 +183,7 @@ class CampaignRunner:
         return self._transition(
             campaign_id,
             domain.Lifecycle.PAUSED,
+            verb=domain.ControlAction.PAUSE,
             allowed=(domain.Lifecycle.RUNNING,),
         )
 
@@ -220,6 +221,7 @@ class CampaignRunner:
         return self._transition(
             campaign_id,
             domain.Lifecycle.CANCELLED,
+            verb=domain.ControlAction.CANCEL,
             allowed=(
                 domain.Lifecycle.RUNNING,
                 domain.Lifecycle.PAUSED,
@@ -560,6 +562,7 @@ class CampaignRunner:
         campaign_id: str,
         state: domain.Lifecycle,
         *,
+        verb: domain.ControlAction,
         allowed: Sequence[domain.Lifecycle],
     ) -> CampaignControlResponse:
         with self._guard:
@@ -567,7 +570,7 @@ class CampaignRunner:
             if current not in allowed:
                 raise CampaignError(
                     "campaign {!r} is {}; cannot {}".format(
-                        campaign_id, current, state
+                        campaign_id, current, verb
                     )
                 )
             self._append_state(campaign_id, state)
