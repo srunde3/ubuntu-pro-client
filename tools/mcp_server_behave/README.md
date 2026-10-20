@@ -107,44 +107,37 @@ CI job. See
 [behave_campaign/README.md](behave_campaign/README.md) for the record format,
 the CLI, and how MCP job results map onto attempts.
 
-## Local usage
+## Running the server
 
-This server is run via `uvx` from an MCP client config -- see "Example MCP
-client configuration" below for the one supported setup.
+The server serves MCP over streamable HTTP. Start it from
+`tools/mcp_server_behave`, with the environment its behave jobs need:
 
-## Example MCP client configuration
+```bash
+UACLIENT_BEHAVE_CONTRACT_TOKEN=... uv run mcp-server-behave
+```
 
-The supported setup runs the server with `uvx`, pointed at your
-`ubuntu-pro-client` checkout (a worktree works fine). `uvx` builds a
-non-editable copy, so repo auto-detection doesn't work -- set
-`UBUNTU_PRO_CLIENT_REPO` to that checkout explicitly (see `repo_root` under
-[Environment variables](#environment-variables)):
+It listens on `http://127.0.0.1:8000/mcp`; `MCP_HOST` and `MCP_PORT` change
+the address, and `/healthz` answers `{"status": "ok"}`. It finds the checkout
+it runs from on its own. Set `UBUNTU_PRO_CLIENT_REPO` to serve a different
+checkout.
+
+Then point an MCP client at it. For Claude Code:
+
+```bash
+claude mcp add --transport http behave http://127.0.0.1:8000/mcp
+```
+
+Other clients take the same URL, for example:
 
 ```json
 {
   "mcpServers": {
     "behave": {
-      "command": "uvx",
-      "args": [
-        "--from",
-        "/path/to/repo/tools/mcp_server_behave",
-        "mcp-server-behave"
-      ],
-      "env": {
-        "UBUNTU_PRO_CLIENT_REPO": "/path/to/repo"
-      }
+      "type": "http",
+      "url": "http://127.0.0.1:8000/mcp"
     }
   }
 }
-```
-
-Other env vars (contract token, concurrency limits, etc.) go in the same
-`env` block -- see [Environment variables](#environment-variables).
-
-If you prefer keeping cache enabled, clear stale entries after package changes:
-
-```bash
-uv cache clean mcp-server-behave
 ```
 
 ## Testing
@@ -198,8 +191,7 @@ The server forwards its **entire** environment to the behave subprocess.
 Whatever env vars the MCP server itself is started with,
 including things like `UACLIENT_BEHAVE_CONTRACT_TOKEN` and
 `UACLIENT_BEHAVE_INSTALL_FROM`, are visible to the spawned `behave` process.
-Treat the MCP server's environment as the behave subprocess's environment
-when configuring an MCP client.
+Set what the jobs need in the environment you start the server in.
 
 The server also reads these variables at startup:
 
@@ -220,18 +212,18 @@ Each machine type draws on one pool:
 A job holds one slot in every pool its `machine_types` draw on. When a pool
 is full, `start_scenario` fails fast with `status: capacity_exceeded` and
 `full_pools` naming each full pool with its limit and running count. Starting
-the server with the removed `MCP_MAX_PARALLEL_JOBS` or
-`MCP_ALLOW_CLOUD_MACHINE_TYPES` is an error that names their replacements.
+the server with a removed variable (`MCP_MAX_PARALLEL_JOBS`,
+`MCP_ALLOW_CLOUD_MACHINE_TYPES` or `MCP_TRANSPORT`) is an error that says
+what to use instead.
 
 Other startup variables:
 
-- `MCP_TRANSPORT`: one of `stdio` (default), `sse`, or `streamable-http`.
-- `MCP_HOST`: host to bind when using the `sse`/`streamable-http` transports. Defaults to `127.0.0.1`. Ignored for `stdio`.
-- `MCP_PORT`: port to bind when using the `sse`/`streamable-http` transports. Defaults to `8000`. Ignored for `stdio`.
+- `MCP_HOST`: host to bind. Defaults to `127.0.0.1`.
+- `MCP_PORT`: port to bind. Defaults to `8000`.
 
 Every tool also accepts a `repo_root` parameter:
 
-- `repo_root`: the repository to run behave against. If a call omits it, the server falls back to `UBUNTU_PRO_CLIENT_REPO`, then to auto-detection -- which only works when running from an editable/in-place install (`uv run` from inside the package directory), not via `uvx --from`. **When using `uvx --from` (the documented usage), set `UBUNTU_PRO_CLIENT_REPO` or always pass `repo_root` explicitly.**
+- `repo_root`: the repository to run behave against. If a call omits it, the server falls back to `UBUNTU_PRO_CLIENT_REPO`, then to the checkout it runs from.
 
 Campaign files are written under:
 

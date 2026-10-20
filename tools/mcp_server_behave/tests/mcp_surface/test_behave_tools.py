@@ -260,8 +260,7 @@ async def test_mcp_start_rejects_cloud_machine_types():
     assert "MCP_MAX_CLOUD_JOBS" in error_text
 
 
-def test_main_uses_stdio_transport_by_default(monkeypatch):
-    monkeypatch.delenv("MCP_TRANSPORT", raising=False)
+def test_main_serves_streamable_http(monkeypatch):
     captured = {}
 
     def fake_run(transport, mount_path=None):
@@ -272,4 +271,4 @@ def test_main_uses_stdio_transport_by_default(monkeypatch):
 
     server_module.main()
 
-    assert captured["transport"] == "stdio"
+    assert captured["transport"] == "streamable-http"

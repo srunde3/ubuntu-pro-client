@@ -30,7 +30,6 @@ def _settings(*, lxd=1, cloud=0, wsl=1) -> Settings:
     return Settings(
         pool_limits={Pool.LXD: lxd, Pool.CLOUD: cloud, Pool.WSL: wsl},
         campaign_poll_timeout=60,
-        transport="stdio",
         host="127.0.0.1",
         port=8000,
     )

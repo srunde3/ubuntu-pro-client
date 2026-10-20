@@ -1,6 +1,7 @@
 import pytest
 
 from behave_mcp.config import ConfigError, Settings, load_settings
+from behave_mcp.domain import REMOVED_ENV_VARS
 from behave_mcp.pools import Pool
 
 
@@ -9,7 +10,6 @@ def test_load_settings_defaults():
     assert settings == Settings(
         pool_limits={Pool.LXD: 1, Pool.CLOUD: 0, Pool.WSL: 1},
         campaign_poll_timeout=60,
-        transport="stdio",
         host="127.0.0.1",
         port=8000,
     )
@@ -44,25 +44,24 @@ def test_load_settings_wsl_limit_above_one_raises():
         load_settings({"MCP_MAX_WSL_JOBS": "2"})
 
 
-@pytest.mark.parametrize(
-    "name, replacement",
-    [
-        ("MCP_MAX_PARALLEL_JOBS", "MCP_MAX_LXD_JOBS"),
-        ("MCP_ALLOW_CLOUD_MACHINE_TYPES", "MCP_MAX_CLOUD_JOBS"),
-    ],
-)
-def test_load_settings_removed_variable_raises(name, replacement):
-    with pytest.raises(ConfigError, match=f"{name}.*{replacement}"):
+# For each variable the server no longer reads, words its error must name.
+REMOVED_GUIDANCE = {
+    "MCP_MAX_PARALLEL_JOBS": "MCP_MAX_LXD_JOBS",
+    "MCP_ALLOW_CLOUD_MACHINE_TYPES": "MCP_MAX_CLOUD_JOBS",
+    "MCP_TRANSPORT": "streamable HTTP",
+}
+
+
+def test_every_removed_variable_has_guidance():
+    assert set(REMOVED_GUIDANCE) == set(REMOVED_ENV_VARS)
+
+
+@pytest.mark.parametrize("name, guidance", REMOVED_GUIDANCE.items())
+def test_a_removed_variable_stops_startup_with_guidance(name, guidance):
+    with pytest.raises(
+        ConfigError, match=f"{name} is no longer read.*{guidance}"
+    ):
         load_settings({name: "1"})
-
-
-def test_load_settings_transport_override():
-    assert load_settings({"MCP_TRANSPORT": "sse"}).transport == "sse"
-
-
-def test_load_settings_transport_invalid_raises():
-    with pytest.raises(ConfigError, match="MCP_TRANSPORT"):
-        load_settings({"MCP_TRANSPORT": "carrier-pigeon"})
 
 
 def test_load_settings_host_override():

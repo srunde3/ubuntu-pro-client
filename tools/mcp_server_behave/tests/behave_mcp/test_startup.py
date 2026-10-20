@@ -35,7 +35,7 @@ def test_invalid_config_exits_nonzero_with_clean_message():
 
 
 def test_valid_config_imports_cleanly():
-    result = _run_import({"MCP_TRANSPORT": "stdio"})
+    result = _run_import({"MCP_PORT": "8001"})
 
     assert result.returncode == 0
     assert result.stderr == ""

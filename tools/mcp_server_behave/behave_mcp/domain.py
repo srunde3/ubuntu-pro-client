@@ -39,11 +39,15 @@ DEFAULT_POOL_LIMITS: dict[Pool, int] = {
     Pool.WSL: 1,
 }
 POOL_LIMIT_CAPS: dict[Pool, int] = {Pool.WSL: MAX_WSL_JOBS}
+# What to do instead, for each variable the server no longer reads.
 REMOVED_ENV_VARS: dict[str, str] = {
     "MCP_MAX_PARALLEL_JOBS": (
-        "MCP_MAX_LXD_JOBS, MCP_MAX_CLOUD_JOBS and MCP_MAX_WSL_JOBS"
+        "use MCP_MAX_LXD_JOBS, MCP_MAX_CLOUD_JOBS and MCP_MAX_WSL_JOBS"
     ),
-    "MCP_ALLOW_CLOUD_MACHINE_TYPES": "MCP_MAX_CLOUD_JOBS",
+    "MCP_ALLOW_CLOUD_MACHINE_TYPES": "use MCP_MAX_CLOUD_JOBS",
+    "MCP_TRANSPORT": (
+        "the server always serves streamable HTTP on MCP_HOST and MCP_PORT"
+    ),
 }
 # Everything the server writes lives under one directory, one subdirectory
 # per kind of artifact, so a checkout has a single place to look and a single

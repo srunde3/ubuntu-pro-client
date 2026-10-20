@@ -319,8 +319,8 @@ class LocalWorkspace:
 
         raise ValueError(
             "Could not determine repo_root: not running from within a "
-            "source checkout of ubuntu-pro-client (e.g. installed via "
-            "'uvx --from'). Pass repo_root explicitly or set "
+            "source checkout of ubuntu-pro-client (a non-editable "
+            "install). Pass repo_root explicitly or set "
             "UBUNTU_PRO_CLIENT_REPO."
         )
 

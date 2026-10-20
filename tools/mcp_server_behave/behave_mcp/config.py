@@ -6,20 +6,14 @@ values raise ``ConfigError`` loudly rather than degrading at request time.
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Literal, cast
 
 from behave_mcp import domain
 from behave_mcp.pools import Pool
 
-TRANSPORT_ENV_VAR = "MCP_TRANSPORT"
 HOST_ENV_VAR = "MCP_HOST"
 PORT_ENV_VAR = "MCP_PORT"
-_ALLOWED_TRANSPORTS: tuple[str, ...] = ("stdio", "sse", "streamable-http")
-_DEFAULT_TRANSPORT = "stdio"
 _DEFAULT_HOST = "127.0.0.1"
 _DEFAULT_PORT = 8000
-
-Transport = Literal["stdio", "sse", "streamable-http"]
 
 
 class ConfigError(Exception):
@@ -32,7 +26,6 @@ class Settings:
 
     pool_limits: Mapping[Pool, int]
     campaign_poll_timeout: int
-    transport: Transport
     host: str
     port: int
 
@@ -46,16 +39,15 @@ def load_settings(environ: Mapping[str, str]) -> Settings:
     return Settings(
         pool_limits={pool: _parse_pool_limit(environ, pool) for pool in Pool},
         campaign_poll_timeout=_parse_campaign_poll_timeout(environ),
-        transport=_parse_transport(environ),
         host=environ.get(HOST_ENV_VAR, "").strip() or _DEFAULT_HOST,
         port=_parse_port(environ),
     )
 
 
 def _reject_removed(environ: Mapping[str, str]) -> None:
-    for name, replacement in domain.REMOVED_ENV_VARS.items():
+    for name, instead in domain.REMOVED_ENV_VARS.items():
         if environ.get(name, "").strip():
-            raise ConfigError(f"{name} is no longer read; use {replacement}")
+            raise ConfigError(f"{name} is no longer read: {instead}")
 
 
 def _parse_pool_limit(environ: Mapping[str, str], pool: Pool) -> int:
@@ -101,16 +93,6 @@ def _parse_campaign_poll_timeout(environ: Mapping[str, str]) -> int:
         )
 
     return value
-
-
-def _parse_transport(environ: Mapping[str, str]) -> Transport:
-    raw = environ.get(TRANSPORT_ENV_VAR, "").strip() or _DEFAULT_TRANSPORT
-    if raw not in _ALLOWED_TRANSPORTS:
-        raise ConfigError(
-            f"{TRANSPORT_ENV_VAR} must be one of "
-            f"{', '.join(_ALLOWED_TRANSPORTS)}, got {raw!r}"
-        )
-    return cast(Transport, raw)
 
 
 def _parse_port(environ: Mapping[str, str]) -> int:

@@ -1079,4 +1079,4 @@ def kill_job(job_id: JobId, repo_root: RepoRoot = "") -> KillJobResponse:
 
 
 def main() -> None:
-    mcp.run(transport=_settings.transport)
+    mcp.run(transport="streamable-http")
