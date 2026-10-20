@@ -14,6 +14,7 @@ dependencies = [
 test = [
   "pytest>=8.0",
   "pytest-asyncio>=0.23",
+  "pytest-cov>=7.1.0",
 ]
 # Versions matched to the repo-root tox envs (see /tox.ini) where pinned.
 lint = [
@@ -154,3 +155,13 @@ ignore_imports = [
   "behave_mcp.server -> mcp",
   "behave_mcp.server -> starlette",
 ]
+
+# A signal, not a gate: no fail_under. `--cov` prints branch coverage and
+# the lines each file misses.
+[tool.coverage.run]
+branch = true
+source = ["behave_mcp", "behave_campaign"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true

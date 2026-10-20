@@ -116,12 +116,14 @@ Run these from `tools/mcp_server_behave`. Every one must pass before a change is
 
 ```bash
 uv sync --extra test --extra lint
-uv run pytest -q -m "not e2e"
+uv run pytest -q -m "not e2e" --cov
 uv run black --check behave_mcp behave_campaign tests
 uv run isort --check-only behave_mcp behave_campaign tests
 uv run flake8 behave_mcp behave_campaign tests
 uv run mypy behave_mcp behave_campaign
 uv run lint-imports
 ```
+
+Coverage is a signal, not a gate: nothing fails on a number. The report lists the lines and branches each file misses. Read them for the files you changed, and either cover them or say in the commit why they stay uncovered.
 
 `uv sync --extra lint` alone removes pytest from the environment. Always sync both extras together. This is a local project, so nothing runs these checks for you.
