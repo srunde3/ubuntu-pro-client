@@ -592,7 +592,7 @@ class TestEvents:
 
     @staticmethod
     def new(kind, **data):
-        from behave_campaign.domain import NewEvent
+        from behave_campaign.domain.events import NewEvent
 
         return NewEvent(kind=kind, at="2026-01-01T00:00:00Z", data=data)
 
@@ -636,7 +636,7 @@ class TestEvents:
         self, planned, run, log, capsys, campaign_file
     ):
         from behave_campaign.adapters import SingleFileCampaignStore
-        from behave_campaign.domain import Lifecycle, LifecycleRecord
+        from behave_campaign.domain.records import Lifecycle, LifecycleRecord
 
         # Every unit attempted and marked complete, so a follower prints
         # what there is and returns.

@@ -12,21 +12,23 @@ description: Architecture and design rules for tools/mcp_server_behave, the beha
 
 ## Dependency direction
 
-`behave_campaign` may import `behave_mcp.parser`, `behave_mcp.pools` and `behave_mcp.layout`. Nothing in `behave_mcp` imports `behave_campaign`, except the tool wrappers in `behave_mcp/server.py`. Keep it that way, so the module graph stays acyclic and `behave_campaign` can be extracted.
+`behave_campaign` may import `behave_mcp.parser`, `behave_mcp.domain.pools` and `behave_mcp.domain.layout`. Nothing in `behave_mcp` imports `behave_campaign`, except the tool wrappers in `behave_mcp/server.py`. Keep it that way, so the module graph stays acyclic and `behave_campaign` can be extracted.
 
 `uv run lint-imports` enforces these rules and the layer table below, using the contracts under `[tool.importlinter]` in `pyproject.toml`. If a change breaks a contract, first move the code to the layer it belongs in. Change a contract only when the architecture itself changes, in the same commit, with the reason in the commit message.
 
 ## Layers
 
-Both packages use ports and adapters, with one module per layer.
+Both packages use ports and adapters. A layer with more than one concern is a package with one module per concern.
 
 | Layer | `behave_mcp` | `behave_campaign` | Rule |
 | --- | --- | --- | --- |
-| Domain | `domain.py`, `parser.py`, `pools.py`, `layout.py` | `domain.py`, `discovery.py`, `export.py` | Pure rules. No file, process or network I/O, except reading feature files through `parser.py`. |
+| Domain | `domain/`: `jobs`, `report`, `logs`, `limits`, `pools`, `layout` | `domain/`: `records`, `state`, `schedule`, `classify`, `events`, `signals`, `discovery`, `bundle` | Pure rules. No file, process or network I/O, except `discovery` reading feature files through the parser. |
+| Parser | `parser.py` | none | Feature files to structured data. It becomes its own package later. |
+| Views | `views.py` | `views/`: `responses`, `export` | Pure projections of domain and parser types into DTOs and export files. A view decides nothing. |
 | Ports | `ports.py` | `ports.py` | `Protocol` interfaces the services depend on. |
 | Adapters | `adapters.py` | `adapters.py`, `repo.py` | Implement the ports with the filesystem, `subprocess`, `fcntl` and git. |
 | Services | `service.py` (`BehaveService`) | `service.py` (`CampaignService`), `runner.py` (`CampaignRunner`) | Orchestrate domain and ports. Most behaviour changes belong here. |
-| DTOs | `messages.py` | `messages.py`, `views.py` | Pydantic models returned to front-ends; `views.py` builds them from records. |
+| DTOs | `messages.py` | `messages.py` | Pydantic models returned to front-ends. |
 | Front-ends | `server.py` | `cli.py` | Thin wrappers: parse arguments, call one service method, serialise the result. |
 | Config | `config.py` | none | Env vars parsed once into `Settings`. |
 
@@ -36,13 +38,14 @@ Small collaborators are passed as plain callables, not ports: the clock (`now_ut
 
 | Change | Put it in |
 | --- | --- |
-| A rule about units, attempts, lifecycle, scheduling, classification or log parsing | the package's `domain.py` |
+| A rule about units, attempts, lifecycle, scheduling, classification or log parsing | the module for that concern in the package's `domain/` |
+| How a result is shown to a caller or written for a reviewer | the package's views |
 | A new kind of external interaction | a `Protocol` in `ports.py`, an adapter in `adapters.py`, and a fake for tests |
 | What a tool or command does | the service method |
 | A new MCP tool | a wrapper in `server.py` registered with the local `@tool`, plus the README and the agent skills |
 | A new CLI command | a wrapper in `cli.py` over a `CampaignService` method |
 | A new env var | `config.py` (`Settings` and its parser) and the README's environment section |
-| A new path under the state directory | `layout.py`, which names paths and reads no env vars. The caller resolves `MCP_STATE_DIR` and passes it in. |
+| A new path under the state directory | `domain/layout.py`, which names paths and reads no env vars. The caller resolves `MCP_STATE_DIR` and passes it in. |
 
 Register MCP tools with the local `@tool` decorator in `server.py`, never with `@mcp.tool`. It returns one compact JSON text block and publishes no output schema, which keeps results and the tool list small.
 
@@ -95,14 +98,15 @@ Copies must agree on the concept. A field, enum value or term that means the sam
 
 ## Tests
 
-The test tree mirrors the packages, so a failing file says which part broke:
+The test tree mirrors the source tree, so a failing file names the module that broke. The tests of `behave_campaign/domain/schedule.py` are in `tests/behave_campaign/domain/test_schedule.py`, and so on for every module:
 
 | Directory | Holds |
 | --- | --- |
-| `tests/behave_mcp/` | tests of `behave_mcp`'s layers, one file per module, plus `test_golden.py` for on-disk byte shapes |
-| `tests/behave_campaign/` | the same for `behave_campaign`, plus `test_cli.py` |
-| `tests/shared/` | tests of `parser.py` and `pools.py`, which both packages depend on |
+| `tests/behave_mcp/` | one file per `behave_mcp` module, with `domain/` mirrored as a directory, plus `test_golden.py` for on-disk byte shapes and `test_startup.py` for configuration at import |
+| `tests/behave_campaign/` | one file per `behave_campaign` module, with `domain/` and `views/` mirrored as directories |
 | `tests/mcp_surface/` | the tools over the real MCP protocol, and the two e2e tests |
+
+A test file holds the tests of one module. Helpers and constants it needs are defined in it, so the file reads on its own.
 
 Each directory is a Python package, so test files with the same name can coexist. Every fake lives in `tests/conftest.py`, one per port, so tests across tiers share it. The `behave-mcp-unit-tests`, `behave-mcp-integration-tests` and `behave-mcp-e2e-tests` skills describe what each tier tests.
 

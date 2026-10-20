@@ -4,8 +4,35 @@ import logging
 from pathlib import Path
 from typing import Callable
 
-from behave_mcp import domain, parser
+from behave_mcp import parser
 from behave_mcp.config import Settings
+from behave_mcp.domain.jobs import (
+    DEFAULT_INSTALL_FROM,
+    INSTALL_FROM_ENV_VAR,
+    build_command,
+    classify_job_state,
+    job_matches_result_filters,
+    validate_install_from,
+    validate_machine_types,
+)
+from behave_mcp.domain.limits import (
+    DEFAULT_FIND_LIMIT,
+    DEFAULT_JOB_LIST_LIMIT,
+    DEFAULT_LOG_CONTEXT,
+    DEFAULT_LOG_LINES,
+    DEFAULT_RESULTS_LIMIT,
+    DEFAULT_RUNNING_TAIL_LINES,
+    DEFAULT_WAIT_POLL_INTERVAL_SECONDS,
+    DEFAULT_WAIT_TIMEOUT_SECONDS,
+    MAX_FIND_LIMIT,
+    MAX_JOB_LIST_LIMIT,
+    MAX_LOG_CONTEXT,
+    MAX_LOG_LINES,
+    MAX_RESULTS_LIMIT,
+)
+from behave_mcp.domain.logs import digest_log, select_log_lines
+from behave_mcp.domain.pools import POOL_LIMIT_ENV_VARS, pools_of
+from behave_mcp.domain.report import summarize_report
 from behave_mcp.messages import (
     ArtifactsResponse,
     CapacityExceededResponse,
@@ -35,7 +62,6 @@ from behave_mcp.messages import (
     TimeoutResponse,
     WaitForCompletionResult,
 )
-from behave_mcp.pools import pools_of
 from behave_mcp.ports import (
     FeatureFileReader,
     Job,
@@ -46,6 +72,12 @@ from behave_mcp.ports import (
     ProcessLauncher,
     ProcessStartError,
     Workspace,
+)
+from behave_mcp.views import (
+    to_catalog_entry,
+    to_combo,
+    to_dimensions,
+    to_scenario_summary,
 )
 
 logger = logging.getLogger(__name__)
@@ -124,7 +156,7 @@ class BehaveService:
             resolved_repo_root
         )
         features = [
-            domain.to_catalog_entry(parser.catalog_entry(detail))
+            to_catalog_entry(parser.catalog_entry(detail))
             for detail in details
             if self._feature_has_match(
                 detail,
@@ -162,7 +194,7 @@ class BehaveService:
                     tags=list(detail.tags),
                     requires_config=list(detail.requires_config),
                     scenarios=[
-                        domain.to_scenario_summary(scenario)
+                        to_scenario_summary(scenario)
                         for scenario in detail.scenarios
                     ],
                 )
@@ -182,7 +214,7 @@ class BehaveService:
         details = self._feature_reader.discover_feature_details(
             resolved_repo_root
         )
-        dimensions = domain.to_dimensions(parser.aggregate_dimensions(details))
+        dimensions = to_dimensions(parser.aggregate_dimensions(details))
         return ListDimensionsResponse(
             repo_root=str(resolved_repo_root),
             releases=dimensions.releases,
@@ -196,14 +228,14 @@ class BehaveService:
         tag: str | None = None,
         text: str | None = None,
         repo_root: str = "",
-        limit: int = domain.DEFAULT_FIND_LIMIT,
+        limit: int = DEFAULT_FIND_LIMIT,
     ) -> FindScenariosResponse:
         if limit <= 0:
             raise BehaveServiceError(
                 f"limit must be a positive integer, got {limit}"
             )
-        limit_clamped = limit > domain.MAX_FIND_LIMIT
-        limit = min(limit, domain.MAX_FIND_LIMIT)
+        limit_clamped = limit > MAX_FIND_LIMIT
+        limit = min(limit, MAX_FIND_LIMIT)
         try:
             resolved_repo_root = self._workspace.resolve_repo_root(
                 repo_root or None
@@ -233,7 +265,7 @@ class BehaveService:
                         type=scenario.type,
                         requires_config=list(scenario.requires_config),
                         combos=[
-                            domain.to_combo(combo)
+                            to_combo(combo)
                             for combo in parser.filtered_combos(
                                 scenario, release, machine_type
                             )
@@ -284,7 +316,7 @@ class BehaveService:
         scenario_name: str = "",
         releases: list[str] | None = None,
         repo_root: str = "",
-        install_from: str = domain.DEFAULT_INSTALL_FROM,
+        install_from: str = DEFAULT_INSTALL_FROM,
     ) -> StartScenarioResult:
         try:
             resolved_repo_root = self._workspace.resolve_repo_root(
@@ -310,13 +342,13 @@ class BehaveService:
                 "describe_feature lists it."
             )
 
-        machine_type_error = domain.validate_machine_types(
+        machine_type_error = validate_machine_types(
             machine_types, self._settings.pool_limits
         )
         if machine_type_error:
             raise BehaveServiceError(machine_type_error)
 
-        install_from_error = domain.validate_install_from(install_from)
+        install_from_error = validate_install_from(install_from)
         if install_from_error:
             raise BehaveServiceError(install_from_error)
 
@@ -341,8 +373,7 @@ class BehaveService:
         if not reservation.reserved:
             names = ", ".join(str(usage.pool) for usage in reservation.full)
             env_vars = ", ".join(
-                domain.POOL_LIMIT_ENV_VARS[usage.pool]
-                for usage in reservation.full
+                POOL_LIMIT_ENV_VARS[usage.pool] for usage in reservation.full
             )
             return CapacityExceededResponse(
                 error=(
@@ -359,7 +390,7 @@ class BehaveService:
                 ],
             )
 
-        command = domain.build_command(
+        command = build_command(
             feature_file,
             machine_types,
             scenario_name,
@@ -367,7 +398,7 @@ class BehaveService:
             write_targets.json_report,
         )
         env = self._workspace.subprocess_env()
-        env[domain.INSTALL_FROM_ENV_VAR] = install_from
+        env[INSTALL_FROM_ENV_VAR] = install_from
 
         try:
             handle = self._launcher.launch(
@@ -500,10 +531,8 @@ class BehaveService:
     def wait_for_completion(
         self,
         job_id: str,
-        max_wait_seconds: int = domain.DEFAULT_WAIT_TIMEOUT_SECONDS,
-        poll_interval_seconds: float = (
-            domain.DEFAULT_WAIT_POLL_INTERVAL_SECONDS
-        ),
+        max_wait_seconds: int = DEFAULT_WAIT_TIMEOUT_SECONDS,
+        poll_interval_seconds: float = (DEFAULT_WAIT_POLL_INTERVAL_SECONDS),
         repo_root: str = "",
     ) -> WaitForCompletionResult:
         if max_wait_seconds <= 0:
@@ -536,11 +565,11 @@ class BehaveService:
     def get_logs(
         self,
         job_id: str,
-        lines: int = domain.DEFAULT_LOG_LINES,
+        lines: int = DEFAULT_LOG_LINES,
         repo_root: str = "",
         *,
         pattern: str = "",
-        context: int = domain.DEFAULT_LOG_CONTEXT,
+        context: int = DEFAULT_LOG_CONTEXT,
         start: int = 0,
     ) -> LogsResponse:
         if lines <= 0:
@@ -553,9 +582,9 @@ class BehaveService:
                     context, start
                 )
             )
-        lines_clamped = lines > domain.MAX_LOG_LINES
-        lines = min(lines, domain.MAX_LOG_LINES)
-        context = min(context, domain.MAX_LOG_CONTEXT)
+        lines_clamped = lines > MAX_LOG_LINES
+        lines = min(lines, MAX_LOG_LINES)
+        context = min(context, MAX_LOG_CONTEXT)
 
         job = self._registry.get(job_id)
         if job is None:
@@ -574,7 +603,7 @@ class BehaveService:
 
         log_lines = results.read_log_lines(job_id)
         try:
-            selection = domain.select_log_lines(
+            selection = select_log_lines(
                 log_lines,
                 pattern=pattern,
                 context=context,
@@ -611,7 +640,7 @@ class BehaveService:
                 f"No log file exists for job_id: {job_id}"
             )
 
-        digest = domain.digest_log(results.read_log_lines(job_id))
+        digest = digest_log(results.read_log_lines(job_id))
         return ErrorsResponse(
             job_id=job_id,
             total_lines=digest.total_lines,
@@ -668,7 +697,7 @@ class BehaveService:
     def list_jobs(
         self,
         repo_root: str = "",
-        limit: int = domain.DEFAULT_JOB_LIST_LIMIT,
+        limit: int = DEFAULT_JOB_LIST_LIMIT,
     ) -> ListScenarioJobsResponse:
         try:
             resolved_repo_root = self._workspace.resolve_repo_root(
@@ -681,8 +710,8 @@ class BehaveService:
             raise BehaveServiceError(
                 f"limit must be a positive integer, got {limit}"
             )
-        limit_clamped = limit > domain.MAX_JOB_LIST_LIMIT
-        limit = min(limit, domain.MAX_JOB_LIST_LIMIT)
+        limit_clamped = limit > MAX_JOB_LIST_LIMIT
+        limit = min(limit, MAX_JOB_LIST_LIMIT)
         log_dir = self._workspace.resolve_log_dir(resolved_repo_root)
         results = self._results.bind(log_dir)
 
@@ -736,7 +765,7 @@ class BehaveService:
         release: str = "",
         machine_type: str = "",
         status: str = "",
-        limit: int = domain.DEFAULT_RESULTS_LIMIT,
+        limit: int = DEFAULT_RESULTS_LIMIT,
         repo_root: str = "",
     ) -> ResultsResponse:
         status_filter: RunStatus | None = None
@@ -767,8 +796,8 @@ class BehaveService:
             raise BehaveServiceError(
                 f"limit must be a positive integer, got {limit}"
             )
-        limit_clamped = limit > domain.MAX_RESULTS_LIMIT
-        limit = min(limit, domain.MAX_RESULTS_LIMIT)
+        limit_clamped = limit > MAX_RESULTS_LIMIT
+        limit = min(limit, MAX_RESULTS_LIMIT)
 
         log_dir = self._workspace.resolve_log_dir(resolved_repo_root)
         results = self._results.bind(log_dir)
@@ -782,7 +811,7 @@ class BehaveService:
                 job = self._recover_job(job_id, repo_root or None)
                 if job is None:
                     continue
-            if not domain.job_matches_result_filters(
+            if not job_matches_result_filters(
                 results.read_record(job_id),
                 job_id=job_id,
                 job_ids=job_ids_filter,
@@ -816,7 +845,7 @@ class BehaveService:
         if summary.status == RunStatus.COMPLETED:
             report_data = self._results.bind(job.log_dir).read_report(job_id)
             if report_data is not None:
-                report = domain.summarize_report(report_data)
+                report = summarize_report(report_data)
         return JobResult(
             job_id=job_id,
             status=summary.status.value,
@@ -842,7 +871,7 @@ class BehaveService:
             if handle is None or returncode is not None:
                 report_data = results.read_report(job_id)
             report = (
-                domain.summarize_report(report_data)
+                summarize_report(report_data)
                 if report_data is not None
                 else None
             )
@@ -853,7 +882,7 @@ class BehaveService:
             if handle is None and pid is not None:
                 pid_alive = self._launcher.is_pid_alive(pid)
 
-            classification = domain.classify_job_state(
+            classification = classify_job_state(
                 has_live_handle=handle is not None,
                 returncode=returncode,
                 report_present=report is not None,
@@ -902,7 +931,7 @@ class BehaveService:
             return RunningResponse(
                 job_id=job_id,
                 recent_output=results.log_tail(
-                    job_id, domain.DEFAULT_RUNNING_TAIL_LINES
+                    job_id, DEFAULT_RUNNING_TAIL_LINES
                 ),
                 artifacts=results.artifacts(job_id),
             )
@@ -912,9 +941,7 @@ class BehaveService:
 
         report_data = results.read_report(job_id)
         report = (
-            domain.summarize_report(report_data)
-            if report_data is not None
-            else None
+            summarize_report(report_data) if report_data is not None else None
         )
         report_ok = None if report is None else not report.failures
 
@@ -922,7 +949,7 @@ class BehaveService:
         if handle is None and job.pid is not None:
             pid_alive = self._launcher.is_pid_alive(job.pid)
 
-        classification = domain.classify_job_state(
+        classification = classify_job_state(
             has_live_handle=handle is not None,
             returncode=returncode,
             report_present=report is not None,
@@ -944,7 +971,7 @@ class BehaveService:
             return RunningResponse(
                 job_id=job_id,
                 recent_output=results.log_tail(
-                    job_id, domain.DEFAULT_RUNNING_TAIL_LINES
+                    job_id, DEFAULT_RUNNING_TAIL_LINES
                 ),
                 artifacts=results.artifacts(job_id),
             )
@@ -966,7 +993,7 @@ class BehaveService:
             summary=None if report is None else report.summary,
             failures=[] if report is None else report.failures,
             recent_output=(
-                results.log_tail(job_id, domain.DEFAULT_RUNNING_TAIL_LINES)
+                results.log_tail(job_id, DEFAULT_RUNNING_TAIL_LINES)
                 if report is None
                 else None
             ),

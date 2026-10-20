@@ -21,19 +21,22 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import IO, Any, Mapping, Sequence
 
-from behave_campaign import discovery, export
-from behave_campaign.domain import (
+from behave_campaign.domain import discovery
+from behave_campaign.domain.bundle import JOB_FILES, BundleEntry
+from behave_campaign.domain.events import (
+    Event,
+    NewEvent,
+    event_matches,
+    parse_event,
+)
+from behave_campaign.domain.records import (
     CampaignError,
     CampaignHeader,
-    Event,
     Filters,
-    NewEvent,
     PlanRecord,
     Record,
     Unit,
     encode_record,
-    event_matches,
-    parse_event,
     parse_record,
 )
 from behave_campaign.ports import (
@@ -42,8 +45,8 @@ from behave_campaign.ports import (
     CampaignNotFoundError,
     LaneStartError,
 )
-from behave_mcp import layout
-from behave_mcp.pools import Pool
+from behave_mcp.domain import layout
+from behave_mcp.domain.pools import Pool
 
 CAMPAIGN_SUFFIX = layout.CAMPAIGN_SUFFIX
 EVENTS_SUFFIX = ".events" + CAMPAIGN_SUFFIX
@@ -506,7 +509,7 @@ class JobDirFiles:
 
     def files(self, job_id: str) -> Mapping[str, Path]:
         found = {}
-        for name in export.JOB_FILES:
+        for name in JOB_FILES:
             path = self._path(job_id, name)
             if path.is_file():
                 found[name] = path
@@ -517,7 +520,7 @@ class TarBundleWriter:
     """Writes a gzipped tarball whose bytes depend only on its entries."""
 
     def write(
-        self, output: Path, top: str, entries: Sequence[export.BundleEntry]
+        self, output: Path, top: str, entries: Sequence[BundleEntry]
     ) -> list[str]:
         if output.exists():
             raise CampaignError(
@@ -548,7 +551,7 @@ class TarBundleWriter:
 
     @staticmethod
     def _write_archive(
-        raw: IO[bytes], top: str, entries: Sequence[export.BundleEntry]
+        raw: IO[bytes], top: str, entries: Sequence[BundleEntry]
     ) -> list[str]:
         skipped = []
         with gzip.GzipFile(fileobj=raw, mode="wb", mtime=0) as zipped:

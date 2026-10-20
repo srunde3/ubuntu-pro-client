@@ -82,17 +82,21 @@ forbidden_modules = ["behave_campaign"]
 ignore_imports = ["behave_mcp.server -> behave_campaign.**"]
 
 [[tool.importlinter.contracts]]
-name = "behave_campaign uses only parser, pools and layout from behave_mcp"
+name = "behave_campaign uses only parser, domain.pools and domain.layout from behave_mcp"
 type = "forbidden"
 source_modules = ["behave_campaign"]
 forbidden_modules = [
   "behave_mcp.adapters",
   "behave_mcp.config",
-  "behave_mcp.domain",
+  "behave_mcp.domain.jobs",
+  "behave_mcp.domain.limits",
+  "behave_mcp.domain.logs",
+  "behave_mcp.domain.report",
   "behave_mcp.messages",
   "behave_mcp.ports",
   "behave_mcp.server",
   "behave_mcp.service",
+  "behave_mcp.views",
 ]
 
 [[tool.importlinter.contracts]]
@@ -102,10 +106,10 @@ containers = ["behave_mcp"]
 layers = [
   "server",
   "service | adapters",
-  "ports | config",
-  "domain",
+  "ports | config | views",
   "parser",
-  "messages | pools | layout",
+  "domain",
+  "messages",
 ]
 
 [[tool.importlinter.contracts]]
@@ -115,8 +119,7 @@ containers = ["behave_campaign"]
 layers = [
   "cli",
   "service | runner | adapters | repo",
-  "views | ports | discovery",
-  "export",
+  "views | ports",
   "domain | messages",
 ]
 
@@ -125,14 +128,12 @@ name = "Domain and service modules do no direct I/O"
 type = "forbidden"
 source_modules = [
   "behave_mcp.domain",
-  "behave_mcp.layout",
-  "behave_mcp.pools",
   "behave_mcp.service",
+  "behave_mcp.views",
   "behave_campaign.domain",
-  "behave_campaign.discovery",
-  "behave_campaign.export",
   "behave_campaign.service",
   "behave_campaign.runner",
+  "behave_campaign.views",
 ]
 forbidden_modules = [
   "fcntl",

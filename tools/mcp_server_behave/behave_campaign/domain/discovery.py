@@ -11,9 +11,8 @@ import difflib
 from pathlib import Path
 from typing import Any, Iterable
 
+from behave_campaign.domain.records import CampaignError, Filters, Unit
 from behave_mcp import parser
-
-from .domain import CampaignError, Filters, Unit
 
 # Above this many values, suggest close matches instead of listing them all.
 _MAX_LISTED_VALUES = 15

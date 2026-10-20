@@ -1,8 +1,12 @@
 import pytest
 
-from behave_mcp.config import ConfigError, Settings, load_settings
-from behave_mcp.domain import REMOVED_ENV_VARS
-from behave_mcp.pools import Pool
+from behave_mcp.config import (
+    REMOVED_ENV_VARS,
+    ConfigError,
+    Settings,
+    load_settings,
+)
+from behave_mcp.domain.pools import Pool
 
 
 def test_load_settings_defaults():

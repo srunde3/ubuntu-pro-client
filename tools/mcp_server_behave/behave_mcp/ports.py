@@ -9,9 +9,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, NamedTuple, Protocol
 
+from behave_mcp.domain.pools import Pool
 from behave_mcp.messages import Artifacts, ExistsFlags, JobRecord, RepoState
 from behave_mcp.parser import FeatureDetail
-from behave_mcp.pools import Pool
 
 
 class LogFileOpenError(Exception):

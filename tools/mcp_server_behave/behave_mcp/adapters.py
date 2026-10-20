@@ -13,9 +13,10 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from behave_mcp import layout, parser
+from behave_mcp import parser
+from behave_mcp.domain import layout
+from behave_mcp.domain.pools import Pool
 from behave_mcp.messages import Artifacts, ExistsFlags, JobRecord, RepoState
-from behave_mcp.pools import Pool
 from behave_mcp.ports import (
     Job,
     LogFileOpenError,

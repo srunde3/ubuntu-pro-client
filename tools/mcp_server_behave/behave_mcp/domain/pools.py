@@ -46,3 +46,21 @@ MAX_WSL_JOBS = 1
 def pools_of(machine_types: Iterable[str]) -> frozenset[Pool]:
     """The pools a job on these machine types draws on."""
     return frozenset(POOL_OF[machine_type] for machine_type in machine_types)
+
+
+POOL_LIMIT_ENV_VARS: dict[Pool, str] = {
+    Pool.LXD: "MCP_MAX_LXD_JOBS",
+    Pool.CLOUD: "MCP_MAX_CLOUD_JOBS",
+    Pool.WSL: "MCP_MAX_WSL_JOBS",
+}
+
+
+# Cloud jobs cost money, so they stay off until a limit is set.
+DEFAULT_POOL_LIMITS: dict[Pool, int] = {
+    Pool.LXD: 1,
+    Pool.CLOUD: 0,
+    Pool.WSL: 1,
+}
+
+
+POOL_LIMIT_CAPS: dict[Pool, int] = {Pool.WSL: MAX_WSL_JOBS}

@@ -15,10 +15,6 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from behave.parser import parse_file
 
-from behave_mcp.pools import POOL_OF
-
-ALLOWED_MACHINE_TYPES = frozenset(POOL_OF)
-
 
 @dataclass
 class Combo:

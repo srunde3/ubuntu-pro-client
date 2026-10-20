@@ -11,10 +11,9 @@ from typing import NamedTuple
 import pytest
 
 from behave_campaign.adapters import JsonlCampaignStore, JsonlEventLog
-from behave_campaign.domain import (
+from behave_campaign.domain.records import (
     CampaignError,
     CampaignHeader,
-    ControlAction,
     Filters,
     Lifecycle,
     LifecycleRecord,
@@ -22,12 +21,12 @@ from behave_campaign.domain import (
     RepoState,
     RetryRecord,
     Unit,
-    lifecycle,
-    reduce_units,
 )
+from behave_campaign.domain.schedule import ControlAction
+from behave_campaign.domain.state import lifecycle, reduce_units
 from behave_campaign.ports import CampaignLockedError
 from behave_campaign.runner import RESTART_REASON, CampaignRunner, ThreadTicker
-from behave_mcp.pools import Pool
+from behave_mcp.domain.pools import Pool
 from tests.conftest import FakeLanes, FakeLock, FakeTicker
 
 AT = "2026-09-12T12:00:00Z"
@@ -677,7 +676,7 @@ class TestRecover:
         assert lifecycle(records) == Lifecycle.PAUSED
 
     def test_the_pause_says_why(self, runner, store):
-        from behave_campaign.domain import last_state_reason
+        from behave_campaign.domain.state import last_state_reason
 
         create(store)
         runner.start("1234567")

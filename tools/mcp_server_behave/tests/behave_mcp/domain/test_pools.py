@@ -1,4 +1,4 @@
-from behave_mcp.pools import Pool, pools_of
+from behave_mcp.domain.pools import Pool, pools_of
 
 
 class TestPools:

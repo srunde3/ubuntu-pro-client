@@ -1,19 +1,19 @@
 import pytest
 
 from behave_campaign.adapters import JsonlCampaignStore, JsonlEventLog
-from behave_campaign.domain import (
+from behave_campaign.domain.events import NewEvent
+from behave_campaign.domain.records import (
     AttemptFinished,
     AttemptStarted,
     CampaignError,
     Filters,
     Lifecycle,
     LifecycleRecord,
-    NewEvent,
     RepoState,
     Unit,
 )
 from behave_campaign.service import CampaignService
-from behave_mcp.pools import Pool
+from behave_mcp.domain.pools import Pool
 from tests.conftest import FakeBundleWriter, FakeFeatureReader, FakeJobFiles
 
 AT = "2026-09-12T12:00:00Z"

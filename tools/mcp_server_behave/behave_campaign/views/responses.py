@@ -8,8 +8,16 @@ from __future__ import annotations
 
 from typing import Sequence
 
-from behave_campaign import domain
-from behave_campaign.domain import Record, UnitStatus
+from behave_campaign.domain.records import CampaignHeader as HeaderRecord
+from behave_campaign.domain.records import Record, UnitStatus, lanes_as_dict
+from behave_campaign.domain.state import (
+    busy_by_pool,
+    count_states,
+    group_by_scenario,
+    lifecycle,
+    reduce_units,
+    running,
+)
 from behave_campaign.messages import (
     AttemptView,
     CampaignHeader,
@@ -26,9 +34,9 @@ from behave_campaign.messages import (
 )
 
 
-def header_of(records: Sequence[Record]) -> domain.CampaignHeader | None:
+def header_of(records: Sequence[Record]) -> HeaderRecord | None:
     for record in records:
-        if isinstance(record, domain.CampaignHeader):
+        if isinstance(record, HeaderRecord):
             return record
     return None
 
@@ -57,13 +65,13 @@ def unit_history_view(status: UnitStatus) -> UnitHistoryView:
 def campaign_header(
     campaign_id: str, records: Sequence[Record]
 ) -> CampaignHeader:
-    header = header_of(records) or domain.CampaignHeader()
+    header = header_of(records) or HeaderRecord()
     return CampaignHeader(
         campaign_id=campaign_id,
         created_at=header.at,
         install_from=header.install_from,
-        lanes=domain.lanes_as_dict(header.lanes),
-        total_units=len(domain.reduce_units(records)),
+        lanes=lanes_as_dict(header.lanes),
+        total_units=len(reduce_units(records)),
         repo=CampaignRepo(**header.repo.as_dict()),
         scope=CampaignScope(**header.filters.scope_as_dict()),
     )
@@ -79,35 +87,35 @@ def campaign_state(
     ``lifecycle`` and ``lanes_busy`` are facts about the whole campaign and
     never narrow.
     """
-    statuses = domain.reduce_units(records)
+    statuses = reduce_units(records)
     return CampaignState(
         campaign_id=campaign_id,
-        lifecycle=domain.lifecycle(records),
-        lanes_busy=len(domain.running(statuses)),
+        lifecycle=lifecycle(records),
+        lanes_busy=len(running(statuses)),
         counts=StateCounts(
-            **domain.count_states(statuses if counted is None else counted)
+            **count_states(statuses if counted is None else counted)
         ),
     )
 
 
 def lanes_busy_by_pool(records: Sequence[Record]) -> dict[str, int]:
     """Lanes in flight for each pool the campaign has lanes in."""
-    header = header_of(records) or domain.CampaignHeader()
-    busy = domain.busy_by_pool(domain.reduce_units(records))
+    header = header_of(records) or HeaderRecord()
+    busy = busy_by_pool(reduce_units(records))
     return {pool.value: busy.get(pool, 0) for pool in header.lanes}
 
 
 def campaign_listing(
     campaign_id: str, records: Sequence[Record]
 ) -> CampaignListing:
-    header = header_of(records) or domain.CampaignHeader()
+    header = header_of(records) or HeaderRecord()
     scope = header.filters
     return CampaignListing(
         **campaign_state(campaign_id, records).model_dump(),
         created_at=header.at,
         install_from=header.install_from,
-        lanes=domain.lanes_as_dict(header.lanes),
-        total_units=len(domain.reduce_units(records)),
+        lanes=lanes_as_dict(header.lanes),
+        total_units=len(reduce_units(records)),
         scope_size=ScopeSize(
             features=len(scope.feature),
             scenarios=len(scope.scenario),
@@ -121,7 +129,7 @@ def scenario_problems(
     statuses: Sequence[UnitStatus],
 ) -> list[ScenarioProblems]:
     rows = []
-    for (feature, scenario), units in domain.group_by_scenario(statuses):
+    for (feature, scenario), units in group_by_scenario(statuses):
         row = ScenarioProblems(feature=feature, scenario=scenario)
         for status in units:
             getattr(row, str(status.state)).append(

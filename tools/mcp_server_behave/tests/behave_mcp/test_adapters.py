@@ -11,8 +11,8 @@ from behave_mcp.adapters import (
     LocalWorkspace,
     PopenLauncher,
 )
+from behave_mcp.domain.pools import Pool
 from behave_mcp.messages import JobRecord
-from behave_mcp.pools import Pool
 from behave_mcp.ports import (
     Job,
     LogFileOpenError,

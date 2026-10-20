@@ -14,18 +14,57 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
-from behave_campaign import domain, export
-from behave_campaign.domain import (
+from behave_campaign.domain.bundle import (
+    AUDIT_CAMPAIGN_NAME,
+    AUDIT_DIR,
+    AUDIT_EVENTS_NAME,
+    CAMPAIGN_JSON_NAME,
+    JOB_FILES,
+    JOBS_DIR,
+    SUMMARY_NAME,
+    UNITS_CSV_NAME,
+    BundleEntry,
+    job_ids,
+)
+from behave_campaign.domain.classify import finished_from_mcp_payload
+from behave_campaign.domain.events import (
+    MAX_EVENT_ERROR_CHARS,
+    EventKind,
+    NewEvent,
+    expand_event_kinds,
+    shorten_failures,
+)
+from behave_campaign.domain.records import (
+    DEFAULT_INSTALL_SOURCE,
     AttemptFinished,
     AttemptStarted,
     CampaignError,
     CampaignHeader,
     Filters,
+    Lifecycle,
     LifecycleRecord,
     PlanRecord,
     Record,
     RepoState,
+    UnitState,
     UnitStatus,
+    lanes_as_dict,
+    parse_finished,
+    resolve_lanes,
+    validate_campaign_id,
+    validate_install_source,
+)
+from behave_campaign.domain.state import (
+    GROUPINGS,
+    GroupBy,
+    count_states,
+    describe_units,
+    lifecycle,
+    outstanding,
+    problems,
+    reduce_units,
+    running,
+    select_next,
 )
 from behave_campaign.messages import (
     DEFAULT_EVENTS_LIMIT,
@@ -54,7 +93,12 @@ from behave_campaign.ports import (
     FeatureReader,
     JobFiles,
 )
-from behave_campaign.views import (
+from behave_campaign.views.export import (
+    render_campaign_json,
+    render_summary,
+    render_units_csv,
+)
+from behave_campaign.views.responses import (
     campaign_header,
     campaign_listing,
     campaign_state,
@@ -64,7 +108,7 @@ from behave_campaign.views import (
     unit_history_view,
     unit_view,
 )
-from behave_mcp.pools import Pool
+from behave_mcp.domain.pools import Pool
 
 
 class CampaignService:
@@ -104,7 +148,7 @@ class CampaignService:
         machine_types: Sequence[str] = (),
         feature_files: Sequence[str] = (),
         scenarios: Sequence[str] = (),
-        install_from: str = domain.DEFAULT_INSTALL_SOURCE,
+        install_from: str = DEFAULT_INSTALL_SOURCE,
         lanes: Mapping[Pool, int] | None = None,
     ) -> CreateCampaignResponse:
         """Plan a campaign and store it. Starts nothing.
@@ -114,8 +158,8 @@ class CampaignService:
         is underspecified: one created from the CLI can still be handed to a
         runner later.
         """
-        domain.validate_campaign_id(campaign_id)
-        domain.validate_install_source(install_from)
+        validate_campaign_id(campaign_id)
+        validate_install_source(install_from)
 
         filters = Filters(
             feature=tuple(feature_files),
@@ -126,7 +170,7 @@ class CampaignService:
         units = self._features.discover_units(repo_root, filters)
         if not units:
             raise CampaignError("no test units matched the requested filters")
-        resolved_lanes = domain.resolve_lanes(units, lanes or {})
+        resolved_lanes = resolve_lanes(units, lanes or {})
         self._check_lane_ceiling(resolved_lanes)
 
         at = self._now()
@@ -143,13 +187,13 @@ class CampaignService:
         self._events.append(
             campaign_id,
             [
-                domain.NewEvent(
-                    kind=domain.EventKind.CAMPAIGN_CREATED,
+                NewEvent(
+                    kind=EventKind.CAMPAIGN_CREATED,
                     at=at,
                     data={
                         "total_units": len(units),
                         "install_from": install_from,
-                        "lanes": domain.lanes_as_dict(resolved_lanes),
+                        "lanes": lanes_as_dict(resolved_lanes),
                         "scope": filters.scope_as_dict(),
                     },
                 )
@@ -184,13 +228,13 @@ class CampaignService:
         A job still in flight cannot be recorded here: the scheduler owns
         those, having written the start itself.
         """
-        domain.validate_install_source(install_from)
+        validate_install_source(install_from)
         if from_mcp:
-            parsed = domain.finished_from_mcp_payload(payload)
+            parsed = finished_from_mcp_payload(payload)
         else:
             if not isinstance(payload, list) or not payload:
                 raise CampaignError("input must be a non-empty JSON array")
-            parsed = [domain.parse_finished(raw) for raw in payload]
+            parsed = [parse_finished(raw) for raw in payload]
 
         at = self._now()
         # One completed try becomes both halves: it started, and it
@@ -220,14 +264,12 @@ class CampaignService:
         self._store.append(campaign_id, records)
 
         settled = [*existing, *records]
-        statuses = domain.reduce_units(settled)
+        statuses = reduce_units(settled)
         return RecordAttemptsResponse(
             **campaign_state(campaign_id, settled).model_dump(),
             recorded=len(parsed),
-            running=[unit_view(status) for status in domain.running(statuses)],
-            problems=[
-                unit_view(status) for status in domain.problems(statuses)
-            ],
+            running=[unit_view(status) for status in running(statuses)],
+            problems=[unit_view(status) for status in problems(statuses)],
         )
 
     def complete_campaign(self, *, campaign_id: str) -> CampaignState:
@@ -237,40 +279,36 @@ class CampaignService:
         writes it on its own when the last lane finishes.
         """
         records = self._store.replay(campaign_id)
-        state = domain.lifecycle(records)
-        if state == domain.Lifecycle.COMPLETE:
+        state = lifecycle(records)
+        if state == Lifecycle.COMPLETE:
             return campaign_state(campaign_id, records)
-        if state == domain.Lifecycle.CANCELLED:
+        if state == Lifecycle.CANCELLED:
             raise CampaignError(
                 "campaign {!r} was cancelled; reopen it instead".format(
                     campaign_id
                 )
             )
-        left = domain.outstanding(records)
+        left = outstanding(records)
         if left:
             raise CampaignError(
                 "campaign {!r} has {} unit(s) left to run or retry: {}".format(
                     campaign_id,
                     len(left),
-                    domain.describe_units(status.unit for status in left),
+                    describe_units(status.unit for status in left),
                 )
             )
 
         at = self._now()
-        record = LifecycleRecord(state=domain.Lifecycle.COMPLETE, at=at)
+        record = LifecycleRecord(state=Lifecycle.COMPLETE, at=at)
         self._store.append(campaign_id, [record])
         settled = [*records, record]
         self._events.append(
             campaign_id,
             [
-                domain.NewEvent(
-                    kind=domain.EventKind.CAMPAIGN_COMPLETE,
+                NewEvent(
+                    kind=EventKind.CAMPAIGN_COMPLETE,
                     at=at,
-                    data={
-                        "counts": domain.count_states(
-                            domain.reduce_units(settled)
-                        )
-                    },
+                    data={"counts": count_states(reduce_units(settled))},
                 )
             ],
         )
@@ -293,7 +331,7 @@ class CampaignService:
         *,
         campaign_id: str,
         filters: Filters = Filters(),
-        group_by: str = domain.GroupBy.UNIT,
+        group_by: str = GroupBy.UNIT,
         problems_limit: int = DEFAULT_PROBLEMS_LIMIT,
     ) -> CampaignStatusResponse:
         """Report counts, the units in flight, and the units needing action.
@@ -304,35 +342,35 @@ class CampaignService:
         scenario per row with its units bucketed by state. Individual units
         are :meth:`list_units`' job.
         """
-        if group_by not in domain.GROUPINGS:
+        if group_by not in GROUPINGS:
             raise CampaignError(
                 "unknown group_by {!r}; choose one of {}".format(
-                    group_by, ", ".join(domain.GROUPINGS)
+                    group_by, ", ".join(GROUPINGS)
                 )
             )
         records = self._store.replay(campaign_id)
         statuses = [
             status
-            for status in domain.reduce_units(records)
+            for status in reduce_units(records)
             if filters.matches(status)
         ]
 
-        problem_units = domain.problems(statuses)
+        problem_units = problems(statuses)
         problems_cap, _ = self._cap(problems_limit)
 
         return CampaignStatusResponse(
             campaign=campaign_header(campaign_id, records),
             state=campaign_state(campaign_id, records, statuses),
             lanes_busy_by_pool=lanes_busy_by_pool(records),
-            running=[unit_view(status) for status in domain.running(statuses)],
+            running=[unit_view(status) for status in running(statuses)],
             problems=(
                 [unit_view(status) for status in problem_units[:problems_cap]]
-                if group_by == domain.GroupBy.UNIT
+                if group_by == GroupBy.UNIT
                 else None
             ),
             problem_scenarios=(
                 scenario_problems(problem_units)[:problems_cap]
-                if group_by == domain.GroupBy.SCENARIO
+                if group_by == GroupBy.SCENARIO
                 else None
             ),
             problems_total=len(problem_units),
@@ -369,7 +407,7 @@ class CampaignService:
         return NextUnitsResponse(
             units=[
                 unit_view(status)
-                for status in domain.select_next(
+                for status in select_next(
                     self._selected(campaign_id, filters), limit
                 )
             ]
@@ -399,7 +437,7 @@ class CampaignService:
         kinds: Sequence[str] = (),
         limit: int = DEFAULT_EVENTS_LIMIT,
         timeout: float = 0.0,
-        failure_chars: int = domain.MAX_EVENT_ERROR_CHARS,
+        failure_chars: int = MAX_EVENT_ERROR_CHARS,
     ) -> AwaitEventsResponse:
         """Return events after ``since_seq``, waiting up to ``timeout``.
 
@@ -412,7 +450,7 @@ class CampaignService:
         """
         if failure_chars < 0:
             raise CampaignError("failure_chars must not be negative")
-        patterns = domain.expand_event_kinds(kinds)
+        patterns = expand_event_kinds(kinds)
         capped, _ = self._cap_events(limit)
 
         if timeout > 0:
@@ -439,7 +477,7 @@ class CampaignService:
                     seq=event.seq,
                     kind=event.kind,
                     at=event.at,
-                    data=domain.shorten_failures(event.data, failure_chars),
+                    data=shorten_failures(event.data, failure_chars),
                 )
                 for event in events
             ],
@@ -480,66 +518,66 @@ class CampaignService:
         campaign exports: evidence is a finished record, never a snapshot.
         """
         records = self._store.replay(campaign_id)
-        lifecycle = domain.lifecycle(records)
-        statuses = domain.reduce_units(records)
-        if lifecycle != domain.Lifecycle.COMPLETE:
-            counts = domain.count_states(statuses)
+        current = lifecycle(records)
+        statuses = reduce_units(records)
+        if current != Lifecycle.COMPLETE:
+            counts = count_states(statuses)
             raise CampaignError(
                 "campaign {!r} is {} with {} running and {} unattempted "
                 "units; only a complete campaign can be exported".format(
                     campaign_id,
-                    lifecycle,
-                    counts[domain.UnitState.RUNNING],
-                    counts[domain.UnitState.UNATTEMPTED],
+                    current,
+                    counts[UnitState.RUNNING],
+                    counts[UnitState.UNATTEMPTED],
                 )
             )
-        header = header_of(records) or domain.CampaignHeader()
+        header = header_of(records) or CampaignHeader()
 
-        entries: list[export.BundleEntry] = []
+        entries: list[BundleEntry] = []
         missing: list[str] = []
         missing_jobs: set[str] = set()
-        all_jobs = export.job_ids(statuses)
+        all_jobs = job_ids(statuses)
         for job_id in all_jobs:
             found = jobs.files(job_id)
-            for name in export.JOB_FILES:
-                bundled = "{}/{}/{}".format(export.JOBS_DIR, job_id, name)
+            for name in JOB_FILES:
+                bundled = "{}/{}/{}".format(JOBS_DIR, job_id, name)
                 if name in found:
                     entries.append(
-                        export.BundleEntry(name=bundled, source=found[name])
+                        BundleEntry(name=bundled, source=found[name])
                     )
                 else:
                     missing.append(bundled)
                     missing_jobs.add(job_id)
 
         audit = [
-            (export.AUDIT_CAMPAIGN_NAME, self._store.path_for(campaign_id)),
-            (export.AUDIT_EVENTS_NAME, self._events.path_for(campaign_id)),
+            (AUDIT_CAMPAIGN_NAME, self._store.path_for(campaign_id)),
+            (AUDIT_EVENTS_NAME, self._events.path_for(campaign_id)),
         ]
         for name, source in audit:
             if source is not None:
                 entries.append(
-                    export.BundleEntry(
-                        name="{}/{}".format(export.AUDIT_DIR, name),
+                    BundleEntry(
+                        name="{}/{}".format(AUDIT_DIR, name),
                         source=source,
                     )
                 )
 
         entries += [
-            export.BundleEntry(
-                name=export.SUMMARY_NAME,
-                data=export.render_summary(
+            BundleEntry(
+                name=SUMMARY_NAME,
+                data=render_summary(
                     campaign_id, header, statuses, missing_jobs
                 ).encode(),
             ),
-            export.BundleEntry(
-                name=export.CAMPAIGN_JSON_NAME,
-                data=export.render_campaign_json(
-                    campaign_id, header, lifecycle, statuses
+            BundleEntry(
+                name=CAMPAIGN_JSON_NAME,
+                data=render_campaign_json(
+                    campaign_id, header, current, statuses
                 ).encode(),
             ),
-            export.BundleEntry(
-                name=export.UNITS_CSV_NAME,
-                data=export.render_units_csv(statuses).encode(),
+            BundleEntry(
+                name=UNITS_CSV_NAME,
+                data=render_units_csv(statuses).encode(),
             ),
         ]
         skipped = writer.write(output, campaign_id, entries)
@@ -556,7 +594,7 @@ class CampaignService:
                     *(
                         name
                         for name in skipped
-                        if not name.startswith(export.AUDIT_DIR + "/")
+                        if not name.startswith(AUDIT_DIR + "/")
                     ),
                 ]
             ),
@@ -569,7 +607,7 @@ class CampaignService:
     ) -> list[UnitStatus]:
         return [
             status
-            for status in domain.reduce_units(self._store.replay(campaign_id))
+            for status in reduce_units(self._store.replay(campaign_id))
             if filters.matches(status)
         ]
 
@@ -588,7 +626,7 @@ class CampaignService:
         if unplanned:
             raise CampaignError(
                 "{} attempt(s) reference unplanned units: {}".format(
-                    len(unplanned), domain.describe_units(unplanned)
+                    len(unplanned), describe_units(unplanned)
                 )
             )
 

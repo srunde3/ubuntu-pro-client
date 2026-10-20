@@ -12,7 +12,7 @@ from behave_mcp.adapters import (
     LocalJobResultStoreFactory,
 )
 from behave_mcp.config import Settings
-from behave_mcp.domain import DEFAULT_POOL_LIMITS
+from behave_mcp.domain.pools import DEFAULT_POOL_LIMITS
 from behave_mcp.messages import JobRecord
 from behave_mcp.ports import Job
 from behave_mcp.service import BehaveService

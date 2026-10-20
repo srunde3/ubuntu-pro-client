@@ -19,8 +19,17 @@ from typing import Any, Callable, Iterator, Sequence
 
 from pydantic import BaseModel
 
-from behave_mcp import layout
-from behave_mcp.pools import Pool
+from behave_campaign.domain.events import EVENT_FAMILIES, EVENT_PRESETS
+from behave_campaign.domain.records import (
+    DEFAULT_INSTALL_SOURCE,
+    INSTALL_SOURCES,
+    STATES,
+    Filters,
+    Lifecycle,
+)
+from behave_campaign.domain.state import GROUPINGS, GroupBy
+from behave_mcp.domain import layout
+from behave_mcp.domain.pools import Pool
 
 from .adapters import (
     JobDirFiles,
@@ -30,17 +39,6 @@ from .adapters import (
     SingleFileCampaignStore,
     TarBundleWriter,
     system_now,
-)
-from .domain import (
-    DEFAULT_INSTALL_SOURCE,
-    EVENT_FAMILIES,
-    EVENT_PRESETS,
-    GROUPINGS,
-    INSTALL_SOURCES,
-    STATES,
-    Filters,
-    GroupBy,
-    Lifecycle,
 )
 from .messages import (
     DEFAULT_EVENTS_LIMIT,

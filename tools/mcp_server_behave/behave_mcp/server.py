@@ -14,7 +14,6 @@ from mcp.types import TextContent
 from pydantic import BaseModel, Field
 from starlette.responses import JSONResponse
 
-from behave_campaign import domain as campaign_domain
 from behave_campaign.adapters import (
     FileCampaignRunLock,
     JsonlCampaignStore,
@@ -23,7 +22,10 @@ from behave_campaign.adapters import (
     ServiceLaneRunner,
     system_now,
 )
-from behave_campaign.domain import Filters
+from behave_campaign.domain.events import MAX_EVENT_ERROR_CHARS
+from behave_campaign.domain.records import Filters
+from behave_campaign.domain.schedule import ControlAction
+from behave_campaign.domain.state import GroupBy
 from behave_campaign.messages import (
     DEFAULT_EVENTS_LIMIT,
     DEFAULT_HISTORY_LIMIT,
@@ -40,7 +42,6 @@ from behave_campaign.messages import (
 from behave_campaign.repo import repo_state as read_repo_state
 from behave_campaign.runner import CampaignRunner
 from behave_campaign.service import CampaignService
-from behave_mcp import domain
 from behave_mcp.adapters import (
     InMemoryJobRegistry,
     LocalFeatureFileReader,
@@ -49,6 +50,17 @@ from behave_mcp.adapters import (
     PopenLauncher,
 )
 from behave_mcp.config import ConfigError, Settings, load_settings
+from behave_mcp.domain.jobs import InstallFrom
+from behave_mcp.domain.limits import (
+    DEFAULT_FIND_LIMIT,
+    DEFAULT_JOB_LIST_LIMIT,
+    DEFAULT_LOG_CONTEXT,
+    DEFAULT_LOG_LINES,
+    DEFAULT_RESULTS_LIMIT,
+    DEFAULT_WAIT_POLL_INTERVAL_SECONDS,
+    DEFAULT_WAIT_TIMEOUT_SECONDS,
+)
+from behave_mcp.domain.pools import MAX_WSL_JOBS, Pool
 from behave_mcp.messages import (
     ArtifactsResponse,
     DescribeFeatureResponse,
@@ -63,7 +75,6 @@ from behave_mcp.messages import (
     StartScenarioResult,
     WaitForCompletionResult,
 )
-from behave_mcp.pools import MAX_WSL_JOBS, Pool
 from behave_mcp.ports import JobRegistry
 from behave_mcp.service import BehaveService
 
@@ -171,10 +182,10 @@ TextFilter = Annotated[
         description="Only keep scenarios whose name contains this substring.",
     ),
 ]
-InstallFrom = Annotated[
-    domain.InstallFrom,
+InstallFromArg = Annotated[
+    InstallFrom,
     Field(
-        default=domain.InstallFrom.LOCAL,
+        default=InstallFrom.LOCAL,
         description=(
             "Where to install ubuntu-pro-client from before running the "
             "scenario. Sets UACLIENT_BEHAVE_INSTALL_FROM for the behave "
@@ -369,7 +380,7 @@ def find_scenarios(
                 "the server max are capped, with limit_clamped set."
             )
         ),
-    ] = domain.DEFAULT_FIND_LIMIT,
+    ] = DEFAULT_FIND_LIMIT,
     repo_root: RepoRoot = "",
 ) -> FindScenariosResponse:
     return _service.find_scenarios(
@@ -430,7 +441,7 @@ def start_scenario(
         ),
     ] = None,
     repo_root: RepoRoot = "",
-    install_from: InstallFrom = domain.InstallFrom.LOCAL,
+    install_from: InstallFromArg = InstallFrom.LOCAL,
 ) -> StartScenarioResult:
     return _service.start_scenario(
         feature_file,
@@ -466,7 +477,7 @@ def list_scenario_jobs(
                 "are silently capped."
             )
         ),
-    ] = domain.DEFAULT_JOB_LIST_LIMIT,
+    ] = DEFAULT_JOB_LIST_LIMIT,
 ) -> ListScenarioJobsResponse:
     return _service.list_jobs(repo_root, limit)
 
@@ -517,7 +528,7 @@ def get_scenario_results(
                 "server max are capped, with limit_clamped set."
             )
         ),
-    ] = domain.DEFAULT_RESULTS_LIMIT,
+    ] = DEFAULT_RESULTS_LIMIT,
     repo_root: RepoRoot = "",
 ) -> ResultsResponse:
     return _service.get_results(
@@ -547,10 +558,10 @@ def wait_for_scenario_completion(
         Field(
             description="How long to poll before returning a timeout payload."
         ),
-    ] = domain.DEFAULT_WAIT_TIMEOUT_SECONDS,
+    ] = DEFAULT_WAIT_TIMEOUT_SECONDS,
     poll_interval_seconds: Annotated[
         float, Field(description="Delay between internal status checks.")
-    ] = domain.DEFAULT_WAIT_POLL_INTERVAL_SECONDS,
+    ] = DEFAULT_WAIT_POLL_INTERVAL_SECONDS,
     repo_root: RepoRoot = "",
 ) -> WaitForCompletionResult:
     return _service.wait_for_completion(
@@ -605,10 +616,10 @@ def get_scenario_logs(
     context: Annotated[
         int,
         Field(
-            default=domain.DEFAULT_LOG_CONTEXT,
+            default=DEFAULT_LOG_CONTEXT,
             description="Lines to include either side of each match.",
         ),
-    ] = domain.DEFAULT_LOG_CONTEXT,
+    ] = DEFAULT_LOG_CONTEXT,
     start: Annotated[
         int,
         Field(
@@ -627,7 +638,7 @@ def get_scenario_logs(
                 "the server max are capped, with lines_clamped set."
             )
         ),
-    ] = domain.DEFAULT_LOG_LINES,
+    ] = DEFAULT_LOG_LINES,
     repo_root: RepoRoot = "",
 ) -> LogsResponse:
     return _service.get_logs(
@@ -700,7 +711,7 @@ def create_campaign(
             description="Exact scenario names in scope.",
         ),
     ] = [],
-    install_from: InstallFrom = domain.InstallFrom.LOCAL,
+    install_from: InstallFromArg = InstallFrom.LOCAL,
     lanes: CampaignLanes = CampaignLanes(),
     repo_root: RepoRoot = "",
 ) -> CreateCampaignResponse:
@@ -762,15 +773,15 @@ def campaign_status(
         ),
     ] = [],
     group_by: Annotated[
-        campaign_domain.GroupBy,
+        GroupBy,
         Field(
-            default=campaign_domain.GroupBy.UNIT,
+            default=GroupBy.UNIT,
             description=(
                 "How problems are listed: 'unit' (one per row) or "
                 "'scenario' (one scenario per row, units by state)."
             ),
         ),
-    ] = campaign_domain.GroupBy.UNIT,
+    ] = GroupBy.UNIT,
     problems_limit: Annotated[
         int,
         Field(
@@ -870,17 +881,17 @@ def unit_history(
 def control_campaign(
     campaign_id: CampaignIdArg,
     action: Annotated[
-        campaign_domain.ControlAction,
+        ControlAction,
         Field(description="start, pause, resume or cancel; see above."),
     ],
     repo_root: RepoRoot = "",
 ) -> CampaignControlResponse:
     runner = campaign_runner(repo_root)
     verbs = {
-        campaign_domain.ControlAction.START: runner.start,
-        campaign_domain.ControlAction.PAUSE: runner.pause,
-        campaign_domain.ControlAction.RESUME: runner.resume,
-        campaign_domain.ControlAction.CANCEL: runner.cancel,
+        ControlAction.START: runner.start,
+        ControlAction.PAUSE: runner.pause,
+        ControlAction.RESUME: runner.resume,
+        ControlAction.CANCEL: runner.cancel,
     }
     return verbs[action](campaign_id)
 
@@ -984,13 +995,13 @@ def await_campaign_events(
     failure_chars: Annotated[
         int,
         Field(
-            default=campaign_domain.MAX_EVENT_ERROR_CHARS,
+            default=MAX_EVENT_ERROR_CHARS,
             description=(
                 "Cut each failure's error_message to this many characters; "
                 "0 drops the messages, keeping step and status."
             ),
         ),
-    ] = campaign_domain.MAX_EVENT_ERROR_CHARS,
+    ] = MAX_EVENT_ERROR_CHARS,
     repo_root: RepoRoot = "",
 ) -> AwaitEventsResponse:
     if timeout_seconds > _settings.campaign_poll_timeout:

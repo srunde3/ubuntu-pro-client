@@ -1,9 +1,10 @@
+"""The evidence bundle's summary, JSON and CSV."""
+
 import csv
 import io
 import json
 
-from behave_campaign import export
-from behave_campaign.domain import (
+from behave_campaign.domain.records import (
     Attempt,
     CampaignHeader,
     Filters,
@@ -11,7 +12,12 @@ from behave_campaign.domain import (
     Unit,
     UnitStatus,
 )
-from behave_mcp.pools import Pool
+from behave_campaign.views.export import (
+    render_campaign_json,
+    render_summary,
+    render_units_csv,
+)
+from behave_mcp.domain.pools import Pool
 
 HEADER = CampaignHeader(
     at="2026-10-06T00:00:00Z",
@@ -46,21 +52,15 @@ def attempt(job_id, outcome, finished_at="2026-10-06T01:00:00Z"):
 
 
 A_JAMMY_LXD = Unit("features/a.feature", "A", "jammy", "lxd-container")
+
+
 A_JAMMY_VM = Unit("features/a.feature", "A", "jammy", "lxd-vm")
+
+
 A_NOBLE_LXD = Unit("features/a.feature", "A", "noble", "lxd-container")
+
+
 B_JAMMY_LXD = Unit("features/b.feature", "B", "jammy", "lxd-container")
-
-
-class TestJobIds:
-    def test_includes_superseded_attempts(self):
-        statuses = [
-            status(
-                A_JAMMY_LXD, attempt("old", "failed"), attempt("new", "passed")
-            ),
-            status(B_JAMMY_LXD, attempt("b1", "failed")),
-        ]
-
-        assert export.job_ids(statuses) == ["b1", "new", "old"]
 
 
 class TestUnitsCsv:
@@ -73,9 +73,7 @@ class TestUnitsCsv:
             )
         ]
 
-        rows = list(
-            csv.DictReader(io.StringIO(export.render_units_csv(statuses)))
-        )
+        rows = list(csv.DictReader(io.StringIO(render_units_csv(statuses))))
 
         assert rows == [
             {
@@ -95,7 +93,7 @@ class TestCampaignJson:
         statuses = [status(A_JAMMY_LXD, attempt("j1", "passed"))]
 
         document = json.loads(
-            export.render_campaign_json("LP-1", HEADER, "complete", statuses)
+            render_campaign_json("LP-1", HEADER, "complete", statuses)
         )
 
         assert document["install_from"] == "proposed"
@@ -108,7 +106,7 @@ class TestCampaignJson:
 
 class TestSummary:
     def summary(self, statuses, missing_jobs=()):
-        return export.render_summary("LP-1", HEADER, statuses, missing_jobs)
+        return render_summary("LP-1", HEADER, statuses, missing_jobs)
 
     def test_passed_and_not_passed_are_separate_sections(self):
         text = self.summary(

@@ -3,15 +3,20 @@ from pathlib import Path
 
 import pytest
 
-from behave_mcp import domain
 from behave_mcp.adapters import (
     InMemoryJobRegistry,
     LocalFeatureFileReader,
     LocalJobResultStoreFactory,
 )
 from behave_mcp.config import Settings
+from behave_mcp.domain.limits import (
+    DEFAULT_JOB_LIST_LIMIT,
+    MAX_JOB_LIST_LIMIT,
+    MAX_LOG_LINES,
+    MAX_RESULTS_LIMIT,
+)
+from behave_mcp.domain.pools import Pool
 from behave_mcp.messages import RepoState
-from behave_mcp.pools import Pool
 from behave_mcp.ports import Job, LogFileOpenError, ProcessStartError
 from behave_mcp.service import (
     BehaveService,
@@ -898,9 +903,9 @@ def test_get_logs_clamps_lines_above_max(tmp_path):
         registry=registry,
     )
 
-    result = service.get_logs(
-        job_id, lines=domain.MAX_LOG_LINES + 1000
-    ).model_dump(mode="json")
+    result = service.get_logs(job_id, lines=MAX_LOG_LINES + 1000).model_dump(
+        mode="json"
+    )
     assert result["lines_clamped"] is True
 
 
@@ -1156,7 +1161,7 @@ def test_list_jobs_merges_in_memory_and_disk_only(tmp_path):
 
 
 def test_list_jobs_caps_completed_history(tmp_path):
-    total = domain.DEFAULT_JOB_LIST_LIMIT + 5
+    total = DEFAULT_JOB_LIST_LIMIT + 5
     for i in range(total):
         job_id = f"jobold{i:03d}"
         (tmp_path / f"{job_id}_meta.json").write_text(
@@ -1169,7 +1174,7 @@ def test_list_jobs_caps_completed_history(tmp_path):
 
     result = service.list_jobs().model_dump(mode="json")
 
-    assert len(result["jobs"]) == domain.DEFAULT_JOB_LIST_LIMIT
+    assert len(result["jobs"]) == DEFAULT_JOB_LIST_LIMIT
     assert result["total_completed"] == total
     assert result["truncated"] is True
     kept_ids = {job["job_id"] for job in result["jobs"]}
@@ -1178,7 +1183,7 @@ def test_list_jobs_caps_completed_history(tmp_path):
 
 
 def test_list_jobs_limit_overrides_default(tmp_path):
-    total = domain.DEFAULT_JOB_LIST_LIMIT + 5
+    total = DEFAULT_JOB_LIST_LIMIT + 5
     for i in range(total):
         job_id = f"jobold{i:03d}"
         (tmp_path / f"{job_id}_meta.json").write_text(
@@ -1219,9 +1224,9 @@ def test_list_jobs_limit_clamped_when_too_high(tmp_path):
         FakeWorkspace(repo_root=tmp_path, log_dir=tmp_path),
     )
 
-    result = service.list_jobs(
-        limit=domain.MAX_JOB_LIST_LIMIT + 1000
-    ).model_dump(mode="json")
+    result = service.list_jobs(limit=MAX_JOB_LIST_LIMIT + 1000).model_dump(
+        mode="json"
+    )
     assert result["truncated"] is False
     assert result["limit_clamped"] is True
 
@@ -1432,7 +1437,7 @@ def test_get_results_caps_and_truncates(tmp_path):
     assert result.total == 3
     assert result.truncated is True
 
-    clamped = service.get_results(limit=domain.MAX_RESULTS_LIMIT + 1)
+    clamped = service.get_results(limit=MAX_RESULTS_LIMIT + 1)
     assert clamped.limit_clamped is True
     assert clamped.truncated is False
 

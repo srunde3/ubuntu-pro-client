@@ -5,7 +5,7 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-from .domain import RepoState
+from behave_campaign.domain.records import RepoState
 
 _TIMEOUT_SECONDS = 10
 

@@ -329,55 +329,76 @@ whether those jobs are still alive.
 
 ## Types
 
-Every set of related-but-mutually-exclusive values is an enum in `domain.py`,
-so an exhaustive check is possible and a typo is a failure rather than a value
+Every set of related-but-mutually-exclusive values is an enum, so an
+exhaustive check is possible and a typo is a failure rather than a value
 that silently matches nothing:
 
-| enum | values |
-| --- | --- |
-| `RecordType` | the six record types above |
-| `Outcome` | `passed`, `failed`, `skipped`, `error` |
-| `UnitState` | those four, plus `unattempted` and `running` |
-| `Lifecycle` | `created`, `running`, `paused`, `cancelled`, `complete` |
-| `EventKind` | every event, with a `family` property |
-| `EventFamily` | `campaign`, `lane`, `unit`, `anomaly` |
+| enum | values | module |
+| --- | --- | --- |
+| `RecordType` | the six record types above | `domain/records.py` |
+| `Outcome` | `passed`, `failed`, `skipped`, `error` | `domain/records.py` |
+| `UnitState` | those four, plus `unattempted` and `running` | `domain/records.py` |
+| `Lifecycle` | `created`, `running`, `paused`, `cancelled`, `complete` | `domain/records.py` |
+| `GroupBy` | `unit`, `scenario` | `domain/state.py` |
+| `ControlAction` | `start`, `pause`, `resume`, `cancel` | `domain/schedule.py` |
+| `EventKind` | every event, with a `family` property | `domain/events.py` |
+| `EventFamily` | `campaign`, `lane`, `unit`, `anomaly` | `domain/events.py` |
 
-They all subclass a small `_StringEnum`, so a member reads and serialises as
-its value -- `"paused"`, not `"Lifecycle.PAUSED"` -- and compares equal to the
-plain string a caller sent. Plain-string tuples are derived from each
-(`OUTCOMES`, `STATES`, ...) for argparse choices and error messages.
+They all subclass `StringEnum`, so a member reads and serialises as its
+value (`"paused"`, not `"Lifecycle.PAUSED"`) and compares equal to the plain
+string a caller sent. Plain-string tuples are derived from each (`OUTCOMES`,
+`STATES` and so on) for argparse choices and error messages.
 
 ## Architecture
 
-Same hexagonal layering as [behave_mcp](../behave_mcp), one module per layer:
+Same hexagonal layering as [behave_mcp](../behave_mcp). The pure layers are
+packages with one module per concern.
 
-- `domain.py` -- pure campaign rules. Units, attempts, state reduction, and
-  the order remaining work is taken up in. No I/O.
-- `ports.py` -- the Protocols the service and runner depend on:
+`domain/` holds the campaign rules. No module in it does I/O:
+
+- `records.py`: the record types, enums and filters, and how records are
+  read and written.
+- `state.py`: what the records say now: unit states, lifecycle, remaining
+  work, problems.
+- `schedule.py`: what a tick decides. `plan_tick` chooses which finished
+  lanes to record and which units to start.
+- `classify.py`: what a finished MCP job established for its unit.
+- `events.py`: event kinds, subscription presets and matching.
+- `signals.py`: derived observations such as repeated failures and overdue
+  lanes.
+- `discovery.py`: builds units from the feature files through
+  `behave_mcp.parser`.
+- `bundle.py`: what a complete campaign's evidence bundle holds.
+
+`views/` turns records into what a caller or reviewer reads, and decides
+nothing:
+
+- `responses.py`: the response DTOs in `messages.py`.
+- `export.py`: the bundle's `SUMMARY.md`, `campaign.json` and `units.csv`.
+
+The other modules:
+
+- `messages.py`: pydantic DTOs returned across the MCP boundary.
+- `ports.py`: the Protocols the service and runner depend on:
   `CampaignStore`, `FeatureReader`, `LaneRunner`, `EventLog`, `Ticker`,
   `CampaignRunLock`, `JobFiles`, `BundleWriter`.
-- `adapters.py` -- concrete implementations. Two stores satisfy
+- `adapters.py`: concrete implementations. Two stores satisfy
   `CampaignStore`: the MCP names a campaign by id inside a campaign
-  directory, the CLI can also be pointed at a file. Both share one
-  serialisation path, so there is one on-disk format; `behave_mcp.layout`
-  is where the directory convention lives.
-- `service.py` -- `CampaignService`, driven by both the MCP tool wrappers and
-  the CLI. Where behaviour changes belong.
-- `export.py` -- pure rules for a complete campaign's evidence bundle: what
-  goes in it, and rendering `SUMMARY.md`, `campaign.json` and `units.csv`.
-- `messages.py` -- pydantic DTOs returned across the MCP boundary.
-- `discovery.py` -- builds units from the feature files via
-  `behave_mcp.parser`.
-- `repo.py` -- reads the checkout state a campaign was built from.
-- `runner.py` -- `CampaignRunner`, which opens lanes, records what finishes,
-  and holds the run lock for the one campaign that may be active. The only
-  module here that starts a thread, and it holds no scheduling decisions:
-  those are `domain.plan_tick`, so the scheduler is testable without one.
-  `ThreadTicker` is the `Ticker` port's real implementation; tests inject a
-  fake and call `tick` themselves.
-- `cli.py` -- the standalone front-end. Wrappers only: read arguments, call
-  the service, print the response as JSON. Behaviour belongs in `service.py`
-  so the CLI and the MCP tools cannot drift apart.
+  directory, and the CLI can also be pointed at a file. Both share one
+  serialisation path, so there is one on-disk format.
+  `behave_mcp.domain.layout` names the directory convention.
+- `repo.py`: reads the checkout state a campaign was built from.
+- `service.py`: `CampaignService`, driven by both the MCP tool wrappers and
+  the CLI. Behaviour changes belong here.
+- `runner.py`: `CampaignRunner`, which opens lanes, records what finishes,
+  and holds the run lock for the one campaign that may be active. It is the
+  only module that starts a thread, and it makes no scheduling decisions:
+  those are `schedule.plan_tick`, so the scheduler is testable without a
+  thread. `ThreadTicker` is the `Ticker` port's real implementation; tests
+  inject a fake and call `tick` themselves.
+- `cli.py`: the standalone front-end. Wrappers only: read arguments, call
+  the service, print the response as JSON. Behaviour belongs in
+  `service.py`, so the CLI and the MCP tools cannot drift apart.
 
 The run lock is an advisory `flock` on `<campaign_id>.lock`, held for as long
 as a campaign is actively scheduling, so a second server cannot schedule it

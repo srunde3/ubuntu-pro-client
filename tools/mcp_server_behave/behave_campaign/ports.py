@@ -11,18 +11,17 @@ callables rather than Protocols, matching ``behave_mcp.service``.
 from pathlib import Path
 from typing import Any, Callable, Mapping, Protocol, Sequence
 
-from behave_campaign.domain import (
+from behave_campaign.domain.bundle import BundleEntry
+from behave_campaign.domain.events import Event, NewEvent
+from behave_campaign.domain.records import (
     CampaignError,
     CampaignHeader,
-    Event,
     Filters,
-    NewEvent,
     PlanRecord,
     Record,
     Unit,
 )
-from behave_campaign.export import BundleEntry
-from behave_mcp.pools import Pool
+from behave_mcp.domain.pools import Pool
 
 
 # These subclass CampaignError -- and so ValueError -- because they report a

@@ -1,36 +1,20 @@
-"""Pure rules for a complete campaign's evidence bundle.
-
-The bundle holds a few files rendered for a reviewer beside every raw
-artifact the campaign produced. Each unit appears once, in the state its
-attempts ended in.
-"""
+"""The evidence bundle's files for a reviewer: summary, JSON and CSV."""
 
 from __future__ import annotations
 
 import csv
 import io
 import json
-from dataclasses import dataclass
-from pathlib import Path
 from typing import Iterable, Sequence
 
-from behave_campaign.domain import (
+from behave_campaign.domain.records import (
     CampaignHeader,
     UnitState,
     UnitStatus,
-    count_states,
     lanes_as_dict,
 )
+from behave_campaign.domain.state import count_states
 
-SUMMARY_NAME = "SUMMARY.md"
-CAMPAIGN_JSON_NAME = "campaign.json"
-UNITS_CSV_NAME = "units.csv"
-JOBS_DIR = "jobs"
-AUDIT_DIR = "audit"
-AUDIT_CAMPAIGN_NAME = "campaign.jsonl"
-AUDIT_EVENTS_NAME = "events.jsonl"
-# The files one job leaves behind, by the name each takes in the bundle.
-JOB_FILES = ("meta.json", "report.json", "stdout.log")
 UNITS_CSV_COLUMNS = (
     "feature",
     "scenario",
@@ -40,18 +24,6 @@ UNITS_CSV_COLUMNS = (
     "job_id",
     "finished_at",
 )
-
-
-@dataclass(frozen=True)
-class BundleEntry:
-    """One file in the bundle: bytes rendered here, or a file copied as is.
-
-    ``name`` is relative to the bundle's top directory.
-    """
-
-    name: str
-    data: bytes | None = None
-    source: Path | None = None
 
 
 def ordered_releases(
@@ -74,14 +46,6 @@ def completed_at(statuses: Sequence[UnitStatus]) -> str:
         ),
         default="",
     )
-
-
-def job_ids(statuses: Sequence[UnitStatus]) -> list[str]:
-    """Every attempt's job id, final or superseded, in a stable order."""
-    ids = {
-        attempt.job_id for status in statuses for attempt in status.attempts
-    }
-    return sorted(ids)
 
 
 def _final_attempt_finished_at(status: UnitStatus) -> str:
