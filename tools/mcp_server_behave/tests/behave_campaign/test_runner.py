@@ -6,6 +6,7 @@ scheduling behaviour is exercised synchronously here.
 
 import threading
 import time
+from typing import NamedTuple
 
 import pytest
 
@@ -13,6 +14,7 @@ from behave_campaign.adapters import JsonlCampaignStore, JsonlEventLog
 from behave_campaign.domain import (
     CampaignError,
     CampaignHeader,
+    ControlAction,
     Filters,
     Lifecycle,
     LifecycleRecord,
@@ -1323,28 +1325,29 @@ class TestSignals:
             now=lambda: AT,
             ticker=FakeTicker(),
         )
-        create(store, lxd_lanes=1)
-        runner.start("1234567")
+        campaign_id = create(store, lxd_lanes=1)
+        runner.start(campaign_id)
 
         def starved():
             return events.read(
-                "1234567",
+                campaign_id,
                 since_seq=0,
                 kinds=["anomaly.capacity_starved"],
                 limit=10,
             )
 
-        runner.tick("1234567")
-        runner.tick("1234567")
-        runner.tick("1234567")
+        runner.tick(campaign_id)
+        runner.tick(campaign_id)
+        runner.tick(campaign_id)
         assert len(starved()) == 1
 
         lanes.full_pools.clear()
-        runner.tick("1234567")
-        lanes.finish("job1")
+        runner.tick(campaign_id)
+        (_, opened_job, _, _) = lanes.started[-1]
+        lanes.finish(opened_job)
         lanes.full_pools.add(Pool.LXD)
-        runner.tick("1234567")
-        runner.tick("1234567")
+        runner.tick(campaign_id)
+        runner.tick(campaign_id)
 
         assert len(starved()) == 2
 
@@ -1404,3 +1407,60 @@ class TestSignals:
         )
 
         assert reported == []
+
+
+class Refused(NamedTuple):
+    reason: str
+
+
+# What each control verb does to a campaign in each lifecycle state. start
+# on a paused campaign resumes it; start on a running one picks up a
+# campaign this process is not scheduling yet.
+CONTROL = {
+    (Lifecycle.CREATED, ControlAction.START): Lifecycle.RUNNING,
+    (Lifecycle.CREATED, ControlAction.PAUSE): Refused("cannot pause"),
+    (Lifecycle.CREATED, ControlAction.RESUME): Refused("not paused"),
+    (Lifecycle.CREATED, ControlAction.CANCEL): Lifecycle.CANCELLED,
+    (Lifecycle.RUNNING, ControlAction.START): Lifecycle.RUNNING,
+    (Lifecycle.RUNNING, ControlAction.PAUSE): Lifecycle.PAUSED,
+    (Lifecycle.RUNNING, ControlAction.RESUME): Refused("not paused"),
+    (Lifecycle.RUNNING, ControlAction.CANCEL): Lifecycle.CANCELLED,
+    (Lifecycle.PAUSED, ControlAction.START): Lifecycle.RUNNING,
+    (Lifecycle.PAUSED, ControlAction.PAUSE): Refused("cannot pause"),
+    (Lifecycle.PAUSED, ControlAction.RESUME): Lifecycle.RUNNING,
+    (Lifecycle.PAUSED, ControlAction.CANCEL): Lifecycle.CANCELLED,
+    (Lifecycle.CANCELLED, ControlAction.START): Refused("reopen it first"),
+    (Lifecycle.CANCELLED, ControlAction.PAUSE): Refused("cannot pause"),
+    (Lifecycle.CANCELLED, ControlAction.RESUME): Refused("not paused"),
+    (Lifecycle.CANCELLED, ControlAction.CANCEL): Refused("cannot cancel"),
+    (Lifecycle.COMPLETE, ControlAction.START): Refused("no work left"),
+    (Lifecycle.COMPLETE, ControlAction.PAUSE): Refused("cannot pause"),
+    (Lifecycle.COMPLETE, ControlAction.RESUME): Refused("not paused"),
+    (Lifecycle.COMPLETE, ControlAction.CANCEL): Lifecycle.CANCELLED,
+}
+
+
+def test_every_state_and_action_has_an_expectation():
+    assert set(CONTROL) == {
+        (state, action) for state in Lifecycle for action in ControlAction
+    }
+
+
+@pytest.mark.parametrize(
+    "state, action, expected",
+    [(state, action, want) for (state, action), want in CONTROL.items()],
+    ids=str,
+)
+def test_control_verbs_by_lifecycle(runner, store, state, action, expected):
+    campaign_id = create(store)
+    if state != Lifecycle.CREATED:
+        store.append(campaign_id, [LifecycleRecord(state=state, at=AT)])
+    verb = getattr(runner, action.value)
+
+    if isinstance(expected, Refused):
+        with pytest.raises(CampaignError, match=expected.reason):
+            verb(campaign_id)
+        assert lifecycle(store.replay(campaign_id)) == state
+    else:
+        verb(campaign_id)
+        assert lifecycle(store.replay(campaign_id)) == expected

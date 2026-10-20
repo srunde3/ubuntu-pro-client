@@ -7,7 +7,69 @@ description: What unit tests in tools/mcp_server_behave test, layer by layer, wi
 
 A unit test proves one behaviour of one layer. It replaces everything past the layer's ports with fakes or injected lambdas, so it is fast, deterministic and says exactly what broke. It does not speak the MCP protocol, read the real `features/` corpus, or start tox or behave.
 
-Each layer has a different job, so each is tested for a different thing.
+Each layer has a different job, so each is tested for a different thing. Two rules apply to every layer: tests are arranged, acted and asserted in that order, and every value in a test has a name that says what it stands for.
+
+## Arrange, act, assert
+
+A test has three parts, separated by blank lines: it arranges the inputs, acts once on the subject, and asserts on the result. A reader finds the behaviour under test in the act, and the expectation in the assertions below it.
+
+Good: one act, and its result is named before it is checked.
+
+```python
+def test_the_actionable_preset(kind, actionable):
+    patterns = expand_event_kinds([ACTIONABLE_PRESET])
+
+    matched = event_matches(kind, patterns)
+
+    assert matched is actionable
+```
+
+Bad: acts and asserts interleaved. The test checks four behaviours, and the first failure hides the rest.
+
+```python
+def test_lifecycle(runner):
+    runner.start(campaign_id)
+    assert lifecycle(store.replay(campaign_id)) == Lifecycle.RUNNING
+    runner.pause(campaign_id)
+    assert lifecycle(store.replay(campaign_id)) == Lifecycle.PAUSED
+    runner.resume(campaign_id)
+    assert lifecycle(store.replay(campaign_id)) == Lifecycle.RUNNING
+```
+
+Write one test per behaviour, or a table when the behaviours are cases of one rule. When the behaviour is itself a sequence, such as what repeated ticks do, the earlier steps are part of the arrangement. Name the test after the sequence: `test_starvation_is_reported_once_per_episode`.
+
+## Name every value
+
+A value that matters to the test gets a name that says why it is there. A value that does not matter gets a name that says so. A reader then never has to guess whether `2` is a count, an id or a coincidence.
+
+Good: the name says the exact pid is irrelevant, and the id comes from the arrangement.
+
+```python
+# Any pid: classify_job_state cares only whether one was recorded.
+RECORDED_PID = 4321
+
+_signals(pid=RECORDED_PID, alive=True)
+```
+
+```python
+campaign_id = create(store)
+store.append(campaign_id, [LifecycleRecord(state=state, at=AT)])
+```
+
+Good: two ids whose names say which is which.
+
+```python
+JOB_ID = "job-under-test"
+OTHER_JOB_ID = "job-from-another-run"
+```
+
+Bad: bare literals. Is `123` a special pid? Which of `"1"` and `"2"` is the job under test?
+
+```python
+_signals(pid=123)
+service.get_results(job_ids=["1"])
+assert [r.job_id for r in results] == ["1", "2"]
+```
 
 ## Domain: the rules
 
@@ -35,9 +97,9 @@ Bad: the same rule tested through the runner and a store. A failure could be the
 
 ```python
 def test_wsl_does_not_block_lxd(runner, store, lanes):
-    create(store, units=[*WSL_UNITS, *UNITS], lanes={Pool.LXD: 2, Pool.WSL: 1})
-    runner.start("1234567")
-    runner.tick("1234567")
+    campaign_id = create(store, units=[*WSL_UNITS, *UNITS], lanes={Pool.LXD: 2, Pool.WSL: 1})
+    runner.start(campaign_id)
+    runner.tick(campaign_id)
     assert len(lanes.started) == 3
 ```
 
@@ -72,19 +134,19 @@ Runner tests check what a sequence of ticks does to a campaign's records and eve
 Good: each step is an explicit tick, so the order of events is certain.
 
 ```python
-runner.tick("1234567")
-runner.tick("1234567")
+runner.tick(campaign_id)
+runner.tick(campaign_id)
 assert len(starved()) == 1
 
 lanes.full_pools.clear()
-runner.tick("1234567")
+runner.tick(campaign_id)
 ```
 
 Bad: a real thread and a sleep. The test is slow, and it fails when the machine is busy.
 
 ```python
 runner = CampaignRunner(..., ticker=ThreadTicker(interval=0.1))
-runner.start("1234567")
+runner.start(campaign_id)
 time.sleep(1)
 assert len(lanes.started) == 2
 ```
@@ -213,7 +275,7 @@ CASES = [
         id="live-running",
     ),
     pytest.param(
-        dict(pid=1, pid_alive=False),
+        dict(pid=RECORDED_PID, pid_alive=False),
         (RunStatus.UNKNOWN, False, ClassifyReason.PID_DEAD_NO_REPORT),
         id="pid-dead",
     ),
@@ -255,4 +317,4 @@ def test_every_outcome():
 - It uses the fakes in `tests/conftest.py`. When a test needs a fake to do more, it extends that fake, so each port keeps exactly one.
 - When a fix changes behaviour that a test pinned, the test changes to the correct behaviour, and its name changes if the name described the old one.
 
-Run the unit and integration tests together with `uv run pytest -q -m "not e2e"`.
+Run the unit tests with `uv run pytest -q -m "not integration and not e2e"`, or one file or test with `uv run pytest -q tests/behave_campaign/test_runner.py -k starvation`.

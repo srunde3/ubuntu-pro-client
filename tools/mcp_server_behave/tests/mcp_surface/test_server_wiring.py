@@ -11,6 +11,8 @@ import pytest
 import behave_mcp.server as server_module
 from tests.conftest import make_repo_with_feature
 
+pytestmark = pytest.mark.integration
+
 
 @pytest.fixture
 def fresh_server(tmp_path, monkeypatch):

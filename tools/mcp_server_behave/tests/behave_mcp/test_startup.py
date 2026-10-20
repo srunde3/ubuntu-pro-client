@@ -8,6 +8,10 @@ import os
 import subprocess
 import sys
 
+import pytest
+
+pytestmark = pytest.mark.integration
+
 
 def _run_import(env_overrides: dict[str, str]) -> subprocess.CompletedProcess:
     env = {**os.environ, **env_overrides}

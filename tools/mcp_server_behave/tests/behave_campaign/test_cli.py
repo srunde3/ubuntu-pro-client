@@ -5,6 +5,8 @@ import pytest
 
 from behave_campaign.cli import main
 
+pytestmark = pytest.mark.integration
+
 UNIT_A_JAMMY = ["features/a.feature", "A", "jammy", "lxd-container"]
 UNIT_A_NOBLE = ["features/a.feature", "A", "noble", "lxd-vm"]
 UNIT_B_JAMMY = ["features/b.feature", "B", "jammy", "lxd-container"]

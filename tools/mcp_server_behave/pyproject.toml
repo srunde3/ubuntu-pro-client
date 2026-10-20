@@ -43,7 +43,7 @@ testpaths = ["tests"]
 markers = [
   "e2e: End-to-end tests that exercise real subprocess-backed MCP flows",
   "long_running: Tests expected to run for minutes",
-  "integration: exercises the real features/*.feature corpus instead of fixtures",
+  "integration: real components wired together in process: the MCP protocol, the CLI, startup, real behave or the real features/ corpus",
 ]
 
 # black/isort discover the *nearest* pyproject.toml to each file, so

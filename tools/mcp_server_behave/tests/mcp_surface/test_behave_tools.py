@@ -13,6 +13,8 @@ from tests.conftest import (
     result_json,
 )
 
+pytestmark = pytest.mark.integration
+
 # The real ubuntu-pro-client repo this package lives in.
 # Used by tests that need to parse actual features/*.feature files.
 _REPO_ROOT = Path(__file__).resolve().parents[4]

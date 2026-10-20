@@ -13,12 +13,16 @@ from behave_campaign.domain import (
     Lane,
     Lifecycle,
     LifecycleRecord,
+    Outcome,
     PlanRecord,
     RetryRecord,
     Unit,
+    UnitState,
+    UnitStatus,
     classify_result,
     detect_signals,
     elapsed_seconds,
+    is_schedulable,
     last_state_reason,
     lifecycle,
     outstanding,
@@ -191,77 +195,114 @@ class TestLifecycle:
         assert last_state_reason(plan(UNIT_A)) == ""
 
 
-class TestClassifyResult:
-    def test_a_clean_pass_is_recorded_as_passed(self):
-        result = classify_result(UNIT_A, completed(passed=2), AT)
+CLASSIFY_CASES = [
+    pytest.param(completed(passed=2), Outcome.PASSED, False, id="clean-pass"),
+    # A skipped Examples row next to a passing one: that run passed.
+    pytest.param(
+        completed(passed=1, skipped=1),
+        Outcome.PASSED,
+        False,
+        id="pass-and-skip",
+    ),
+    pytest.param(
+        completed(passed=1, failed=1), Outcome.FAILED, False, id="any-failure"
+    ),
+    pytest.param(
+        completed(passed=0, skipped=2), Outcome.SKIPPED, False, id="only-skips"
+    ),
+    pytest.param(
+        {"status": "completed", "ok": False, "job_id": "j", "summary": None},
+        Outcome.ERROR,
+        False,
+        id="no-report",
+    ),
+    # The CLI raises on these. A scheduler has nobody to raise at, so it
+    # records an error with the reason and keeps going.
+    pytest.param(
+        completed(passed=1, unknown=1),
+        Outcome.ERROR,
+        True,
+        id="unknown-scenario-status",
+    ),
+    pytest.param(
+        completed(passed=1, ok=False),
+        Outcome.ERROR,
+        True,
+        id="pass-contradicted-by-ok-false",
+    ),
+    pytest.param("not a payload", Outcome.ERROR, True, id="junk"),
+]
 
-        assert result.finished.outcome == "passed"
-        assert result.finished.job_id == "job1"
-        assert result.finished.at == AT
-        assert not result.problem
 
-    def test_any_failure_is_recorded_as_failed(self):
-        result = classify_result(UNIT_A, completed(passed=1, failed=1), AT)
+def test_every_outcome_is_reached_by_a_case():
+    assert {case.values[1] for case in CLASSIFY_CASES} == set(Outcome)
 
-        assert result.finished.outcome == "failed"
-        assert not result.problem
 
-    def test_a_skip_only_run_is_recorded_as_skipped(self):
-        result = classify_result(UNIT_A, completed(passed=0, skipped=2), AT)
+@pytest.mark.parametrize("result, outcome, flagged", CLASSIFY_CASES)
+def test_classify_result(result, outcome, flagged):
+    classified = classify_result(UNIT_A, result, AT)
 
-        assert result.finished.outcome == "skipped"
+    assert classified.finished.outcome == outcome
+    assert bool(classified.problem) is flagged
 
-    def test_a_missing_report_is_recorded_as_error(self):
-        result = classify_result(
-            UNIT_A,
-            {
-                "status": "completed",
-                "ok": False,
-                "job_id": "j",
-                "summary": None,
-            },
-            AT,
-        )
 
-        assert result.finished.outcome == "error"
-        assert not result.problem
+def test_a_classified_result_keeps_the_job_id_and_time():
+    classified = classify_result(UNIT_A, completed(passed=2), AT)
 
-    def test_a_pass_alongside_a_skip_is_still_a_pass(self):
-        # Only a status outside passed/failed/skipped makes a run
-        # unclassifiable. A skipped Examples row next to a passing one does
-        # not: that run passed.
-        result = classify_result(UNIT_A, completed(passed=1, skipped=1), AT)
+    assert classified.finished.job_id == "job1"
+    assert classified.finished.at == AT
 
-        assert result.finished.outcome == "passed"
-        assert not result.problem
 
-    def test_an_unclassifiable_result_becomes_error_with_a_reason(self):
-        # An unrecognised scenario status: the CLI raised here. A scheduler
-        # has nobody to raise at, so it records the oddity and keeps going.
-        result = classify_result(UNIT_A, completed(passed=1, unknown=1), AT)
+def test_an_unclassifiable_result_keeps_the_job_id_and_says_why():
+    classified = classify_result(
+        UNIT_A, completed(passed=1, unknown=1, job_id="job-xyz"), AT
+    )
 
-        assert result.finished.outcome == "error"
-        assert result.problem
-        assert "classify" in result.problem
+    assert classified.finished.job_id == "job-xyz"
+    assert "classify" in classified.problem
 
-    def test_an_unclassifiable_result_keeps_the_job_id(self):
-        result = classify_result(
-            UNIT_A, completed(passed=1, unknown=1, job_id="job-xyz"), AT
-        )
 
-        assert result.finished.job_id == "job-xyz"
+def _status(state, retry_pending):
+    return UnitStatus(
+        unit=UNIT_A,
+        state=state,
+        job_id=None,
+        attempts=(),
+        retry_pending=retry_pending,
+    )
 
-    def test_a_pass_contradicted_by_ok_false_is_flagged(self):
-        result = classify_result(UNIT_A, completed(passed=1, ok=False), AT)
 
-        assert result.finished.outcome == "error"
-        assert result.problem
+# A unit is picked up when it is untouched, or when someone asked for a retry
+# since its last attempt. A unit in flight is never picked up twice.
+SCHEDULABLE = {
+    (UnitState.UNATTEMPTED, False): True,
+    (UnitState.UNATTEMPTED, True): True,
+    (UnitState.RUNNING, False): False,
+    (UnitState.RUNNING, True): False,
+    (UnitState.PASSED, False): False,
+    (UnitState.PASSED, True): True,
+    (UnitState.FAILED, False): False,
+    (UnitState.FAILED, True): True,
+    (UnitState.SKIPPED, False): False,
+    (UnitState.SKIPPED, True): True,
+    (UnitState.ERROR, False): False,
+    (UnitState.ERROR, True): True,
+}
 
-    def test_junk_is_recorded_rather_than_raised(self):
-        result = classify_result(UNIT_A, "not a payload", AT)
 
-        assert result.finished.outcome == "error"
-        assert result.problem
+def test_every_state_and_retry_flag_has_an_expectation():
+    assert set(SCHEDULABLE) == {
+        (state, retry) for state in UnitState for retry in (False, True)
+    }
+
+
+@pytest.mark.parametrize(
+    "state, retry_pending, expected",
+    [(state, retry, want) for (state, retry), want in SCHEDULABLE.items()],
+    ids=str,
+)
+def test_schedulable_by_state_and_retry(state, retry_pending, expected):
+    assert is_schedulable(_status(state, retry_pending)) is expected
 
 
 class TestPlanTick:

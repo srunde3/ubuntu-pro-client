@@ -7,6 +7,12 @@ description: What integration tests in tools/mcp_server_behave test, with good a
 
 An integration test proves that real components work together at a boundary a caller uses. The caller is an MCP client, a person at the CLI, or the feature files themselves. Everything inside the test process is real. Nothing starts tox or behave: a test that needs a job fakes `subprocess.Popen`, and a campaign test fakes the runner's lanes and ticker.
 
+Every integration test carries the `integration` marker. A module of integration tests sets it once at the top, under its imports:
+
+```python
+pytestmark = pytest.mark.integration
+```
+
 The rules behind a result are already proven by unit tests. An integration test proves the boundary: the request is accepted, the right components are wired up, and the response or error reaches the caller in the shape the caller relies on.
 
 ## MCP tools: what a client sees
@@ -17,9 +23,9 @@ Good: one tool call, and assertions on the fields a client uses.
 
 ```python
 async with create_connected_server_and_client_session(mcp) as client:
-    await client.call_tool("create_campaign", {"campaign_id": "1234567"})
+    await client.call_tool("create_campaign", {"campaign_id": CAMPAIGN_ID})
     result = await client.call_tool(
-        "await_campaign_events", {"campaign_id": "1234567"}
+        "await_campaign_events", {"campaign_id": CAMPAIGN_ID}
     )
 
 payload = result_json(result)
@@ -30,7 +36,7 @@ assert payload["next_seq"] == 1
 Bad: calling the tool function in `server.py` directly. It skips argument parsing, the `@tool` serialisation and FastMCP's error handling, which are what this kind of test exists to cover.
 
 ```python
-payload = server.await_campaign_events(campaign_id="1234567").model_dump()
+payload = server.await_campaign_events(campaign_id=CAMPAIGN_ID).model_dump()
 ```
 
 Bad: re-proving scheduling rules through the protocol, one permutation per test. Each permutation belongs in a `plan_tick` unit test. One protocol test that shows the tool reports the result is enough.
@@ -69,7 +75,7 @@ Bad: calling `CampaignService` from a CLI test. That is a service unit test in t
 
 ## Real corpus: the feature files as they are
 
-These tests parse the repository's real `features/` and are marked `@pytest.mark.integration`. They check properties that must hold for every feature file: each one parses, scenarios have combos, config tags are read.
+These tests parse the repository's real `features/`. They check properties that must hold for every feature file: each one parses, scenarios have combos, config tags are read.
 
 Good: an invariant that survives normal feature edits.
 
@@ -83,4 +89,4 @@ Bad: an exact count for a feature that changes often. It breaks when someone add
 assert len(expired.combos) == 8
 ```
 
-Run them with `uv run pytest -q -m "not e2e"`, the same suite as the unit tests.
+Run them with `uv run pytest -q -m "integration and not e2e"`.

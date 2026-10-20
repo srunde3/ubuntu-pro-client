@@ -24,6 +24,7 @@ def test_build_command_escapes_scenario_name_for_behave_regex(tmp_path):
     )
 
 
+@pytest.mark.integration
 def test_exact_name_pattern_selects_one_scenario_and_its_rows(tmp_path):
     features = tmp_path / "features"
     (features / "steps").mkdir(parents=True)
@@ -81,116 +82,83 @@ def test_exact_name_pattern_selects_one_scenario_and_its_rows(tmp_path):
     ]
 
 
-def test_classify_job_state_live_handle_running():
-    result = domain.classify_job_state(
-        has_live_handle=True,
-        returncode=None,
-        report_present=False,
-        report_ok=None,
-        pid=123,
-        pid_alive=True,
+# Any pid: classify_job_state cares only whether one was recorded.
+RECORDED_PID = 4321
+
+
+def _signals(
+    *,
+    live=False,
+    returncode=None,
+    report=None,
+    pid=None,
+    alive=False,
+):
+    """``classify_job_state`` inputs; ``report`` is None, True or False."""
+    return dict(
+        has_live_handle=live,
+        returncode=returncode,
+        report_present=report is not None,
+        report_ok=report,
+        pid=pid,
+        pid_alive=alive,
     )
-    assert result.status == "running"
-    assert result.ok is None
-    assert result.reason == "live_handle_running"
 
 
-def test_classify_job_state_live_handle_exited_ok():
-    result = domain.classify_job_state(
-        has_live_handle=True,
-        returncode=0,
-        report_present=False,
-        report_ok=None,
-        pid=123,
-        pid_alive=False,
-    )
-    assert result.status == "completed"
-    assert result.ok is True
-    assert result.reason == "live_handle_exited"
+JOB_STATE_CASES = [
+    pytest.param(
+        _signals(live=True, pid=RECORDED_PID, alive=True),
+        ("running", None, domain.ClassifyReason.LIVE_HANDLE_RUNNING),
+        id="live-handle-running",
+    ),
+    pytest.param(
+        _signals(live=True, returncode=0, pid=RECORDED_PID),
+        ("completed", True, domain.ClassifyReason.LIVE_HANDLE_EXITED),
+        id="live-handle-exited-ok",
+    ),
+    pytest.param(
+        _signals(live=True, returncode=1, pid=RECORDED_PID),
+        ("completed", False, domain.ClassifyReason.LIVE_HANDLE_EXITED),
+        id="live-handle-exited-failed",
+    ),
+    pytest.param(
+        _signals(report=True, pid=RECORDED_PID),
+        ("completed", True, domain.ClassifyReason.REPORT_PRESENT),
+        id="recovered-report-ok",
+    ),
+    pytest.param(
+        _signals(report=False, pid=RECORDED_PID, alive=True),
+        ("completed", False, domain.ClassifyReason.REPORT_PRESENT),
+        id="recovered-report-failed",
+    ),
+    pytest.param(
+        _signals(pid=RECORDED_PID, alive=True),
+        ("running", None, domain.ClassifyReason.PID_ALIVE_NO_REPORT),
+        id="recovered-pid-alive",
+    ),
+    pytest.param(
+        _signals(pid=RECORDED_PID),
+        ("unknown", False, domain.ClassifyReason.PID_DEAD_NO_REPORT),
+        id="recovered-pid-dead",
+    ),
+    pytest.param(
+        _signals(),
+        ("unknown", False, domain.ClassifyReason.PID_UNKNOWN_NO_REPORT),
+        id="recovered-pid-unknown",
+    ),
+]
 
 
-def test_classify_job_state_live_handle_exited_failed():
-    result = domain.classify_job_state(
-        has_live_handle=True,
-        returncode=1,
-        report_present=False,
-        report_ok=None,
-        pid=123,
-        pid_alive=False,
-    )
-    assert result.status == "completed"
-    assert result.ok is False
-    assert result.reason == "live_handle_exited"
+def test_every_job_state_reason_is_reached_by_a_case():
+    reasons = {case.values[1][2] for case in JOB_STATE_CASES}
+    assert reasons == set(domain.ClassifyReason)
 
 
-def test_classify_job_state_recovered_report_present_ok():
-    result = domain.classify_job_state(
-        has_live_handle=False,
-        returncode=None,
-        report_present=True,
-        report_ok=True,
-        pid=123,
-        pid_alive=False,
-    )
-    assert result.status == "completed"
-    assert result.ok is True
-    assert result.reason == "report_present"
+@pytest.mark.parametrize("signals, expected", JOB_STATE_CASES)
+def test_classify_job_state(signals, expected):
+    result = domain.classify_job_state(**signals)
 
-
-def test_classify_job_state_recovered_report_present_failed():
-    result = domain.classify_job_state(
-        has_live_handle=False,
-        returncode=None,
-        report_present=True,
-        report_ok=False,
-        pid=123,
-        pid_alive=True,
-    )
-    assert result.status == "completed"
-    assert result.ok is False
-    assert result.reason == "report_present"
-
-
-def test_classify_job_state_recovered_pid_alive_no_report():
-    result = domain.classify_job_state(
-        has_live_handle=False,
-        returncode=None,
-        report_present=False,
-        report_ok=None,
-        pid=123,
-        pid_alive=True,
-    )
-    assert result.status == "running"
-    assert result.ok is None
-    assert result.reason == "pid_alive_no_report"
-
-
-def test_classify_job_state_recovered_pid_dead_no_report():
-    result = domain.classify_job_state(
-        has_live_handle=False,
-        returncode=None,
-        report_present=False,
-        report_ok=None,
-        pid=123,
-        pid_alive=False,
-    )
-    assert result.status == "unknown"
-    assert result.ok is False
-    assert result.reason == "pid_dead_no_report"
-
-
-def test_classify_job_state_recovered_pid_unknown_no_report():
-    result = domain.classify_job_state(
-        has_live_handle=False,
-        returncode=None,
-        report_present=False,
-        report_ok=None,
-        pid=None,
-        pid_alive=False,
-    )
-    assert result.status == "unknown"
-    assert result.ok is False
-    assert result.reason == "pid_unknown_no_report"
+    assert (result.status, result.ok, result.reason) == expected
 
 
 # ---- job_matches_result_filters ----
@@ -299,18 +267,31 @@ def test_job_matches_result_filters_by_release_and_machine_type():
 # ---- scenario_status_from_element ----
 
 
-def test_scenario_status_from_element_prefers_reported_status():
+SCENARIO_STATUS_FOR_BEHAVE = {
+    domain.BehaveScenarioStatus.PASSED: "passed",
+    domain.BehaveScenarioStatus.FAILED: "failed",
+    domain.BehaveScenarioStatus.ERROR: "failed",
+    domain.BehaveScenarioStatus.HOOK_ERROR: "failed",
+    domain.BehaveScenarioStatus.CLEANUP_ERROR: "failed",
+    domain.BehaveScenarioStatus.UNDEFINED: "failed",
+    domain.BehaveScenarioStatus.SKIPPED: "skipped",
+}
+
+
+def test_every_behave_scenario_status_has_an_expectation():
+    assert set(SCENARIO_STATUS_FOR_BEHAVE) == set(domain.BehaveScenarioStatus)
+
+
+@pytest.mark.parametrize(
+    "reported, expected", SCENARIO_STATUS_FOR_BEHAVE.items(), ids=str
+)
+def test_a_reported_scenario_status_wins_over_the_steps(reported, expected):
     scenario = {
-        "status": "skipped",
-        "steps": [],
+        "status": reported.value,
+        "steps": [{"name": "step", "result": {"status": "passed"}}],
     }
-    assert domain.scenario_status_from_element(scenario) == "skipped"
 
-
-def test_scenario_status_from_element_maps_error_statuses_to_failed():
-    for reported_status in ("failed", "error", "undefined", "hook_error"):
-        scenario = {"status": reported_status, "steps": []}
-        assert domain.scenario_status_from_element(scenario) == "failed"
+    assert domain.scenario_status_from_element(scenario) == expected
 
 
 def test_scenario_status_from_element_falls_back_to_steps_when_absent():
@@ -357,17 +338,6 @@ def test_summarize_report_classifies_skipped_scenarios_correctly():
     assert result.summary["scenarios"]["passed"] == 1
     assert result.summary["scenarios"]["skipped"] == 1
     assert result.summary["scenarios"]["unknown"] == 0
-
-
-# ---- grouped_counts_from_report / merge_grouped_counts / grouped_counts ----
-
-
-def _scenario_element(location, status, name="scenario"):
-    return {
-        "name": name,
-        "location": location,
-        "steps": [{"name": "step", "result": {"status": status}}],
-    }
 
 
 class TestSelectLogLines:

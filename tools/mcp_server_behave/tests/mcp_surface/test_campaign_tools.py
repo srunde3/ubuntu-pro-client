@@ -12,6 +12,8 @@ from tests.conftest import (
     result_json,
 )
 
+pytestmark = pytest.mark.integration
+
 FEATURE = """Feature: Example feature
 
   Scenario Outline: Runs everywhere

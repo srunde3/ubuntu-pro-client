@@ -8,9 +8,11 @@ import pytest
 
 from behave_campaign.adapters import JsonlEventLog, NullEventLog
 from behave_campaign.domain import (
-    ACTIONABLE_KINDS,
+    ACTIONABLE_PRESET,
     CampaignError,
+    EventKind,
     NewEvent,
+    Outcome,
     event_matches,
     expand_event_kinds,
     failure_details,
@@ -73,9 +75,6 @@ class TestExpandEventKinds:
         assert "anomaly.*" in expanded
         assert "campaign.*" in expanded
         assert expanded[-1] == "unit.passed"
-        # Progress is in the counts; these are noise to a watcher.
-        for quiet in ("unit.passed", "lane.started", "unit.retried"):
-            assert quiet not in ACTIONABLE_KINDS
 
     def test_an_unknown_family_is_rejected(self):
         # A typo would otherwise look like a campaign that emits nothing,
@@ -92,23 +91,65 @@ class TestExpandEventKinds:
         assert "unknown event kind" in str(error.value)
 
 
-class TestUnitEventKind:
-    @pytest.mark.parametrize(
-        "state,kind",
-        [
-            ("passed", "unit.passed"),
-            ("failed", "unit.failed"),
-            ("skipped", "unit.skipped"),
-            ("error", "unit.errored"),
-        ],
-    )
-    def test_each_outcome_has_its_own_kind(self, state, kind):
-        assert unit_event_kind(state) == kind
+EVENT_FOR_OUTCOME = {
+    Outcome.PASSED: EventKind.UNIT_PASSED,
+    Outcome.FAILED: EventKind.UNIT_FAILED,
+    Outcome.SKIPPED: EventKind.UNIT_SKIPPED,
+    Outcome.ERROR: EventKind.UNIT_ERRORED,
+}
 
-    def test_an_unclassifiable_outcome_has_its_own_kind(self):
-        assert unit_event_kind("error", unclassifiable=True) == (
-            "unit.unclassifiable"
-        )
+
+def test_every_outcome_has_an_expected_event():
+    assert set(EVENT_FOR_OUTCOME) == set(Outcome)
+
+
+@pytest.mark.parametrize("outcome, kind", EVENT_FOR_OUTCOME.items(), ids=str)
+def test_each_outcome_announces_its_own_event(outcome, kind):
+    assert unit_event_kind(outcome) == kind
+
+
+@pytest.mark.parametrize("outcome", list(Outcome), ids=str)
+def test_an_unclassifiable_result_announces_unclassifiable(outcome):
+    assert unit_event_kind(outcome, unclassifiable=True) == (
+        EventKind.UNIT_UNCLASSIFIABLE
+    )
+
+
+# Progress is in the counts on every response, so passes, lane openings and
+# a watcher's own retries are left out of what it has to react to.
+ACTIONABLE = {
+    EventKind.CAMPAIGN_CREATED: True,
+    EventKind.CAMPAIGN_STARTED: True,
+    EventKind.CAMPAIGN_PAUSED: True,
+    EventKind.CAMPAIGN_RESUMED: True,
+    EventKind.CAMPAIGN_CANCELLED: True,
+    EventKind.CAMPAIGN_REOPENED: True,
+    EventKind.CAMPAIGN_COMPLETE: True,
+    EventKind.LANE_STARTED: False,
+    EventKind.LANE_OVERDUE: True,
+    EventKind.UNIT_PASSED: False,
+    EventKind.UNIT_FAILED: True,
+    EventKind.UNIT_SKIPPED: True,
+    EventKind.UNIT_ERRORED: True,
+    EventKind.UNIT_UNCLASSIFIABLE: True,
+    EventKind.UNIT_RETRIED: False,
+    EventKind.ANOMALY_REPEATED_SCENARIO_FAILURE: True,
+    EventKind.ANOMALY_REPEATED_SKIPS: True,
+    EventKind.ANOMALY_CAPACITY_STARVED: True,
+}
+
+
+def test_every_event_kind_is_actionable_or_not():
+    assert set(ACTIONABLE) == set(EventKind)
+
+
+@pytest.mark.parametrize("kind, actionable", ACTIONABLE.items(), ids=str)
+def test_the_actionable_preset(kind, actionable):
+    patterns = expand_event_kinds([ACTIONABLE_PRESET])
+
+    matched = event_matches(kind, patterns)
+
+    assert matched is actionable
 
 
 class TestFailureDetails:
