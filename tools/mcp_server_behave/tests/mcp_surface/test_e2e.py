@@ -106,9 +106,10 @@ async def test_mcp_e2e_long_running_attach_flow(monkeypatch):
         artifacts_payload = result_json(artifacts_result)
         assert artifacts_payload["exists"]["stdout_log"] is True
         assert artifacts_payload["exists"]["json_report"] is True
-        assert artifacts_payload["exists"]["metadata"] is True
-        assert artifacts_payload["metadata"]["status"] == "completed"
-        assert artifacts_payload["metadata"]["repo_state"] == repo_state
+        assert artifacts_payload["exists"]["record"] is True
+        assert artifacts_payload["exists"]["status"] is True
+        assert artifacts_payload["exit"]["ok"] == completed_payload["ok"]
+        assert artifacts_payload["record"]["repo_state"] == repo_state
         assert finished_jobs[job_id]["ok"] == completed_payload["ok"]
 
         results = result_json(

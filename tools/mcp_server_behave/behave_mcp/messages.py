@@ -69,12 +69,13 @@ class ScenarioMatch(BaseModel):
 
 
 class Artifacts(BaseModel):
-    """On-disk artifact paths for a job."""
+    """On-disk paths for a job: its directory and the files in it."""
 
-    log_dir: str
+    job_dir: str
+    record: str
+    status: str
     stdout_log: str
     json_report: str
-    metadata: str
 
 
 class RepoState(BaseModel):
@@ -87,13 +88,6 @@ class RepoState(BaseModel):
     commit: str | None = None
     branch: str | None = None
     dirty: bool | None = None
-
-
-class JobStatus(str, Enum):
-    """Persisted lifecycle status of a behave job."""
-
-    STARTED = "started"
-    COMPLETED = "completed"
 
 
 class RunStatus(str, Enum):
@@ -114,12 +108,10 @@ class ScenarioStatus(str, Enum):
 
 
 class JobRecord(BaseModel):
-    """Persisted metadata for one behave job."""
+    """What one behave job was asked to do. Written once, at launch."""
 
     job_id: str = ""
-    status: JobStatus | None = None
     started_at: str | None = None
-    completed_at: str | None = None
     feature_file: str = ""
     scenario_name: str = ""
     release: str = ""
@@ -129,9 +121,15 @@ class JobRecord(BaseModel):
     repo_root: str = ""
     repo_state: RepoState | None = None
     pid: int | None = None
-    returncode: int | None = None
-    ok: bool | None = None
     artifacts: Artifacts | None = None
+
+
+class JobExit(BaseModel):
+    """How one behave job ended. Written once, when the exit is seen."""
+
+    completed_at: str = ""
+    returncode: int | None = None
+    ok: bool = False
 
 
 class PoolCapacity(BaseModel):
@@ -163,11 +161,12 @@ class ReportSummary(BaseModel):
 
 
 class ExistsFlags(BaseModel):
-    """Existence flags for a job's artifact files."""
+    """Which of a job's files exist."""
 
+    record: bool
+    status: bool
     stdout_log: bool
     json_report: bool
-    metadata: bool
 
 
 class ListFeaturesResponse(BaseModel):
@@ -353,7 +352,8 @@ class ErrorsResponse(BaseModel):
 class ArtifactsResponse(BaseModel):
     job_id: str = ""
     artifacts: Artifacts | None = None
-    metadata: JobRecord | None = None
+    record: JobRecord | None = None
+    exit: JobExit | None = None
     exists: ExistsFlags | None = None
 
 

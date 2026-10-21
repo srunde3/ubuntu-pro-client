@@ -38,6 +38,13 @@ UNIT_FEATURE = """Feature: sample
 """
 
 
+def job_file(jobs: Path, job_id: str, name: str) -> Path:
+    """The path of one of a job's files, with its directory created."""
+    job_dir = jobs / job_id
+    job_dir.mkdir(parents=True, exist_ok=True)
+    return job_dir / name
+
+
 def make_repo_with_feature(
     tmp_path: Path,
     rel: str | None = "features/cli/sample.feature",
@@ -398,7 +405,7 @@ class FakeJobFiles:
 
     def files(self, job_id):
         found = {}
-        for name in ("meta.json", "report.json", "stdout.log"):
+        for name in ("job.json", "status.json", "report.json", "stdout.log"):
             if (job_id, name) in self.without:
                 continue
             path = self.tmp_path / "jobs" / job_id / name

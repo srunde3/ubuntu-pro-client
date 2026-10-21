@@ -29,6 +29,7 @@ from tests.conftest import (
     FakeLauncher,
     FakeProcessHandle,
     FakeWorkspace,
+    job_file,
     make_repo_with_feature,
 )
 
@@ -287,7 +288,7 @@ def test_start_scenario_accepts_normalized_listed_feature(tmp_path):
 
     assert result["ok"] is True
     assert "artifacts" in result
-    assert result["artifacts"]["metadata"].endswith("_meta.json")
+    assert result["artifacts"]["record"].endswith("/job.json")
 
 
 def test_start_scenario_refuses_a_name_the_feature_lacks(tmp_path):
@@ -507,9 +508,10 @@ def test_a_repo_root_override_runs_there_but_files_stay_with_the_server(
 
     assert result["ok"] is True
     assert launcher.calls[0]["cwd"] == str(other_checkout)
-    assert launcher.calls[0]["stdout_log_path"].parent == server_jobs
+    job_dir = launcher.calls[0]["stdout_log_path"].parent
+    assert job_dir == server_jobs / result["job_id"]
     record = json.loads(
-        (server_jobs / f"{result['job_id']}_meta.json").read_text()
+        (job_file(server_jobs, result["job_id"], "job.json")).read_text()
     )
     assert record["repo_root"] == str(other_checkout)
 
@@ -742,8 +744,8 @@ def test_wait_for_completion_unknown_job_id_is_actionable(tmp_path):
 def test_wait_for_completion_running_to_completed(tmp_path):
     registry = InMemoryJobRegistry()
     job_id = "job12345"
-    stdout_log = tmp_path / f"{job_id}_stdout.log"
-    report = tmp_path / f"{job_id}_report.json"
+    stdout_log = job_file(tmp_path, job_id, "stdout.log")
+    report = job_file(tmp_path, job_id, "report.json")
     stdout_log.write_text("line1\nline2\n", encoding="utf-8")
     handle = FakeProcessHandle(returncode=None)
     registry.register(
@@ -801,7 +803,7 @@ def test_wait_for_completion_running_to_completed(tmp_path):
 def test_wait_for_completion_missing_report_fallback(tmp_path):
     registry = InMemoryJobRegistry()
     job_id = "job54321"
-    stdout_log = tmp_path / f"{job_id}_stdout.log"
+    stdout_log = job_file(tmp_path, job_id, "stdout.log")
     stdout_log.write_text("setup failed\n", encoding="utf-8")
     handle = FakeProcessHandle(returncode=2)
     registry.register(
@@ -827,7 +829,7 @@ def test_wait_for_completion_missing_report_fallback(tmp_path):
 def test_wait_for_completion_timeout(tmp_path):
     registry = InMemoryJobRegistry()
     job_id = "jobtimeout"
-    stdout_log = tmp_path / f"{job_id}_stdout.log"
+    stdout_log = job_file(tmp_path, job_id, "stdout.log")
     stdout_log.write_text("still running\n", encoding="utf-8")
     handle = FakeProcessHandle(returncode=None)
     registry.register(
@@ -858,7 +860,7 @@ def test_wait_for_completion_timeout(tmp_path):
 def test_completion_is_recorded_once_however_often_it_is_polled(tmp_path):
     registry = InMemoryJobRegistry()
     job_id = "jobkeep"
-    stdout_log = tmp_path / f"{job_id}_stdout.log"
+    stdout_log = job_file(tmp_path, job_id, "stdout.log")
     stdout_log.write_text("done\n", encoding="utf-8")
     handle = FakeProcessHandle(returncode=0)
     registry.register(
@@ -879,9 +881,8 @@ def test_completion_is_recorded_once_however_often_it_is_polled(tmp_path):
     ).model_dump(mode="json")
     assert first["status"] == "completed"
     assert registry.get(job_id) is not None
-    completed_at = json.loads(
-        (tmp_path / f"{job_id}_meta.json").read_text(encoding="utf-8")
-    )["completed_at"]
+    status_file = job_file(tmp_path, job_id, "status.json")
+    first_exit = status_file.read_text(encoding="utf-8")
 
     service.wait_for_completion(
         job_id, max_wait_seconds=5, poll_interval_seconds=0.01
@@ -889,23 +890,15 @@ def test_completion_is_recorded_once_however_often_it_is_polled(tmp_path):
     service.list_jobs()
     service.get_results()
 
-    index_path = tmp_path / "index.jsonl"
-    events = [
-        json.loads(line)
-        for line in index_path.read_text(encoding="utf-8").splitlines()
-    ]
-    completed_events = [e for e in events if e.get("event") == "completed"]
-    assert len(completed_events) == 1
-    meta = json.loads(
-        (tmp_path / f"{job_id}_meta.json").read_text(encoding="utf-8")
-    )
-    assert meta["completed_at"] == completed_at
+    assert status_file.read_text(encoding="utf-8") == first_exit
 
 
 def test_listing_records_completion_of_a_job_nobody_waited_on(tmp_path):
     registry = InMemoryJobRegistry()
     job_id = "jobnowait"
-    (tmp_path / f"{job_id}_stdout.log").write_text("done\n", encoding="utf-8")
+    (job_file(tmp_path, job_id, "stdout.log")).write_text(
+        "done\n", encoding="utf-8"
+    )
     registry.register(
         job_id,
         Job(
@@ -921,17 +914,17 @@ def test_listing_records_completion_of_a_job_nobody_waited_on(tmp_path):
 
     service.list_jobs()
 
-    meta = json.loads(
-        (tmp_path / f"{job_id}_meta.json").read_text(encoding="utf-8")
+    exit = json.loads(
+        job_file(tmp_path, job_id, "status.json").read_text(encoding="utf-8")
     )
-    assert meta["status"] == "completed"
-    assert meta["ok"] is True
+    assert exit["ok"] is True
+    assert exit["returncode"] == 0
 
 
 def test_get_logs_returns_tail(tmp_path):
     registry = InMemoryJobRegistry()
     job_id = "jobtail"
-    stdout_log = tmp_path / f"{job_id}_stdout.log"
+    stdout_log = job_file(tmp_path, job_id, "stdout.log")
     stdout_log.write_text("l1\nl2\nl3\n", encoding="utf-8")
     registry.register(
         job_id,
@@ -958,7 +951,7 @@ def test_get_logs_returns_tail(tmp_path):
 def test_get_logs_searches_with_context(tmp_path):
     registry = InMemoryJobRegistry()
     job_id = "jobgrep"
-    stdout_log = tmp_path / f"{job_id}_stdout.log"
+    stdout_log = job_file(tmp_path, job_id, "stdout.log")
     stdout_log.write_text(
         "ok\nTraceback (most recent call last):\n  x\nKeyError: k\nok\n",
         encoding="utf-8",
@@ -987,7 +980,7 @@ def test_get_logs_searches_with_context(tmp_path):
 def test_get_logs_clamps_lines_above_max(tmp_path):
     registry = InMemoryJobRegistry()
     job_id = "jobtail"
-    stdout_log = tmp_path / f"{job_id}_stdout.log"
+    stdout_log = job_file(tmp_path, job_id, "stdout.log")
     stdout_log.write_text("l1\nl2\nl3\n", encoding="utf-8")
     registry.register(
         job_id,
@@ -1029,13 +1022,13 @@ def test_get_logs_unknown_job_id_is_actionable(tmp_path):
 def test_get_artifacts_returns_paths_and_metadata(tmp_path):
     registry = InMemoryJobRegistry()
     job_id = "jobmeta01"
-    stdout_log = tmp_path / f"{job_id}_stdout.log"
-    json_report = tmp_path / f"{job_id}_report.json"
-    metadata = tmp_path / f"{job_id}_meta.json"
+    stdout_log = job_file(tmp_path, job_id, "stdout.log")
+    json_report = job_file(tmp_path, job_id, "report.json")
+    metadata = job_file(tmp_path, job_id, "job.json")
     stdout_log.write_text("line\n", encoding="utf-8")
     json_report.write_text("[]\n", encoding="utf-8")
     metadata.write_text(
-        json.dumps({"job_id": job_id, "status": "started"}),
+        json.dumps({"job_id": job_id, "feature_file": "features/a.feature"}),
         encoding="utf-8",
     )
     registry.register(
@@ -1054,8 +1047,10 @@ def test_get_artifacts_returns_paths_and_metadata(tmp_path):
     result = service.get_artifacts(job_id).model_dump(mode="json")
     assert result["exists"]["stdout_log"] is True
     assert result["exists"]["json_report"] is True
-    assert result["exists"]["metadata"] is True
-    assert result["metadata"]["status"] == "started"
+    assert result["exists"]["record"] is True
+    assert result["exists"]["status"] is False
+    assert result["record"]["feature_file"] == "features/a.feature"
+    assert result["exit"] is None
 
 
 def test_get_artifacts_unknown_job_id_is_actionable(tmp_path):
@@ -1072,9 +1067,9 @@ def test_get_artifacts_unknown_job_id_is_actionable(tmp_path):
 
 def test_wait_for_completion_recovers_running_job_via_pid_liveness(tmp_path):
     job_id = "jobrecoveredalive"
-    stdout_log = tmp_path / f"{job_id}_stdout.log"
+    stdout_log = job_file(tmp_path, job_id, "stdout.log")
     stdout_log.write_text("still going\n", encoding="utf-8")
-    metadata = tmp_path / f"{job_id}_meta.json"
+    metadata = job_file(tmp_path, job_id, "job.json")
     metadata.write_text(json.dumps({"pid": 999}), encoding="utf-8")
 
     launcher = FakeLauncher(alive_pids={999})
@@ -1097,9 +1092,9 @@ def test_wait_for_completion_recovers_running_job_via_pid_liveness(tmp_path):
 def test_recovered_job_is_cached_in_registry(tmp_path):
     """A recovered job is registered so polls don't re-recover/re-log."""
     job_id = "jobrecoveredonce"
-    stdout_log = tmp_path / f"{job_id}_stdout.log"
+    stdout_log = job_file(tmp_path, job_id, "stdout.log")
     stdout_log.write_text("still going\n", encoding="utf-8")
-    metadata = tmp_path / f"{job_id}_meta.json"
+    metadata = job_file(tmp_path, job_id, "job.json")
     metadata.write_text(json.dumps({"pid": 999}), encoding="utf-8")
 
     registry = InMemoryJobRegistry()
@@ -1124,9 +1119,9 @@ def test_wait_for_completion_recovers_dead_job_without_report_as_not_ok(
     tmp_path,
 ):
     job_id = "jobrecovereddead"
-    stdout_log = tmp_path / f"{job_id}_stdout.log"
+    stdout_log = job_file(tmp_path, job_id, "stdout.log")
     stdout_log.write_text("crashed before report\n", encoding="utf-8")
-    metadata = tmp_path / f"{job_id}_meta.json"
+    metadata = job_file(tmp_path, job_id, "job.json")
     metadata.write_text(json.dumps({"pid": 999}), encoding="utf-8")
 
     launcher = FakeLauncher(alive_pids=set())
@@ -1144,9 +1139,9 @@ def test_wait_for_completion_recovers_dead_job_without_report_as_not_ok(
 
 def test_wait_for_completion_recovers_completed_job_ok_from_report(tmp_path):
     job_id = "jobrecoveredreport"
-    stdout_log = tmp_path / f"{job_id}_stdout.log"
+    stdout_log = job_file(tmp_path, job_id, "stdout.log")
     stdout_log.write_text("done\n", encoding="utf-8")
-    report = tmp_path / f"{job_id}_report.json"
+    report = job_file(tmp_path, job_id, "report.json")
     report.write_text(
         json.dumps(
             [
@@ -1168,7 +1163,7 @@ def test_wait_for_completion_recovers_completed_job_ok_from_report(tmp_path):
         ),
         encoding="utf-8",
     )
-    metadata = tmp_path / f"{job_id}_meta.json"
+    metadata = job_file(tmp_path, job_id, "job.json")
     metadata.write_text(json.dumps({"pid": 999}), encoding="utf-8")
 
     # pid is dead and returncode is unknown, but the report proves success --
@@ -1193,9 +1188,9 @@ def test_list_jobs_merges_in_memory_and_disk_only(tmp_path):
     registry = InMemoryJobRegistry()
 
     running_job_id = "jobrunning"
-    stdout_running = tmp_path / f"{running_job_id}_stdout.log"
+    stdout_running = job_file(tmp_path, running_job_id, "stdout.log")
     stdout_running.write_text("running\n", encoding="utf-8")
-    (tmp_path / f"{running_job_id}_meta.json").write_text(
+    (job_file(tmp_path, running_job_id, "job.json")).write_text(
         json.dumps({"feature_file": "features/a.feature", "started_at": "T1"}),
         encoding="utf-8",
     )
@@ -1210,18 +1205,18 @@ def test_list_jobs_merges_in_memory_and_disk_only(tmp_path):
     )
 
     disk_alive_id = "jobdiskalive"
-    (tmp_path / f"{disk_alive_id}_stdout.log").write_text(
+    (job_file(tmp_path, disk_alive_id, "stdout.log")).write_text(
         "x\n", encoding="utf-8"
     )
-    (tmp_path / f"{disk_alive_id}_meta.json").write_text(
+    (job_file(tmp_path, disk_alive_id, "job.json")).write_text(
         json.dumps({"pid": 222, "started_at": "T2"}), encoding="utf-8"
     )
 
     disk_dead_id = "jobdiskdead"
-    (tmp_path / f"{disk_dead_id}_stdout.log").write_text(
+    (job_file(tmp_path, disk_dead_id, "stdout.log")).write_text(
         "y\n", encoding="utf-8"
     )
-    (tmp_path / f"{disk_dead_id}_meta.json").write_text(
+    (job_file(tmp_path, disk_dead_id, "job.json")).write_text(
         json.dumps({"pid": 333, "started_at": "T3"}), encoding="utf-8"
     )
 
@@ -1245,7 +1240,7 @@ def test_list_jobs_caps_completed_history(tmp_path):
     total = DEFAULT_JOB_LIST_LIMIT + 5
     for i in range(total):
         job_id = f"jobold{i:03d}"
-        (tmp_path / f"{job_id}_meta.json").write_text(
+        (job_file(tmp_path, job_id, "job.json")).write_text(
             json.dumps({"started_at": f"T{i:03d}"}), encoding="utf-8"
         )
 
@@ -1267,7 +1262,7 @@ def test_list_jobs_limit_overrides_default(tmp_path):
     total = DEFAULT_JOB_LIST_LIMIT + 5
     for i in range(total):
         job_id = f"jobold{i:03d}"
-        (tmp_path / f"{job_id}_meta.json").write_text(
+        (job_file(tmp_path, job_id, "job.json")).write_text(
             json.dumps({"started_at": f"T{i:03d}"}), encoding="utf-8"
         )
 
@@ -1283,7 +1278,7 @@ def test_list_jobs_limit_overrides_default(tmp_path):
 
 
 def test_list_jobs_not_truncated_when_under_limit(tmp_path):
-    (tmp_path / "jobold000_meta.json").write_text(
+    (job_file(tmp_path, "jobold000", "job.json")).write_text(
         json.dumps({"started_at": "T000"}), encoding="utf-8"
     )
 
@@ -1298,7 +1293,7 @@ def test_list_jobs_not_truncated_when_under_limit(tmp_path):
 
 
 def test_list_jobs_limit_clamped_when_too_high(tmp_path):
-    (tmp_path / "jobold000_meta.json").write_text(
+    (job_file(tmp_path, "jobold000", "job.json")).write_text(
         json.dumps({"started_at": "T000"}), encoding="utf-8"
     )
     service = _make_service(
@@ -1406,7 +1401,7 @@ def test_get_results_reports_one_result_per_job(tmp_path):
 
 
 def _write_meta(tmp_path, job_id, feature_file, started_at, **extra):
-    (tmp_path / f"{job_id}_meta.json").write_text(
+    (job_file(tmp_path, job_id, "job.json")).write_text(
         json.dumps(
             {
                 "feature_file": feature_file,
@@ -1443,7 +1438,7 @@ def test_get_results_recovers_disk_only_job(tmp_path):
         release="jammy",
         machine_type="lxd-container",
     )
-    (tmp_path / f"{job_id}_report.json").write_text(
+    (job_file(tmp_path, job_id, "report.json")).write_text(
         json.dumps(
             [
                 {
@@ -1572,7 +1567,7 @@ class TestKillJob:
 def test_get_errors_digests_the_log(tmp_path):
     registry = InMemoryJobRegistry()
     job_id = "joberr"
-    stdout_log = tmp_path / f"{job_id}_stdout.log"
+    stdout_log = job_file(tmp_path, job_id, "stdout.log")
     stdout_log.write_text(
         "    Given a machine ... error in 0.1s\n"
         "Traceback (most recent call last):\n"

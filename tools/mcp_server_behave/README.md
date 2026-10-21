@@ -40,7 +40,7 @@ The server exposes these MCP tools:
   - With `pattern` (a regex): the matching lines from `start` on, each with `context` lines around it, grep-style, until the next window would exceed `lines`. `matches` counts every match whether or not it fit.
   - Without: `lines` lines from `start`, or the last `lines` when `start` is 0.
   - `truncated` says the `lines` budget cut something; `log_path` is the file itself.
-- `get_scenario_artifacts` -- returns disk artifact paths and metadata for a job.
+- `get_scenario_artifacts` -- returns a job's file paths, which of them exist, its launch `record` and its `exit` (null until it ends).
 
 Release and substrate values are derived by parsing each feature's Gherkin `Examples` tables with the `behave` library, so the catalog always reflects the current feature files (no hardcoded release/substrate lists).
 
@@ -51,7 +51,7 @@ still land here, so one server keeps one set of jobs and campaigns:
 
 ```
 .mcp_server_behave/
-  jobs/        one set of artifacts per behave job, plus index.jsonl
+  jobs/        one directory per behave job
   campaigns/   one record, event log and run lock per campaign
 ```
 
@@ -59,10 +59,12 @@ still land here, so one server keeps one set of jobs and campaigns:
 
 For each started job, the server writes artifacts under `jobs/`:
 
-- `<job_id>_stdout.log`: combined stdout/stderr stream
-- `<job_id>_report.json`: behave JSON formatter output
-- `<job_id>_meta.json`: machine-readable metadata (command, params, status, timestamps, artifact paths)
-- `index.jsonl`: append-only per-job lifecycle events (`started`, `completed`)
+- `<job_id>/job.json`: what the job was asked to do -- unit, command, install source, checkout and its git state, start time, artifact paths. Written once, at launch.
+- `<job_id>/status.json`: how it ended -- `returncode`, `ok`, `completed_at`. Written once, when the server first sees the exit; a job without one has not finished, or finished unseen.
+- `<job_id>/stdout.log`: combined stdout/stderr stream
+- `<job_id>/report.json`: behave JSON formatter output
+
+Both JSON files are written to a temporary file and renamed into place, so a reader never sees half of one. `list_scenario_jobs` lists every directory holding a `job.json`.
 
 It also exposes a health endpoint at `/healthz` for basic checks.
 

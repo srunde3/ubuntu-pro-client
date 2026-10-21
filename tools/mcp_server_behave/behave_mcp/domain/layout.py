@@ -16,10 +16,17 @@ STATE_DIR_ENV_VAR = "MCP_STATE_DIR"
 DEFAULT_STATE_DIR_NAME = ".mcp_server_behave"
 JOBS_SUBDIR = "jobs"
 CAMPAIGNS_SUBDIR = "campaigns"
-JOB_INDEX_FILE_NAME = "index.jsonl"
-STDOUT_LOG_SUFFIX = "_stdout.log"
-JSON_REPORT_SUFFIX = "_report.json"
-METADATA_SUFFIX = "_meta.json"
+# The files in one job's directory, ``jobs/<job_id>/``.
+JOB_RECORD_NAME = "job.json"
+JOB_STATUS_NAME = "status.json"
+STDOUT_LOG_NAME = "stdout.log"
+JSON_REPORT_NAME = "report.json"
+JOB_FILE_NAMES = (
+    JOB_RECORD_NAME,
+    JOB_STATUS_NAME,
+    STDOUT_LOG_NAME,
+    JSON_REPORT_NAME,
+)
 EXPORTS_SUBDIR = "exports"
 CAMPAIGN_SUFFIX = ".jsonl"
 
@@ -48,17 +55,26 @@ def export_file(state: Path, campaign_id: str) -> Path:
     return state / EXPORTS_SUBDIR / (campaign_id + ".tar.gz")
 
 
-class JobArtifactPaths(NamedTuple):
-    """The three on-disk files a job owns, named from its id."""
+class JobPaths(NamedTuple):
+    """The directory one job owns, and the files in it.
 
+    ``record`` is written once at launch and ``status`` once at exit;
+    behave writes ``stdout_log`` and ``json_report`` as it runs.
+    """
+
+    job_dir: Path
+    record: Path
+    status: Path
     stdout_log: Path
     json_report: Path
-    metadata: Path
 
 
-def job_artifact_paths(log_dir: Path, job_id: str) -> JobArtifactPaths:
-    return JobArtifactPaths(
-        stdout_log=log_dir / f"{job_id}{STDOUT_LOG_SUFFIX}",
-        json_report=log_dir / f"{job_id}{JSON_REPORT_SUFFIX}",
-        metadata=log_dir / f"{job_id}{METADATA_SUFFIX}",
+def job_paths(jobs: Path, job_id: str) -> JobPaths:
+    job_dir = jobs / job_id
+    return JobPaths(
+        job_dir=job_dir,
+        record=job_dir / JOB_RECORD_NAME,
+        status=job_dir / JOB_STATUS_NAME,
+        stdout_log=job_dir / STDOUT_LOG_NAME,
+        json_report=job_dir / JSON_REPORT_NAME,
     )

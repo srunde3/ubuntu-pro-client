@@ -143,13 +143,9 @@ def test_a_campaign_runs_its_lanes_concurrently(monkeypatch, tmp_path):
     # Every recorded job left artifacts behind to inspect.
     for status in statuses:
         assert status.job_id
-        report = (
-            tmp_path
-            / "state"
-            / "jobs"
-            / "{}_report.json".format(status.job_id)
-        )
-        assert report.is_file(), report
+        job_dir = tmp_path / "state" / "jobs" / status.job_id
+        for name in ("job.json", "status.json", "report.json", "stdout.log"):
+            assert (job_dir / name).is_file(), job_dir / name
 
     # The stream a watching agent would have seen, from real jobs.
     stream = events.read(CAMPAIGN_ID, since_seq=0, kinds=[], limit=500)

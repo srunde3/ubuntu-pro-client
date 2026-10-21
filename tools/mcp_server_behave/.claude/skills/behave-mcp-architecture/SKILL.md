@@ -55,10 +55,10 @@ Everything the server writes lives under its own checkout's `.mcp_server_behave/
 
 | Path | Holds | Written by |
 | --- | --- | --- |
-| `jobs/<job_id>_stdout.log` | combined stdout and stderr of the job | the behave subprocess |
-| `jobs/<job_id>_report.json` | behave's JSON report | the behave subprocess |
-| `jobs/<job_id>_meta.json` | the job record (`JobRecord`) | `BehaveService` |
-| `jobs/index.jsonl` | one `started` and one `completed` row per job | `BehaveService` |
+| `jobs/<job_id>/job.json` | the launch record (`JobRecord`), written once | `BehaveService` |
+| `jobs/<job_id>/status.json` | the exit (`JobExit`), written once by rename | `BehaveService` |
+| `jobs/<job_id>/stdout.log` | combined stdout and stderr of the job | the behave subprocess |
+| `jobs/<job_id>/report.json` | behave's JSON report | the behave subprocess |
 | `campaigns/<id>.jsonl` | the campaign record: header, plan, started, finished, interrupted, intent and retry records, append only | `CampaignService` (create), `CampaignRunner` |
 | `campaigns/<id>.events.jsonl` | numbered events | `JsonlEventLog` |
 | `campaigns/<id>.lock` | the run lock (`flock`) while a campaign schedules | `FileCampaignRunLock` |

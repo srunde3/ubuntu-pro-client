@@ -673,7 +673,12 @@ class TestExportCampaign:
         assert writer.top == "1234567"
         assert response.jobs == 4
         for job_id in ("a1", "a2", "n1", "b1"):
-            for name in ("meta.json", "report.json", "stdout.log"):
+            for name in (
+                "job.json",
+                "status.json",
+                "report.json",
+                "stdout.log",
+            ):
                 assert "jobs/{}/{}".format(job_id, name) in writer.entries
         assert "audit/campaign.jsonl" in writer.entries
         assert "audit/events.jsonl" in writer.entries

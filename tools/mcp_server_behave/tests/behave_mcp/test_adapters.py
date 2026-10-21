@@ -12,14 +12,14 @@ from behave_mcp.adapters import (
     PopenLauncher,
 )
 from behave_mcp.domain.pools import Pool
-from behave_mcp.messages import JobRecord
+from behave_mcp.messages import JobExit, JobRecord
 from behave_mcp.ports import (
     Job,
     LogFileOpenError,
     PoolUsage,
     ProcessStartError,
 )
-from tests.conftest import FakeProcessHandle, make_repo_with_feature
+from tests.conftest import FakeProcessHandle, job_file, make_repo_with_feature
 
 # ---- LocalFeatureFileReader ----
 
@@ -76,10 +76,12 @@ def test_read_record_missing_or_invalid(tmp_path):
     store = _store(tmp_path)
     assert store.read_record("missing") == JobRecord()
 
-    (tmp_path / "bad_meta.json").write_text("not json", encoding="utf-8")
+    (job_file(tmp_path, "bad", "job.json")).write_text(
+        "not json", encoding="utf-8"
+    )
     assert store.read_record("bad") == JobRecord()
 
-    (tmp_path / "list_meta.json").write_text("[]", encoding="utf-8")
+    (job_file(tmp_path, "list", "job.json")).write_text("[]", encoding="utf-8")
     assert store.read_record("list") == JobRecord()
 
 
@@ -92,7 +94,9 @@ def test_write_and_read_record_roundtrip(tmp_path):
 
 def test_log_tail_and_lines(tmp_path):
     store = _store(tmp_path)
-    (tmp_path / "jobx_stdout.log").write_text("a\nb\nc\n", encoding="utf-8")
+    (job_file(tmp_path, "jobx", "stdout.log")).write_text(
+        "a\nb\nc\n", encoding="utf-8"
+    )
     assert store.log_tail("jobx", 2) == "b\nc"
     assert store.read_log_lines("jobx") == ["a", "b", "c"]
 
@@ -107,27 +111,36 @@ def test_read_report_missing_or_invalid(tmp_path):
     store = _store(tmp_path)
     assert store.read_report("missing") is None
 
-    (tmp_path / "bad_report.json").write_text("nope", encoding="utf-8")
+    (job_file(tmp_path, "bad", "report.json")).write_text(
+        "nope", encoding="utf-8"
+    )
     assert store.read_report("bad") is None
 
-    (tmp_path / "obj_report.json").write_text("{}", encoding="utf-8")
+    (job_file(tmp_path, "obj", "report.json")).write_text(
+        "{}", encoding="utf-8"
+    )
     assert store.read_report("obj") is None
 
-    (tmp_path / "good_report.json").write_text("[1, 2]", encoding="utf-8")
+    (job_file(tmp_path, "good", "report.json")).write_text(
+        "[1, 2]", encoding="utf-8"
+    )
     assert store.read_report("good") == [1, 2]
 
 
 def test_exists_and_list_job_ids(tmp_path):
     store = _store(tmp_path)
     empty = store.exists("jobx")
+    assert not empty.record
     assert not empty.stdout_log
     assert not empty.json_report
-    assert not empty.metadata
 
-    (tmp_path / "jobx_meta.json").write_text("{}", encoding="utf-8")
-    (tmp_path / "jobx_stdout.log").write_text("x", encoding="utf-8")
+    (job_file(tmp_path, "jobx", "job.json")).write_text("{}", encoding="utf-8")
+    (job_file(tmp_path, "jobx", "stdout.log")).write_text(
+        "x", encoding="utf-8"
+    )
     flags = store.exists("jobx")
-    assert flags.metadata is True
+    assert flags.record is True
+    assert flags.status is False
     assert flags.stdout_log is True
     assert flags.json_report is False
     assert store.list_job_ids() == ["jobx"]
@@ -136,12 +149,50 @@ def test_exists_and_list_job_ids(tmp_path):
 def test_write_targets_and_artifacts_naming(tmp_path):
     store = _store(tmp_path)
     targets = store.write_targets("jobx")
-    assert targets.stdout_log == tmp_path / "jobx_stdout.log"
-    assert targets.json_report == tmp_path / "jobx_report.json"
+    assert targets.stdout_log == job_file(tmp_path, "jobx", "stdout.log")
+    assert targets.json_report == job_file(tmp_path, "jobx", "report.json")
 
     artifacts = store.artifacts("jobx")
-    assert artifacts.log_dir == str(tmp_path)
-    assert artifacts.metadata == str(tmp_path / "jobx_meta.json")
+    assert artifacts.job_dir == str(tmp_path / "jobx")
+    assert artifacts.record == str(tmp_path / "jobx" / "job.json")
+    assert artifacts.status == str(tmp_path / "jobx" / "status.json")
+
+
+def test_a_job_directory_without_a_record_is_not_listed(tmp_path):
+    store = _store(tmp_path)
+    store.write_targets("refused")
+
+    assert store.list_job_ids() == []
+
+
+def test_the_first_exit_written_wins(tmp_path):
+    store = _store(tmp_path)
+    first = JobExit(completed_at="T1", returncode=0, ok=True)
+    later = JobExit(completed_at="T2", returncode=1, ok=False)
+    store.write_exit("jobx", first)
+
+    kept = store.write_exit("jobx", later)
+
+    assert kept == first
+    assert store.read_exit("jobx") == first
+
+
+def test_no_exit_reads_as_none(tmp_path):
+    assert _store(tmp_path).read_exit("jobx") is None
+
+
+def test_an_interrupted_write_leaves_no_partial_file(tmp_path, monkeypatch):
+    store = _store(tmp_path)
+
+    def crash(source, target):
+        raise OSError("disk went away")
+
+    monkeypatch.setattr(adapters_module.os, "replace", crash)
+
+    store.write_exit("jobx", JobExit(completed_at="T1", returncode=0))
+
+    # Neither the status file nor a temporary file is left behind.
+    assert list((tmp_path / "jobx").iterdir()) == []
 
 
 # ---- LocalWorkspace ----
@@ -555,9 +606,9 @@ def test_registry_snapshot_returns_all_tracked_jobs(tmp_path):
 
 def test_list_job_ids_globs_meta_files(tmp_path):
     store = LocalJobResultStoreFactory().bind(tmp_path)
-    (tmp_path / "job1_meta.json").write_text("{}", encoding="utf-8")
-    (tmp_path / "job2_meta.json").write_text("{}", encoding="utf-8")
-    (tmp_path / "job2_stdout.log").write_text("", encoding="utf-8")
+    (job_file(tmp_path, "job1", "job.json")).write_text("{}", encoding="utf-8")
+    (job_file(tmp_path, "job2", "job.json")).write_text("{}", encoding="utf-8")
+    (job_file(tmp_path, "job2", "stdout.log")).write_text("", encoding="utf-8")
 
     assert store.list_job_ids() == ["job1", "job2"]
 

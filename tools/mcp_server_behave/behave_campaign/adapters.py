@@ -494,13 +494,6 @@ class FileCampaignRunLock:
         return False
 
 
-_JOB_FILE_SUFFIXES = {
-    "meta.json": layout.METADATA_SUFFIX,
-    "report.json": layout.JSON_REPORT_SUFFIX,
-    "stdout.log": layout.STDOUT_LOG_SUFFIX,
-}
-
-
 class JobDirFiles:
     """Reads job files from the behave MCP's shared ``jobs/`` directory."""
 
@@ -508,7 +501,7 @@ class JobDirFiles:
         self._jobs_dir = jobs_dir
 
     def _path(self, job_id: str, name: str) -> Path:
-        return self._jobs_dir / (job_id + _JOB_FILE_SUFFIXES[name])
+        return self._jobs_dir / job_id / name
 
     def files(self, job_id: str) -> Mapping[str, Path]:
         found = {}

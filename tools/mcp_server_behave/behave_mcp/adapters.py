@@ -5,18 +5,25 @@ import logging
 import os
 import signal
 import subprocess
+import tempfile
 import threading
 from collections import deque
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from behave_mcp import parser
 from behave_mcp.domain import layout
 from behave_mcp.domain.pools import Pool
-from behave_mcp.messages import Artifacts, ExistsFlags, JobRecord, RepoState
+from behave_mcp.messages import (
+    Artifacts,
+    ExistsFlags,
+    JobExit,
+    JobRecord,
+    RepoState,
+)
 from behave_mcp.ports import (
     Job,
     LogFileOpenError,
@@ -27,6 +34,8 @@ from behave_mcp.ports import (
 )
 
 logger = logging.getLogger(__name__)
+
+ModelT = TypeVar("ModelT", bound=BaseModel)
 
 
 class SubprocessHandle:
@@ -183,21 +192,70 @@ class LocalJobResultStoreFactory:
         return LocalJobResultStore(log_dir)
 
 
-class LocalJobResultStore:
-    """Filesystem-backed job results rooted at one log directory.
+def _write_atomic(path: Path, text: str) -> None:
+    """Write ``text`` to ``path`` whole or not at all.
 
-    The ``{job_id}_*`` file layout is private here; callers address results
-    by ``job_id`` only.
+    A temporary file in the same directory is synced, then renamed over
+    the target, so a reader never sees half a file and a crash leaves at
+    most a stray temporary file.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(
+        dir=path.parent, prefix=".{}.".format(path.name)
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            stream.write(text)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    except BaseException:
+        Path(temporary).unlink(missing_ok=True)
+        raise
+
+
+def _json_text(model: BaseModel) -> str:
+    return (
+        json.dumps(
+            model.model_dump(mode="json"),
+            ensure_ascii=True,
+            sort_keys=True,
+            indent=2,
+        )
+        + "\n"
+    )
+
+
+def _read_model(path: Path, model: type[ModelT]) -> ModelT | None:
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    try:
+        return model.model_validate(payload)
+    except ValidationError:
+        return None
+
+
+class LocalJobResultStore:
+    """Filesystem-backed job results: one directory per job under the
+    jobs directory, laid out by ``layout.job_paths``. Callers address
+    results by ``job_id`` only.
     """
 
     def __init__(self, log_dir: Path) -> None:
         self._log_dir = log_dir
 
-    def _paths(self, job_id: str) -> layout.JobArtifactPaths:
-        return layout.job_artifact_paths(self._log_dir, job_id)
+    def _paths(self, job_id: str) -> layout.JobPaths:
+        return layout.job_paths(self._log_dir, job_id)
 
     def write_targets(self, job_id: str) -> WriteTargets:
         paths = self._paths(job_id)
+        paths.job_dir.mkdir(parents=True, exist_ok=True)
         return WriteTargets(
             stdout_log=paths.stdout_log, json_report=paths.json_report
         )
@@ -205,54 +263,38 @@ class LocalJobResultStore:
     def artifacts(self, job_id: str) -> Artifacts:
         paths = self._paths(job_id)
         return Artifacts(
-            log_dir=str(self._log_dir),
+            job_dir=str(paths.job_dir),
+            record=str(paths.record),
+            status=str(paths.status),
             stdout_log=str(paths.stdout_log),
             json_report=str(paths.json_report),
-            metadata=str(paths.metadata),
         )
 
     def read_record(self, job_id: str) -> JobRecord:
-        path = self._paths(job_id).metadata
-        if not path.exists():
-            return JobRecord()
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            return JobRecord()
-        if not isinstance(payload, dict):
-            return JobRecord()
-        try:
-            return JobRecord.model_validate(payload)
-        except ValidationError:
-            return JobRecord()
+        return (
+            _read_model(self._paths(job_id).record, JobRecord) or JobRecord()
+        )
 
     def write_record(self, job_id: str, record: JobRecord) -> None:
-        path = self._paths(job_id).metadata
         try:
-            path.write_text(
-                json.dumps(
-                    record.model_dump(mode="json"),
-                    ensure_ascii=True,
-                    sort_keys=True,
-                    indent=2,
-                )
-                + "\n",
-                encoding="utf-8",
-            )
+            _write_atomic(self._paths(job_id).record, _json_text(record))
         except OSError:
-            # Metadata write failures should not break job execution/status.
+            # A record that cannot be written must not stop the job.
             return
 
-    def append_event(self, event: dict[str, Any]) -> None:
-        index_path = self._log_dir / layout.JOB_INDEX_FILE_NAME
+    def read_exit(self, job_id: str) -> JobExit | None:
+        return _read_model(self._paths(job_id).status, JobExit)
+
+    def write_exit(self, job_id: str, exit: JobExit) -> JobExit:
+        written = self.read_exit(job_id)
+        if written is not None:
+            return written
         try:
-            with index_path.open("a", encoding="utf-8") as index_stream:
-                index_stream.write(
-                    json.dumps(event, ensure_ascii=True, sort_keys=True) + "\n"
-                )
+            _write_atomic(self._paths(job_id).status, _json_text(exit))
         except OSError:
-            # Index write failures should not break job execution/status.
-            return
+            # The exit is still reported; it is recorded on a later look.
+            pass
+        return exit
 
     def log_tail(self, job_id: str, lines: int) -> str:
         path = self._paths(job_id).stdout_log
@@ -288,18 +330,21 @@ class LocalJobResultStore:
     def exists(self, job_id: str) -> ExistsFlags:
         paths = self._paths(job_id)
         return ExistsFlags(
+            record=paths.record.exists(),
+            status=paths.status.exists(),
             stdout_log=paths.stdout_log.exists(),
             json_report=paths.json_report.exists(),
-            metadata=paths.metadata.exists(),
         )
 
     def list_job_ids(self) -> list[str]:
+        """Every job with a launch record: ``jobs/*/job.json``."""
         if not self._log_dir.exists():
             return []
-        suffix = layout.METADATA_SUFFIX
         return sorted(
-            path.name[: -len(suffix)]
-            for path in self._log_dir.glob(f"*{suffix}")
+            path.parent.name
+            for path in self._log_dir.glob(
+                "*/{}".format(layout.JOB_RECORD_NAME)
+            )
         )
 
 

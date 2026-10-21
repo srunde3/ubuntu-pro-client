@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Sequence
 
 from behave_campaign.domain.records import UnitStatus
+from behave_mcp.domain import layout
 
 SUMMARY_NAME = "SUMMARY.md"
 
@@ -29,8 +30,8 @@ AUDIT_CAMPAIGN_NAME = "campaign.jsonl"
 AUDIT_EVENTS_NAME = "events.jsonl"
 
 
-# The files one job leaves behind, by the name each takes in the bundle.
-JOB_FILES = ("meta.json", "report.json", "stdout.log")
+# The files one job leaves behind. Each keeps its name in the bundle.
+JOB_FILES = layout.JOB_FILE_NAMES
 
 
 @dataclass(frozen=True)

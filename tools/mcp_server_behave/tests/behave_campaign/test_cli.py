@@ -534,10 +534,15 @@ class TestExport:
             (UNIT_B_JAMMY, "b1"),
         ):
             attempts.append(attempt(unit, "passed", job_id))
-            for suffix in ("_meta.json", "_report.json", "_stdout.log"):
-                path = state / "jobs" / (job_id + suffix)
+            for name in (
+                "job.json",
+                "status.json",
+                "report.json",
+                "stdout.log",
+            ):
+                path = state / "jobs" / job_id / name
                 path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text("[]" if suffix == "_report.json" else "x")
+                path.write_text("[]" if name == "report.json" else "x")
         record(state / "campaigns" / "1234567.jsonl", attempts)
         return state
 

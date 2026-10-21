@@ -13,49 +13,54 @@ from behave_mcp.adapters import (
 )
 from behave_mcp.config import Settings
 from behave_mcp.domain.pools import DEFAULT_POOL_LIMITS
-from behave_mcp.messages import JobRecord
+from behave_mcp.messages import JobExit, JobRecord
 from behave_mcp.ports import Job
 from behave_mcp.service import BehaveService
-from tests.conftest import FakeLauncher, FakeProcessHandle, FakeWorkspace
+from tests.conftest import (
+    FakeLauncher,
+    FakeProcessHandle,
+    FakeWorkspace,
+    job_file,
+)
 
 
 def test_write_record_byte_shape(tmp_path):
     store = LocalJobResultStoreFactory().bind(tmp_path)
-    store.write_record(
-        "jobshape", JobRecord(job_id="jobshape", status="started")
-    )
-    path = tmp_path / "jobshape_meta.json"
+    store.write_record("jobshape", JobRecord(job_id="jobshape"))
+    path = tmp_path / "jobshape" / "job.json"
     expected = (
         "{\n"
         '  "artifacts": null,\n'
         '  "command": [],\n'
-        '  "completed_at": null,\n'
         '  "feature_file": "",\n'
         '  "install_from": "",\n'
         '  "job_id": "jobshape",\n'
         '  "machine_type": "",\n'
-        '  "ok": null,\n'
         '  "pid": null,\n'
         '  "release": "",\n'
         '  "repo_root": "",\n'
         '  "repo_state": null,\n'
-        '  "returncode": null,\n'
         '  "scenario_name": "",\n'
-        '  "started_at": null,\n'
-        '  "status": "started"\n'
+        '  "started_at": null\n'
         "}\n"
     )
     assert path.read_text(encoding="utf-8") == expected
 
 
-def test_append_index_event_byte_shape(tmp_path):
+def test_write_exit_byte_shape(tmp_path):
     store = LocalJobResultStoreFactory().bind(tmp_path)
-    store.append_event({"b": 1, "a": 2})
-    store.append_event({"event": "completed", "job_id": "x"})
-    content = (tmp_path / "index.jsonl").read_text(encoding="utf-8")
-    assert content == (
-        '{"a": 2, "b": 1}\n' '{"event": "completed", "job_id": "x"}\n'
+    store.write_exit(
+        "jobshape", JobExit(completed_at="T1", returncode=0, ok=True)
     )
+    path = tmp_path / "jobshape" / "status.json"
+    expected = (
+        "{\n"
+        '  "completed_at": "T1",\n'
+        '  "ok": true,\n'
+        '  "returncode": 0\n'
+        "}\n"
+    )
+    assert path.read_text(encoding="utf-8") == expected
 
 
 _SETTINGS = Settings(
@@ -95,8 +100,10 @@ def _register(registry, tmp_path, job_id, handle):
 def test_completed_with_summary_key_order(tmp_path):
     registry = InMemoryJobRegistry()
     job_id = "job0001"
-    (tmp_path / f"{job_id}_stdout.log").write_text("done\n", encoding="utf-8")
-    report = tmp_path / f"{job_id}_report.json"
+    (job_file(tmp_path, job_id, "stdout.log")).write_text(
+        "done\n", encoding="utf-8"
+    )
+    report = job_file(tmp_path, job_id, "report.json")
     report.write_text(
         json.dumps(
             [
@@ -148,7 +155,9 @@ def test_completed_with_summary_key_order(tmp_path):
 def test_completed_fallback_key_order(tmp_path):
     registry = InMemoryJobRegistry()
     job_id = "job0001"
-    (tmp_path / f"{job_id}_stdout.log").write_text("boom\n", encoding="utf-8")
+    (job_file(tmp_path, job_id, "stdout.log")).write_text(
+        "boom\n", encoding="utf-8"
+    )
     _register(registry, tmp_path, job_id, FakeProcessHandle(2))
 
     payload = (
@@ -178,7 +187,7 @@ def test_completed_fallback_key_order(tmp_path):
 def test_timeout_key_order(tmp_path):
     registry = InMemoryJobRegistry()
     job_id = "job0001"
-    (tmp_path / f"{job_id}_stdout.log").write_text(
+    (job_file(tmp_path, job_id, "stdout.log")).write_text(
         "running\n", encoding="utf-8"
     )
     _register(registry, tmp_path, job_id, FakeProcessHandle(None))

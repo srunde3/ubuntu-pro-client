@@ -43,9 +43,9 @@ from behave_mcp.messages import (
     DescribeFeatureResponse,
     ErrorsResponse,
     FindScenariosResponse,
+    JobExit,
     JobRecord,
     JobResult,
-    JobStatus,
     JobSummary,
     KillJobResponse,
     ListDimensionsResponse,
@@ -360,7 +360,6 @@ class BehaveService:
         log_dir = self._log_dir()
         results = self._results.bind(log_dir)
         job_id = self._new_job_id()
-        write_targets = results.write_targets(job_id)
 
         pools = frozenset({POOL_OF[machine_type]})
         reserved_job = Job(
@@ -393,6 +392,7 @@ class BehaveService:
                 ],
             )
 
+        write_targets = results.write_targets(job_id)
         command = build_command(
             feature_file,
             scenario_name,
@@ -434,12 +434,10 @@ class BehaveService:
         )
 
         artifacts = results.artifacts(job_id)
-        artifacts_dict = artifacts.model_dump(mode="json")
         results.write_record(
             job_id,
             JobRecord(
                 job_id=job_id,
-                status=JobStatus.STARTED,
                 started_at=self._now_utc(),
                 feature_file=feature_file,
                 scenario_name=scenario_name,
@@ -452,20 +450,6 @@ class BehaveService:
                 pid=handle.pid,
                 artifacts=artifacts,
             ),
-        )
-        results.append_event(
-            {
-                "event": "started",
-                "timestamp": self._now_utc(),
-                "job_id": job_id,
-                "feature_file": feature_file,
-                "scenario_name": scenario_name,
-                "release": release,
-                "machine_type": machine_type,
-                "install_from": install_from,
-                "repo_state": repo_state.model_dump(mode="json"),
-                "artifacts": artifacts_dict,
-            },
         )
 
         return StartScenarioResponse(
@@ -723,7 +707,8 @@ class BehaveService:
         return ArtifactsResponse(
             job_id=job_id,
             artifacts=results.artifacts(job_id),
-            metadata=results.read_record(job_id),
+            record=results.read_record(job_id),
+            exit=results.read_exit(job_id),
             exists=results.exists(job_id),
         )
 
@@ -906,9 +891,10 @@ class BehaveService:
             )
             status, ok = classification.status, classification.ok
             if status == RunStatus.COMPLETED:
-                record = self._record_completion(
+                self._record_completion(
                     job_id, results, returncode=returncode, ok=bool(ok)
                 )
+        exit = results.read_exit(job_id)
 
         return JobSummary(
             job_id=job_id,
@@ -920,7 +906,7 @@ class BehaveService:
             release=record.release,
             machine_type=record.machine_type,
             started_at=record.started_at,
-            completed_at=record.completed_at,
+            completed_at=exit.completed_at if exit is not None else None,
             artifacts=results.artifacts(job_id),
         )
 
@@ -990,16 +976,20 @@ class BehaveService:
                 artifacts=results.artifacts(job_id),
             )
 
-        ok_value = bool(classification.ok)
-        artifacts = results.artifacts(job_id)
-        record = self._record_completion(
-            job_id, results, returncode=returncode, ok=ok_value
-        )
-        return CompletedResponse(
-            ok=ok_value,
-            job_id=job_id,
+        # The first exit seen is the one recorded, so every later look
+        # reports the same outcome.
+        exit = self._record_completion(
+            job_id,
+            results,
             returncode=returncode,
-            artifacts=artifacts,
+            ok=bool(classification.ok),
+        )
+        record = results.read_record(job_id)
+        return CompletedResponse(
+            ok=exit.ok,
+            job_id=job_id,
+            returncode=exit.returncode,
+            artifacts=results.artifacts(job_id),
             feature_file=record.feature_file,
             scenario_name=record.scenario_name,
             release=record.release,
@@ -1020,31 +1010,14 @@ class BehaveService:
         *,
         returncode: int | None,
         ok: bool,
-    ) -> JobRecord:
-        """Write a job's completion the first time it is seen finished."""
-        record = results.read_record(job_id)
-        if record.status == JobStatus.COMPLETED:
-            return record
-
-        artifacts = results.artifacts(job_id)
-        record.job_id = job_id
-        record.status = JobStatus.COMPLETED
-        record.completed_at = self._now_utc()
-        record.returncode = returncode
-        record.ok = ok
-        record.artifacts = artifacts
-        results.write_record(job_id, record)
-        results.append_event(
-            {
-                "event": "completed",
-                "timestamp": record.completed_at,
-                "job_id": job_id,
-                "ok": ok,
-                "returncode": returncode,
-                "artifacts": artifacts.model_dump(mode="json"),
-            },
+    ) -> JobExit:
+        """Write a job's exit the first time it is seen finished."""
+        return results.write_exit(
+            job_id,
+            JobExit(
+                completed_at=self._now_utc(), returncode=returncode, ok=ok
+            ),
         )
-        return record
 
     def _log_dir(self) -> Path:
         try:
@@ -1056,7 +1029,7 @@ class BehaveService:
         log_dir = self._log_dir()
         results = self._results.bind(log_dir)
         exists = results.exists(job_id)
-        if not (exists.stdout_log or exists.json_report or exists.metadata):
+        if not (exists.record or exists.stdout_log or exists.json_report):
             logger.warning(
                 "job %s not tracked in memory and no disk artifacts found "
                 "under %s",

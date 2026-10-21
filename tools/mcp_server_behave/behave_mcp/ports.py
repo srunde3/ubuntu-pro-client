@@ -10,7 +10,13 @@ from pathlib import Path
 from typing import Any, NamedTuple, Protocol
 
 from behave_mcp.domain.pools import Pool
-from behave_mcp.messages import Artifacts, ExistsFlags, JobRecord, RepoState
+from behave_mcp.messages import (
+    Artifacts,
+    ExistsFlags,
+    JobExit,
+    JobRecord,
+    RepoState,
+)
 from behave_mcp.parser import FeatureDetail
 
 
@@ -170,11 +176,16 @@ class JobResultStore(Protocol):
         ...
 
     def write_record(self, job_id: str, record: JobRecord) -> None:
-        """Persist the job's record."""
+        """Write the job's launch record, once."""
         ...
 
-    def append_event(self, event: dict[str, Any]) -> None:
-        """Append one event to this location's job index."""
+    def read_exit(self, job_id: str) -> JobExit | None:
+        """Return how the job ended, or None if no exit is recorded."""
+        ...
+
+    def write_exit(self, job_id: str, exit: JobExit) -> JobExit:
+        """Record how the job ended, unless an exit already is; return the
+        exit on disk, so the first writer wins."""
         ...
 
     def log_tail(self, job_id: str, lines: int) -> str:

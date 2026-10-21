@@ -41,7 +41,12 @@ from behave_mcp.adapters import (
 from behave_mcp.config import Settings
 from behave_mcp.domain.pools import Pool
 from behave_mcp.service import BehaveService
-from tests.conftest import FakeLauncher, FakeProcessHandle, FakeWorkspace
+from tests.conftest import (
+    FakeLauncher,
+    FakeProcessHandle,
+    FakeWorkspace,
+    job_file,
+)
 
 UNIT_A = Unit("features/a.feature", "A", "jammy", "lxd-container")
 UNIT_B = Unit("features/b.feature", "B", "noble", "lxd-vm")
@@ -343,14 +348,14 @@ class TestSystemNow:
 
 class TestJobDirFiles:
     def test_lists_only_the_files_a_job_wrote(self, tmp_path):
-        (tmp_path / "abc_meta.json").write_text("{}")
-        (tmp_path / "abc_stdout.log").write_text("log")
+        (job_file(tmp_path, "abc", "job.json")).write_text("{}")
+        (job_file(tmp_path, "abc", "stdout.log")).write_text("log")
 
         found = JobDirFiles(tmp_path).files("abc")
 
         assert found == {
-            "meta.json": tmp_path / "abc_meta.json",
-            "stdout.log": tmp_path / "abc_stdout.log",
+            "job.json": job_file(tmp_path, "abc", "job.json"),
+            "stdout.log": job_file(tmp_path, "abc", "stdout.log"),
         }
 
 
