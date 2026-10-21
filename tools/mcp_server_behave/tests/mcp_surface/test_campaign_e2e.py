@@ -36,7 +36,7 @@ from behave_campaign.repo import repo_state
 from behave_campaign.runner import CampaignRunner, ThreadTicker
 from behave_campaign.service import CampaignService
 from behave_mcp.domain.pools import Pool
-from behave_mcp.wiring import create_service
+from behave_mcp.server import create_service
 
 FEATURE = "features/_version.feature"
 # Naming one scenario keeps the campaign to exactly one unit per release, so

@@ -25,15 +25,26 @@ import os
 import signal
 import subprocess
 import sys
+import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from types import FrameType
 from typing import Sequence
 
-from behave_mcp.adapters import LocalJobResultStore
+from behave_mcp.adapters import (
+    FileConfigStore,
+    FileLanePool,
+    FileReconcileLock,
+    JobProcessLauncher,
+    LocalFeatureFileReader,
+    LocalJobResultStore,
+    LocalJobResultStoreFactory,
+    LocalWorkspace,
+)
 from behave_mcp.domain import layout
 from behave_mcp.messages import JobExit
-from behave_mcp.wiring import create_service, reconcile_quietly
+from behave_mcp.service import BehaveService
 
 # From <sys/prctl.h>: deliver a signal to this process when its parent dies.
 PR_SET_PDEATHSIG = 1
@@ -140,8 +151,36 @@ def main(argv: Sequence[str]) -> int:
     if lane_fd is not None:
         os.close(lane_fd)
     # jobs/<id>/ lives in the state directory's jobs/.
-    reconcile_quietly(create_service(state_dir=job_dir.parent.parent))
+    _reconcile(job_dir.parent.parent)
     return 0
+
+
+def _job_service(state_dir: Path) -> BehaveService:
+    workspace = LocalWorkspace(state_dir)
+    return BehaveService(
+        workspace=workspace,
+        config=FileConfigStore(workspace.resolve_state_dir),
+        feature_reader=LocalFeatureFileReader(),
+        results=LocalJobResultStoreFactory(),
+        lanes=FileLanePool(
+            lambda: layout.lanes_dir(workspace.resolve_state_dir())
+        ),
+        launcher=JobProcessLauncher(workspace.resolve_jobs_dir),
+        reconcile_lock=FileReconcileLock(workspace.resolve_state_dir),
+        monotonic=time.monotonic,
+        sleep=time.sleep,
+        now_utc=_now,
+        new_job_id=lambda: uuid.uuid4().hex[:8],
+    )
+
+
+def _reconcile(state_dir: Path) -> None:
+    """Start the next queued jobs. The job is over either way: nobody is
+    waiting on this process to report a failure to."""
+    try:
+        _job_service(state_dir).reconcile()
+    except Exception:
+        pass
 
 
 if __name__ == "__main__":

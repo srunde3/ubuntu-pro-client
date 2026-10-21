@@ -14,6 +14,7 @@ import json
 import os
 import sys
 import time
+import uuid
 from pathlib import Path
 from typing import Any, Callable, Iterator, Sequence
 
@@ -28,13 +29,18 @@ from behave_campaign.domain.records import (
     Filters,
 )
 from behave_campaign.domain.state import GROUPINGS, GroupBy
+from behave_mcp.adapters import (
+    FileConfigStore,
+    FileLanePool,
+    FileReconcileLock,
+    JobProcessLauncher,
+    LocalFeatureFileReader,
+    LocalJobResultStoreFactory,
+    LocalWorkspace,
+)
 from behave_mcp.domain import layout
 from behave_mcp.domain.pools import Pool
-from behave_mcp.wiring import (
-    BehaveServiceError,
-    create_service,
-    reconcile_quietly,
-)
+from behave_mcp.service import BehaveService, BehaveServiceError
 
 from .adapters import (
     CampaignDirStore,
@@ -175,8 +181,29 @@ def _command_export(args: argparse.Namespace) -> BaseModel:
     )
 
 
+def _job_service(state_dir: Path) -> BehaveService:
+    """The job service over this checkout's state directory, the same as
+    the server and every job process build."""
+    workspace = LocalWorkspace(state_dir)
+    return BehaveService(
+        workspace=workspace,
+        config=FileConfigStore(workspace.resolve_state_dir),
+        feature_reader=LocalFeatureFileReader(),
+        results=LocalJobResultStoreFactory(),
+        lanes=FileLanePool(
+            lambda: layout.lanes_dir(workspace.resolve_state_dir())
+        ),
+        launcher=JobProcessLauncher(workspace.resolve_jobs_dir),
+        reconcile_lock=FileReconcileLock(workspace.resolve_state_dir),
+        monotonic=time.monotonic,
+        sleep=time.sleep,
+        now_utc=system_now,
+        new_job_id=lambda: uuid.uuid4().hex[:8],
+    )
+
+
 def _command_config(args: argparse.Namespace) -> BaseModel:
-    service = create_service(state_dir=_state_dir(args))
+    service = _job_service(_state_dir(args))
     if args.action == "set":
         value = sys.stdin.read().strip() if args.value == "-" else args.value
         return service.set_config(args.key, value)
@@ -192,7 +219,11 @@ def _reconcile(args: argparse.Namespace) -> None:
     except ValueError:
         # No checkout named: there is no state directory to reconcile.
         return
-    reconcile_quietly(create_service(state_dir=state))
+    try:
+        _job_service(state).reconcile()
+    except (BehaveServiceError, OSError) as error:
+        # The command's own answer stands; the next caller retries.
+        print("reconcile failed: {}".format(error), file=sys.stderr)
 
 
 def _read_events(

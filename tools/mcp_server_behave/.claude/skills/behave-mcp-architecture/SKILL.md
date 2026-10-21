@@ -12,7 +12,7 @@ description: Architecture and design rules for tools/mcp_server_behave, the beha
 
 ## Dependency direction
 
-`behave_campaign` may import `behave_mcp.parser`, `behave_mcp.domain.pools` and `behave_mcp.domain.layout`, and its `cli.py` may also import `behave_mcp.wiring`, because every front-end configures the checkout and reconciles its jobs. Nothing in `behave_mcp` imports `behave_campaign`, except the tool handlers in `behave_mcp/server.py`. Keep it that way, so the module graph stays acyclic and `behave_campaign` can be extracted.
+`behave_campaign` may import `behave_mcp.parser`, `behave_mcp.domain.pools` and `behave_mcp.domain.layout`, and its `cli.py` may also import `behave_mcp.service` and `behave_mcp.adapters`, because every front-end configures the checkout and reconciles its jobs. Nothing in `behave_mcp` imports `behave_campaign`, except the tool handlers in `behave_mcp/server.py`. Keep it that way, so the module graph stays acyclic and `behave_campaign` can be extracted.
 
 `uv run lint-imports` enforces these rules and the layer table below, using the contracts under `[tool.importlinter]` in `pyproject.toml`. If a change breaks a contract, first move the code to the layer it belongs in. Change a contract only when the architecture itself changes, in the same commit, with the reason in the commit message.
 
@@ -29,8 +29,7 @@ Both packages use ports and adapters. A layer with more than one concern is a pa
 | Adapters | `adapters.py` | `adapters.py`, `repo.py` | Implement the ports with the filesystem, `subprocess`, `fcntl` and git. |
 | Services | `service.py` (`BehaveService`) | `service.py` (`CampaignService`), `runner.py` (`CampaignRunner`) | Orchestrate domain and ports. Most behaviour changes belong here. |
 | DTOs | `messages.py` | `messages.py` | Pydantic models returned to front-ends. |
-| Wiring | `wiring.py` | none | The production adapters assembled into a `BehaveService`, once, for every front-end and the job process. |
-| Front-ends | `server.py`, `job_process.py` | `cli.py` | Entry points. The handlers in `server.py` and `cli.py` parse arguments, call one service method and serialise the result; `job_process.py` is the process each job runs under. |
+| Front-ends | `server.py`, `job_process.py` | `cli.py` | Entry points. Each builds its own `BehaveService` from the real adapters; the copies are deliberate, and `tests/behave_mcp/test_reconcile.py` checks they act alike. The handlers in `server.py` and `cli.py` parse arguments, call one service method and serialise the result; `job_process.py` is the process each job runs under. |
 | Config | `config.py` | none | The server's own env vars (address, poll timeout) parsed once into `Settings`. The checkout's config is not here: it is `domain/config.py`, stored in `config.json`. |
 
 Small collaborators are passed as plain callables, not ports: the clock (`now_utc`, `now`, `monotonic`), `sleep`, `new_job_id` and the git read (`repo_state`). Tests replace them with lambdas.

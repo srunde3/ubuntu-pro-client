@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-from behave_mcp.wiring import create_service
+from behave_mcp.server import create_service
 
 FEATURE = "features/_version.feature"
 SCENARIO = "Attached show version in a ubuntu machine"
@@ -30,7 +30,7 @@ SAMPLE_INTERVAL_SECONDS = 0.5
 # Run in a separate interpreter: what a restarted server or the CLI would do.
 OTHER_PROCESS = """
 import json, os, sys
-from behave_mcp.wiring import create_service
+from behave_mcp.server import create_service
 
 service = create_service()
 job_id = sys.argv[1]

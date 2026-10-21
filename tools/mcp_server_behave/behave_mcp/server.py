@@ -1,8 +1,11 @@
 import functools
+import logging
 import os
 import sys
 import threading
 import time
+import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated, Any, Callable
 
@@ -38,12 +41,21 @@ from behave_campaign.messages import (
 from behave_campaign.repo import repo_state as read_repo_state
 from behave_campaign.runner import CampaignRunner
 from behave_campaign.service import CampaignService
-from behave_mcp.adapters import LocalWorkspace
+from behave_mcp.adapters import (
+    FileConfigStore,
+    FileLanePool,
+    FileReconcileLock,
+    JobProcessLauncher,
+    LocalFeatureFileReader,
+    LocalJobResultStoreFactory,
+    LocalWorkspace,
+)
 from behave_mcp.config import (
     ConfigError,
     ignored_behave_settings,
     load_settings,
 )
+from behave_mcp.domain import layout
 from behave_mcp.domain.jobs import InstallFrom
 from behave_mcp.domain.limits import (
     DEFAULT_FIND_LIMIT,
@@ -69,7 +81,9 @@ from behave_mcp.messages import (
     ResultsResponse,
     StartScenarioResponse,
 )
-from behave_mcp.wiring import create_service, reconcile_quietly
+from behave_mcp.service import BehaveService
+
+logger = logging.getLogger(__name__)
 
 try:
     _settings = load_settings(os.environ)
@@ -111,7 +125,7 @@ def tool(**kwargs: Any) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
                     type="text", text=fn(*args, **kw).model_dump_json()
                 )
             finally:
-                reconcile_quietly(_service)
+                _reconcile_quietly()
 
         return mcp.tool(structured_output=False, **kwargs)(as_text)
 
@@ -202,6 +216,40 @@ CampaignIdArg = Annotated[
 
 # How often the server reconciles on its own, in case nothing else does.
 RECONCILE_INTERVAL_SECONDS = 5.0
+
+
+def _utc_timestamp() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
+def create_service() -> BehaveService:
+    """The job service over the server's state directory, resolved per call:
+    nothing about a job is held in this process."""
+    workspace = LocalWorkspace()
+    return BehaveService(
+        workspace=workspace,
+        config=FileConfigStore(workspace.resolve_state_dir),
+        feature_reader=LocalFeatureFileReader(),
+        results=LocalJobResultStoreFactory(),
+        lanes=FileLanePool(
+            lambda: layout.lanes_dir(workspace.resolve_state_dir())
+        ),
+        launcher=JobProcessLauncher(workspace.resolve_jobs_dir),
+        reconcile_lock=FileReconcileLock(workspace.resolve_state_dir),
+        monotonic=time.monotonic,
+        sleep=time.sleep,
+        now_utc=_utc_timestamp,
+        new_job_id=lambda: uuid.uuid4().hex[:8],
+    )
+
+
+def _reconcile_quietly() -> None:
+    """Reconcile, logging what goes wrong: a tool has its own answer to
+    return, and the next call or the timer retries."""
+    try:
+        _service.reconcile()
+    except Exception:
+        logger.exception("reconcile failed; the next caller retries it")
 
 
 _service = create_service()
@@ -1010,7 +1058,7 @@ def kill_job(job_id: JobId) -> KillJobResponse:
 def _reconcile_forever() -> None:
     while True:
         time.sleep(RECONCILE_INTERVAL_SECONDS)
-        reconcile_quietly(_service)
+        _reconcile_quietly()
 
 
 def main() -> None:
