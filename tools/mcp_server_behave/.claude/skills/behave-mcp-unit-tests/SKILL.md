@@ -111,9 +111,9 @@ Good: a refusal is proven by the port never being called.
 
 ```python
 with pytest.raises(BehaveServiceError, match="exact name"):
-    service.start_scenario(
+    service.run_job(
         "features/cli/attach.feature",
-        scenario_name="Attach command",
+        scenario="Attach command",
         release="jammy",
         machine_type="lxd-container",
     )
@@ -214,7 +214,7 @@ Bad: a mock standing in for the port. A typo in `launch`, or a method the port n
 ```python
 launcher = MagicMock()
 launcher.is_running.return_value = True
-service.start_scenario(
+service.run_job(
     "features/cli/attach.feature", "Attach command", "jammy", "lxd-container"
 )
 launcher.launch.assert_called_once()

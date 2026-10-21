@@ -39,9 +39,9 @@ def _make_service(workspace, *, max_jobs=None, **ports) -> BehaveService:
 
 def start(service, machine_type):
     """Start the unit fixture feature's scenario on ``machine_type``."""
-    return service.start_scenario(
+    return service.run_job(
         "features/cli/attach.feature",
-        scenario_name=UNIT_SCENARIO,
+        scenario=UNIT_SCENARIO,
         release="jammy",
         machine_type=machine_type,
     ).model_dump(mode="json")
@@ -213,8 +213,8 @@ def test_find_scenarios_filters_by_tag(tmp_path):
 
     assert len(result["matches"]) == 1
     match = result["matches"][0]
-    assert match["scenario_name"] == "Attach invalid token"
-    assert match["feature_file"] == "features/cli/attach.feature"
+    assert match["scenario"] == "Attach invalid token"
+    assert match["feature"] == "features/cli/attach.feature"
 
 
 def test_find_scenarios_filters_combos_by_machine_type(tmp_path):
@@ -231,7 +231,7 @@ def test_find_scenarios_filters_combos_by_machine_type(tmp_path):
     ]
 
 
-def test_start_scenario_rejects_unlisted_feature(tmp_path):
+def test_run_job_rejects_unlisted_feature(tmp_path):
     repo_root = make_repo_with_feature(tmp_path, "features/cli/attach.feature")
     service = _make_service(
         FakeWorkspace(repo_root=repo_root, jobs_dir=tmp_path)
@@ -240,15 +240,15 @@ def test_start_scenario_rejects_unlisted_feature(tmp_path):
     with pytest.raises(
         BehaveServiceError, match="Feature is not listed by list_features"
     ):
-        service.start_scenario(
+        service.run_job(
             "features/cli/does-not-exist.feature",
-            scenario_name=UNIT_SCENARIO,
+            scenario=UNIT_SCENARIO,
             release="jammy",
             machine_type="lxd-container",
         )
 
 
-def test_start_scenario_accepts_normalized_listed_feature(tmp_path):
+def test_run_job_accepts_normalized_listed_feature(tmp_path):
     repo_root = make_repo_with_feature(tmp_path, "features/cli/attach.feature")
     launcher = FakeJobLauncher()
     service = _make_service(
@@ -256,9 +256,9 @@ def test_start_scenario_accepts_normalized_listed_feature(tmp_path):
         launcher=launcher,
     )
 
-    result = service.start_scenario(
+    result = service.run_job(
         "features/cli/../cli/attach.feature",
-        scenario_name=UNIT_SCENARIO,
+        scenario=UNIT_SCENARIO,
         release="jammy",
         machine_type="lxd-container",
     ).model_dump(mode="json")
@@ -268,7 +268,7 @@ def test_start_scenario_accepts_normalized_listed_feature(tmp_path):
     assert result["artifacts"]["record"].endswith("/job.json")
 
 
-def test_start_scenario_refuses_a_name_the_feature_lacks(tmp_path):
+def test_run_job_refuses_a_name_the_feature_lacks(tmp_path):
     repo_root = make_repo_with_feature(tmp_path, "features/cli/attach.feature")
     (repo_root / "features/cli/attach.feature").write_text(
         "Feature: attach\n"
@@ -283,16 +283,16 @@ def test_start_scenario_refuses_a_name_the_feature_lacks(tmp_path):
     )
 
     with pytest.raises(BehaveServiceError, match="exact name"):
-        service.start_scenario(
+        service.run_job(
             "features/cli/attach.feature",
-            scenario_name="Attach command",
+            scenario="Attach command",
             release="jammy",
             machine_type="lxd-container",
         )
     assert launcher.calls == []
 
 
-def test_start_scenario_refuses_a_combo_the_scenario_lacks(tmp_path):
+def test_run_job_refuses_a_combo_the_scenario_lacks(tmp_path):
     repo_root = make_repo_with_feature(tmp_path, "features/cli/attach.feature")
     launcher = FakeJobLauncher()
     service = _make_service(
@@ -301,16 +301,16 @@ def test_start_scenario_refuses_a_combo_the_scenario_lacks(tmp_path):
     )
 
     with pytest.raises(BehaveServiceError, match="does not run"):
-        service.start_scenario(
+        service.run_job(
             "features/cli/attach.feature",
-            scenario_name=UNIT_SCENARIO,
+            scenario=UNIT_SCENARIO,
             release="noble",
             machine_type="lxd-container",
         )
     assert launcher.calls == []
 
 
-def test_start_scenario_refuses_an_ambiguous_unit(tmp_path):
+def test_run_job_refuses_an_ambiguous_unit(tmp_path):
     # Two outlines share a name and the jammy lxd-container row, so behave
     # would run both: no job can name exactly one unit.
     repo_root = make_repo_with_feature(tmp_path, "features/cli/attach.feature")
@@ -325,16 +325,16 @@ def test_start_scenario_refuses_an_ambiguous_unit(tmp_path):
     )
 
     with pytest.raises(BehaveServiceError, match="More than one scenario"):
-        service.start_scenario(
+        service.run_job(
             "features/cli/attach.feature",
-            scenario_name=UNIT_SCENARIO,
+            scenario=UNIT_SCENARIO,
             release="jammy",
             machine_type="lxd-container",
         )
     assert launcher.calls == []
 
 
-def test_start_scenario_builds_command(tmp_path):
+def test_run_job_builds_command(tmp_path):
     repo_root = make_repo_with_feature(tmp_path, "features/cli/attach.feature")
     launcher = FakeJobLauncher()
     service = _make_service(
@@ -346,9 +346,9 @@ def test_start_scenario_builds_command(tmp_path):
         launcher=launcher,
     )
 
-    result = service.start_scenario(
+    result = service.run_job(
         "features/cli/attach.feature",
-        scenario_name=UNIT_SCENARIO,
+        scenario=UNIT_SCENARIO,
         release="jammy",
         machine_type="lxd-container",
     ).model_dump(mode="json")
@@ -373,7 +373,7 @@ def test_start_scenario_builds_command(tmp_path):
     assert call["env"]["PATH"] == "/bin"
 
 
-def test_start_scenario_defaults_install_from_to_local(tmp_path):
+def test_run_job_defaults_install_from_to_local(tmp_path):
     repo_root = make_repo_with_feature(tmp_path, "features/cli/attach.feature")
     launcher = FakeJobLauncher()
     service = _make_service(
@@ -381,9 +381,9 @@ def test_start_scenario_defaults_install_from_to_local(tmp_path):
         launcher=launcher,
     )
 
-    service.start_scenario(
+    service.run_job(
         "features/cli/attach.feature",
-        scenario_name=UNIT_SCENARIO,
+        scenario=UNIT_SCENARIO,
         release="jammy",
         machine_type="lxd-container",
     )
@@ -391,7 +391,7 @@ def test_start_scenario_defaults_install_from_to_local(tmp_path):
     assert launcher.calls[0]["env"]["UACLIENT_BEHAVE_INSTALL_FROM"] == "local"
 
 
-def test_start_scenario_sets_install_from_env_var(tmp_path):
+def test_run_job_sets_install_from_env_var(tmp_path):
     repo_root = make_repo_with_feature(tmp_path, "features/cli/attach.feature")
     launcher = FakeJobLauncher()
     service = _make_service(
@@ -399,9 +399,9 @@ def test_start_scenario_sets_install_from_env_var(tmp_path):
         launcher=launcher,
     )
 
-    service.start_scenario(
+    service.run_job(
         "features/cli/attach.feature",
-        scenario_name=UNIT_SCENARIO,
+        scenario=UNIT_SCENARIO,
         release="jammy",
         machine_type="lxd-container",
         install_from="proposed",
@@ -412,16 +412,16 @@ def test_start_scenario_sets_install_from_env_var(tmp_path):
     )
 
 
-def test_start_scenario_rejects_invalid_install_from(tmp_path):
+def test_run_job_rejects_invalid_install_from(tmp_path):
     repo_root = make_repo_with_feature(tmp_path, "features/cli/attach.feature")
     service = _make_service(
         FakeWorkspace(repo_root=repo_root, jobs_dir=tmp_path)
     )
 
     with pytest.raises(BehaveServiceError, match="Unsupported install_from"):
-        service.start_scenario(
+        service.run_job(
             "features/cli/attach.feature",
-            scenario_name=UNIT_SCENARIO,
+            scenario=UNIT_SCENARIO,
             release="jammy",
             machine_type="lxd-container",
             install_from="custom",
@@ -442,9 +442,9 @@ def test_a_job_records_the_repo_it_ran_in(tmp_path):
         launcher=launcher,
     )
 
-    result = service.start_scenario(
+    result = service.run_job(
         "features/cli/attach.feature",
-        scenario_name=UNIT_SCENARIO,
+        scenario=UNIT_SCENARIO,
         release="jammy",
         machine_type="lxd-container",
     ).model_dump(mode="json")
@@ -469,9 +469,9 @@ def test_a_repo_root_override_runs_there_but_files_stay_with_the_server(
         FakeWorkspace(repo_root=None, jobs_dir=server_jobs), launcher=launcher
     )
 
-    result = service.start_scenario(
+    result = service.run_job(
         "features/cli/sample.feature",
-        scenario_name=UNIT_SCENARIO,
+        scenario=UNIT_SCENARIO,
         release="jammy",
         machine_type="lxd-container",
         repo_root=str(other_checkout),
@@ -486,7 +486,7 @@ def test_a_repo_root_override_runs_there_but_files_stay_with_the_server(
     assert record["repo"]["root"] == str(other_checkout)
 
 
-def test_start_scenario_does_not_reference_combo_formatter(tmp_path):
+def test_run_job_does_not_reference_combo_formatter(tmp_path):
     repo_root = _make_repo_with_outline(tmp_path)
     launcher = FakeJobLauncher()
     service = _make_service(
@@ -494,9 +494,9 @@ def test_start_scenario_does_not_reference_combo_formatter(tmp_path):
         launcher=launcher,
     )
 
-    service.start_scenario(
+    service.run_job(
         "features/cli/attach.feature",
-        scenario_name="Attach on a machine",
+        scenario="Attach on a machine",
         release="jammy",
         machine_type="lxd-container",
     ).model_dump(mode="json")
@@ -508,40 +508,38 @@ def test_start_scenario_does_not_reference_combo_formatter(tmp_path):
     assert call["command"][-2:] == ["-f", "plain"]
 
 
-def test_start_scenario_rejects_invalid_repo_root():
+def test_run_job_rejects_invalid_repo_root():
     service = _make_service(
         FakeWorkspace(repo_root_error="Invalid repo_root: bad")
     )
 
     with pytest.raises(BehaveServiceError, match="Invalid repo_root"):
-        service.start_scenario(
+        service.run_job(
             "features/cli/attach.feature",
-            scenario_name=UNIT_SCENARIO,
+            scenario=UNIT_SCENARIO,
             release="jammy",
             machine_type="lxd-container",
             repo_root="/bad",
         )
 
 
-def test_start_scenario_refuses_an_unknown_machine_type(tmp_path):
+def test_run_job_refuses_an_unknown_machine_type(tmp_path):
     repo_root = make_repo_with_feature(tmp_path, "features/cli/attach.feature")
     service = _make_service(
         FakeWorkspace(repo_root=repo_root, jobs_dir=tmp_path)
     )
 
     with pytest.raises(BehaveServiceError, match="Unsupported machine_type"):
-        service.start_scenario(
+        service.run_job(
             "features/cli/attach.feature",
-            scenario_name=UNIT_SCENARIO,
+            scenario=UNIT_SCENARIO,
             release="jammy",
             machine_type="lxd-ctr",
         )
 
 
 @pytest.mark.parametrize("machine_type", ["azure.generic", "aws.pro-fips"])
-def test_start_scenario_rejects_cloud_machine_type_by_default(
-    tmp_path, machine_type
-):
+def test_run_job_rejects_cloud_machine_type_by_default(tmp_path, machine_type):
     repo_root = make_repo_with_feature(tmp_path, "features/cli/attach.feature")
     service = _make_service(
         FakeWorkspace(repo_root=repo_root, jobs_dir=tmp_path)
@@ -551,15 +549,15 @@ def test_start_scenario_rejects_cloud_machine_type_by_default(
         BehaveServiceError,
         match="cloud machine types are disabled.*max_jobs.cloud",
     ):
-        service.start_scenario(
+        service.run_job(
             "features/cli/attach.feature",
-            scenario_name=UNIT_SCENARIO,
+            scenario=UNIT_SCENARIO,
             release="jammy",
             machine_type=machine_type,
         )
 
 
-def test_start_scenario_rejects_a_disabled_pool_naming_the_setting(tmp_path):
+def test_run_job_rejects_a_disabled_pool_naming_the_setting(tmp_path):
     repo_root = make_repo_with_feature(tmp_path, "features/cli/attach.feature")
     service = _make_service(
         FakeWorkspace(repo_root=repo_root, jobs_dir=tmp_path),
@@ -674,7 +672,7 @@ def test_a_wait_that_runs_out_returns_the_queued_job(tmp_path):
     start(service, "lxd-container")
     start(service, "lxd-container")
 
-    result = service.wait_for_completion(
+    result = service.wait_for_job(
         "j2", max_wait_seconds=5, poll_interval_seconds=1
     )
 
@@ -748,8 +746,8 @@ def launched(tmp_path, job_id=JOB_ID, launch=True, **record):
     false: its request, then its record."""
     fields = dict(
         job_id=job_id,
-        feature_file="features/cli/attach.feature",
-        scenario_name=UNIT_SCENARIO,
+        feature="features/cli/attach.feature",
+        scenario=UNIT_SCENARIO,
         release="jammy",
         machine_type="lxd-container",
     )
@@ -868,7 +866,7 @@ def test_reading_a_job_never_writes_its_exit(tmp_path):
 
     service.job_status(JOB_ID)
     service.list_jobs()
-    service.get_results()
+    service.job_results()
 
     assert not job_file(tmp_path, JOB_ID, "exit.json").exists()
 
@@ -881,7 +879,7 @@ def test_wait_for_completion_returns_once_the_job_ends(tmp_path):
         sleep=lambda seconds: launcher.finish(JOB_ID, report=PASSING_REPORT),
     )
 
-    result = service.wait_for_completion(
+    result = service.wait_for_job(
         JOB_ID, max_wait_seconds=5, poll_interval_seconds=0.01
     )
 
@@ -895,7 +893,7 @@ def test_wait_for_completion_returns_an_interrupted_job(tmp_path):
         tmp_path, launcher, sleep=lambda seconds: launcher.crash(JOB_ID)
     )
 
-    result = service.wait_for_completion(
+    result = service.wait_for_job(
         JOB_ID, max_wait_seconds=5, poll_interval_seconds=0.01
     )
 
@@ -908,7 +906,7 @@ def test_wait_for_completion_times_out_on_a_running_job(tmp_path):
     clock = iter([0.0, 0.0, 10.0])
     service = job_service(tmp_path, launcher, monotonic=lambda: next(clock))
 
-    result = service.wait_for_completion(
+    result = service.wait_for_job(
         JOB_ID, max_wait_seconds=5, poll_interval_seconds=1
     ).model_dump(mode="json")
 
@@ -919,11 +917,11 @@ def test_wait_for_completion_times_out_on_a_running_job(tmp_path):
 @pytest.mark.parametrize(
     "call",
     [
-        lambda service: service.wait_for_completion("nope", 1),
+        lambda service: service.wait_for_job("nope", 1),
         lambda service: service.job_status("nope"),
-        lambda service: service.get_logs("nope"),
-        lambda service: service.get_errors("nope"),
-        lambda service: service.get_artifacts("nope"),
+        lambda service: service.job_logs("nope"),
+        lambda service: service.job_errors("nope"),
+        lambda service: service.job_artifacts("nope"),
         lambda service: service.kill_job("nope"),
     ],
     ids=["wait", "status", "logs", "errors", "artifacts", "kill"],
@@ -931,7 +929,7 @@ def test_wait_for_completion_times_out_on_a_running_job(tmp_path):
 def test_an_unknown_job_id_is_actionable(tmp_path, call):
     service = job_service(tmp_path, FakeJobLauncher(tmp_path))
 
-    with pytest.raises(UnknownJobError, match="list_scenario_jobs"):
+    with pytest.raises(UnknownJobError, match="list_jobs"):
         call(service)
 
 
@@ -988,7 +986,7 @@ def test_get_logs_returns_tail(tmp_path):
     logged(tmp_path, "l1\nl2\nl3\n")
     service = job_service(tmp_path, FakeJobLauncher(tmp_path))
 
-    result = service.get_logs(JOB_ID, lines=2).model_dump(mode="json")
+    result = service.job_logs(JOB_ID, lines=2).model_dump(mode="json")
 
     assert result["text"] == "2: l2\n3: l3"
     assert result["total_lines"] == 3
@@ -1001,7 +999,7 @@ def test_get_logs_searches_with_context(tmp_path):
     )
     service = job_service(tmp_path, FakeJobLauncher(tmp_path))
 
-    result = service.get_logs(
+    result = service.job_logs(
         JOB_ID, pattern="traceback|error", context=0
     ).model_dump(mode="json")
 
@@ -1017,14 +1015,14 @@ def test_get_logs_rejects_an_invalid_pattern(tmp_path):
     service = job_service(tmp_path, FakeJobLauncher(tmp_path))
 
     with pytest.raises(BehaveServiceError, match="invalid pattern"):
-        service.get_logs(JOB_ID, pattern="(")
+        service.job_logs(JOB_ID, pattern="(")
 
 
 def test_get_logs_clamps_lines_above_max(tmp_path):
     logged(tmp_path, "l1\nl2\nl3\n")
     service = job_service(tmp_path, FakeJobLauncher(tmp_path))
 
-    result = service.get_logs(JOB_ID, lines=MAX_LOG_LINES + 1000)
+    result = service.job_logs(JOB_ID, lines=MAX_LOG_LINES + 1000)
 
     assert result.lines_clamped is True
 
@@ -1034,7 +1032,7 @@ def test_get_logs_rejects_non_positive_lines(tmp_path):
     service = job_service(tmp_path, FakeJobLauncher(tmp_path))
 
     with pytest.raises(BehaveServiceError, match="positive"):
-        service.get_logs(JOB_ID, lines=0)
+        service.job_logs(JOB_ID, lines=0)
 
 
 def test_get_logs_of_a_job_with_no_log_yet_is_an_error(tmp_path):
@@ -1042,7 +1040,7 @@ def test_get_logs_of_a_job_with_no_log_yet_is_an_error(tmp_path):
     service = job_service(tmp_path, FakeJobLauncher(tmp_path))
 
     with pytest.raises(BehaveServiceError, match="No log file"):
-        service.get_logs(JOB_ID)
+        service.job_logs(JOB_ID)
 
 
 def test_get_errors_digests_the_log(tmp_path):
@@ -1061,7 +1059,7 @@ def test_get_errors_digests_the_log(tmp_path):
     )
     service = job_service(tmp_path, FakeJobLauncher(tmp_path))
 
-    result = service.get_errors(JOB_ID).model_dump(mode="json")
+    result = service.job_errors(JOB_ID).model_dump(mode="json")
 
     assert result["finished"] is True
     assert result["errors_total"] == 1
@@ -1077,12 +1075,12 @@ def test_get_errors_digests_the_log(tmp_path):
 
 
 def test_get_artifacts_reports_paths_record_and_exit(tmp_path):
-    launched(tmp_path, feature_file="features/a.feature")
+    launched(tmp_path, feature="features/a.feature")
     launcher = FakeJobLauncher(tmp_path)
     launcher.finish(JOB_ID, log="line\n", report=[])
     service = job_service(tmp_path, launcher)
 
-    result = service.get_artifacts(JOB_ID).model_dump(mode="json")
+    result = service.job_artifacts(JOB_ID).model_dump(mode="json")
 
     assert result["exists"] == {
         "request": True,
@@ -1091,7 +1089,7 @@ def test_get_artifacts_reports_paths_record_and_exit(tmp_path):
         "stdout_log": True,
         "json_report": True,
     }
-    assert result["record"]["feature_file"] == "features/a.feature"
+    assert result["record"]["feature"] == "features/a.feature"
     assert result["exit"]["ok"] is True
     assert result["artifacts"]["job_dir"] == str(tmp_path / JOB_ID)
 
@@ -1205,7 +1203,7 @@ def test_get_results_reports_one_result_per_job(tmp_path):
     launcher.finish(JOB_ID, report=TWO_SCENARIO_REPORT)
     service = job_service(tmp_path, launcher)
 
-    result = service.get_results(job_ids=[JOB_ID]).model_dump(mode="json")
+    result = service.job_results(job_ids=[JOB_ID]).model_dump(mode="json")
 
     (job,) = result["results"]
     assert result["total"] == 1
@@ -1222,13 +1220,11 @@ def test_get_results_filters_by_feature_file_newest_first(tmp_path):
         ("newer", "features/a.feature", "T2"),
         ("other", "features/b.feature", "T3"),
     ]:
-        launched(
-            tmp_path, job_id=job_id, feature_file=feature, started_at=started
-        )
+        launched(tmp_path, job_id=job_id, feature=feature, started_at=started)
         launcher.finish(job_id)
     service = job_service(tmp_path, launcher)
 
-    result = service.get_results(feature_file="features/a.feature")
+    result = service.job_results(feature="features/a.feature")
 
     assert [r.job_id for r in result.results] == ["newer", "older"]
 
@@ -1240,7 +1236,7 @@ def test_get_results_filters_by_status(tmp_path):
     launcher.running.add(OTHER_JOB_ID)
     service = job_service(tmp_path, launcher)
 
-    result = service.get_results(state="interrupted")
+    result = service.job_results(state="interrupted")
 
     assert [r.job_id for r in result.results] == [JOB_ID]
 
@@ -1249,14 +1245,14 @@ def test_get_results_rejects_an_invalid_state(tmp_path):
     service = job_service(tmp_path, FakeJobLauncher(tmp_path))
 
     with pytest.raises(BehaveServiceError, match="Invalid state filter"):
-        service.get_results(state="bogus")
+        service.job_results(state="bogus")
 
 
 def test_get_results_rejects_a_non_positive_limit(tmp_path):
     service = job_service(tmp_path, FakeJobLauncher(tmp_path))
 
     with pytest.raises(BehaveServiceError, match="positive"):
-        service.get_results(limit=0)
+        service.job_results(limit=0)
 
 
 def test_get_results_truncates_at_the_limit(tmp_path):
@@ -1268,7 +1264,7 @@ def test_get_results_truncates_at_the_limit(tmp_path):
         launcher.finish(job_id)
     service = job_service(tmp_path, launcher)
 
-    result = service.get_results(limit=shown)
+    result = service.job_results(limit=shown)
 
     assert len(result.results) == shown
     assert result.total == shown + 1
@@ -1278,6 +1274,6 @@ def test_get_results_truncates_at_the_limit(tmp_path):
 def test_get_results_limit_is_clamped_when_too_high(tmp_path):
     service = job_service(tmp_path, FakeJobLauncher(tmp_path))
 
-    result = service.get_results(limit=MAX_RESULTS_LIMIT + 1)
+    result = service.job_results(limit=MAX_RESULTS_LIMIT + 1)
 
     assert result.limit_clamped is True

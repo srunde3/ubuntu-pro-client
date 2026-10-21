@@ -65,16 +65,16 @@ from behave_mcp.messages import (
     KillJobResponse,
     ListDimensionsResponse,
     ListFeaturesResponse,
-    ListScenarioJobsResponse,
+    ListJobsResponse,
     LogRegionView,
     LogsResponse,
     LogSummaryView,
     PoolUsage,
     QueuedResponse,
     ResultsResponse,
+    RunJobResponse,
     RunningResponse,
     ScenarioMatch,
-    StartScenarioResponse,
     StepView,
 )
 from behave_mcp.ports import (
@@ -116,8 +116,7 @@ class UnknownJobError(BehaveServiceError):
 
     def __init__(self, job_id: str) -> None:
         super().__init__(
-            f"Unknown job_id: {job_id}. Call list_scenario_jobs to see "
-            "known jobs."
+            f"Unknown job_id: {job_id}. Call list_jobs to see " "known jobs."
         )
 
 
@@ -191,7 +190,7 @@ class BehaveService:
         )
 
     def describe_feature(
-        self, feature_file: str, repo_root: str = ""
+        self, feature: str, repo_root: str = ""
     ) -> DescribeFeatureResponse:
         try:
             resolved_repo_root = self._workspace.resolve_repo_root(
@@ -200,14 +199,14 @@ class BehaveService:
         except ValueError as exc:
             raise BehaveServiceError(str(exc)) from exc
 
-        normalized = parser.normalize_feature_file_arg(feature_file)
+        normalized = parser.normalize_feature_file_arg(feature)
         details = self._feature_reader.discover_feature_details(
             resolved_repo_root
         )
         for detail in details:
             if detail.path == normalized:
                 return DescribeFeatureResponse(
-                    feature_file=detail.path,
+                    feature=detail.path,
                     title=detail.title,
                     tags=list(detail.tags),
                     requires_config=list(detail.requires_config),
@@ -218,7 +217,7 @@ class BehaveService:
                 )
 
         raise BehaveServiceError(
-            f"Feature is not listed by list_features: {feature_file}"
+            f"Feature is not listed by list_features: {feature}"
         )
 
     def list_dimensions(self, repo_root: str = "") -> ListDimensionsResponse:
@@ -278,8 +277,8 @@ class BehaveService:
                     continue
                 matches.append(
                     ScenarioMatch(
-                        feature_file=detail.path,
-                        scenario_name=scenario.name,
+                        feature=detail.path,
+                        scenario=scenario.name,
                         type=scenario.type,
                         requires_config=list(scenario.requires_config),
                         combos=[
@@ -327,22 +326,22 @@ class BehaveService:
             for scenario in feature_detail.scenarios
         )
 
-    def start_scenario(
+    def run_job(
         self,
-        feature_file: str,
-        scenario_name: str,
+        feature: str,
+        scenario: str,
         release: str,
         machine_type: str,
         repo_root: str = "",
         install_from: str = DEFAULT_INSTALL_FROM,
-    ) -> StartScenarioResponse:
+    ) -> RunJobResponse:
         """Queue one job for one unit, a scenario on one release and
         machine type, and start it at once if its pool has a free lane. A
         selection that matches no unit, or more than one, is refused before
         anything is queued."""
         job_id = self.queue_job(
-            feature_file,
-            scenario_name,
+            feature,
+            scenario,
             release,
             machine_type,
             repo_root=repo_root,
@@ -354,11 +353,11 @@ class BehaveService:
             message = (
                 f"Queued, position {payload.queue_position} in the "
                 f"{POOL_OF[machine_type]} pool. Call "
-                "wait_for_scenario_completion."
+                "wait_for_job."
             )
         else:
-            message = "Started. Call wait_for_scenario_completion."
-        return StartScenarioResponse(
+            message = "Started. Call wait_for_job."
+        return RunJobResponse(
             job_id=job_id,
             state=payload.state,
             queue_position=(
@@ -376,8 +375,8 @@ class BehaveService:
 
     def queue_job(
         self,
-        feature_file: str,
-        scenario_name: str,
+        feature: str,
+        scenario: str,
         release: str,
         machine_type: str,
         *,
@@ -401,13 +400,13 @@ class BehaveService:
         except ValueError as exc:
             raise BehaveServiceError(str(exc)) from exc
 
-        normalized = parser.normalize_feature_file_arg(feature_file)
+        normalized = parser.normalize_feature_file_arg(feature)
         allowed_features = set(
             self._feature_reader.discover_feature_files(resolved_repo_root)
         )
         if normalized not in allowed_features:
             raise BehaveServiceError(
-                f"Feature is not listed by list_features: {feature_file}"
+                f"Feature is not listed by list_features: {feature}"
             )
         machine_type_error = validate_machine_type(
             machine_type, self._read_config().max_jobs
@@ -417,7 +416,7 @@ class BehaveService:
         self._check_unit(
             resolved_repo_root,
             normalized,
-            scenario_name,
+            scenario,
             release,
             machine_type,
         )
@@ -430,8 +429,8 @@ class BehaveService:
         job_id = job_id or self._new_job_id()
         write_targets = results.write_targets(job_id)
         command = build_command(
-            feature_file,
-            scenario_name,
+            feature,
+            scenario,
             release,
             machine_type,
             write_targets.json_report,
@@ -444,8 +443,8 @@ class BehaveService:
                 JobRequest(
                     job_id=job_id,
                     queued_at=self._now_utc(),
-                    feature_file=feature_file,
-                    scenario_name=scenario_name,
+                    feature=feature,
+                    scenario=scenario,
                     release=release,
                     machine_type=machine_type,
                     install_from=install_from,
@@ -518,8 +517,8 @@ class BehaveService:
                 JobRecord(
                     job_id=job_id,
                     started_at=self._now_utc(),
-                    feature_file=request.feature_file,
-                    scenario_name=request.scenario_name,
+                    feature=request.feature,
+                    scenario=request.scenario,
                     release=request.release,
                     machine_type=request.machine_type,
                     install_from=request.install_from,
@@ -550,14 +549,14 @@ class BehaveService:
     def _check_unit(
         self,
         repo_root: Path,
-        feature_file: str,
-        scenario_name: str,
+        feature: str,
+        scenario: str,
         release: str,
         machine_type: str,
     ) -> None:
         scenarios: list[ScenarioCombos] = []
         for detail in self._feature_reader.discover_feature_details(repo_root):
-            if detail.path == feature_file:
+            if detail.path == feature:
                 scenarios = [
                     (
                         scenario.name,
@@ -568,22 +567,22 @@ class BehaveService:
                     )
                     for scenario in detail.scenarios
                 ]
-        match = match_unit(scenarios, scenario_name, release, machine_type)
+        match = match_unit(scenarios, scenario, release, machine_type)
         if match == UnitMatch.FOUND:
             return
-        unit = f"{scenario_name!r} on {release} {machine_type}"
+        unit = f"{scenario!r} on {release} {machine_type}"
         refusals = {
             UnitMatch.NO_SCENARIO: (
-                f"No scenario named {scenario_name!r} in {feature_file}. "
-                "scenario_name must be a scenario's exact name, as "
+                f"No scenario named {scenario!r} in {feature}. "
+                "scenario must be a scenario's exact name, as "
                 "describe_feature lists it."
             ),
             UnitMatch.NOT_ON_COMBO: (
-                f"{feature_file} does not run {unit}. describe_feature "
+                f"{feature} does not run {unit}. describe_feature "
                 "lists the releases and machine types each scenario covers."
             ),
             UnitMatch.AMBIGUOUS: (
-                f"More than one scenario in {feature_file} runs {unit}, so "
+                f"More than one scenario in {feature} runs {unit}, so "
                 "a job cannot name exactly one. Rename one of them."
             ),
         }
@@ -629,13 +628,13 @@ class BehaveService:
     def job_status(self, job_id: str) -> JobStatusResult:
         """Return a job's current state without waiting.
 
-        ``wait_for_completion`` requires a positive timeout, so this is what
+        ``wait_for_job`` requires a positive timeout, so this is what
         a caller polls when it must not block -- a scheduler filling lanes,
         for instance.
         """
         return self._status_payload(job_id)
 
-    def wait_for_completion(
+    def wait_for_job(
         self,
         job_id: str,
         max_wait_seconds: int = DEFAULT_WAIT_TIMEOUT_SECONDS,
@@ -664,7 +663,7 @@ class BehaveService:
 
             self._sleep(poll_interval_seconds)
 
-    def get_logs(
+    def job_logs(
         self,
         job_id: str,
         lines: int = DEFAULT_LOG_LINES,
@@ -716,7 +715,7 @@ class BehaveService:
             log_path=results.artifacts(job_id).stdout_log,
         )
 
-    def get_errors(self, job_id: str) -> ErrorsResponse:
+    def job_errors(self, job_id: str) -> ErrorsResponse:
         results = self._known(job_id)
         if not results.exists(job_id).stdout_log:
             raise BehaveServiceError(
@@ -757,7 +756,7 @@ class BehaveService:
             log_path=results.artifacts(job_id).stdout_log,
         )
 
-    def get_artifacts(self, job_id: str) -> ArtifactsResponse:
+    def job_artifacts(self, job_id: str) -> ArtifactsResponse:
         results = self._known(job_id)
         return ArtifactsResponse(
             job_id=job_id,
@@ -774,7 +773,7 @@ class BehaveService:
 
     def list_jobs(
         self, limit: int = DEFAULT_JOB_LIST_LIMIT
-    ) -> ListScenarioJobsResponse:
+    ) -> ListJobsResponse:
         if limit <= 0:
             raise BehaveServiceError(
                 f"limit must be a positive integer, got {limit}"
@@ -792,7 +791,7 @@ class BehaveService:
         others = [s for s in summaries if s.state not in ACTIVE_STATES]
         trimmed = active + others[-limit:]
 
-        return ListScenarioJobsResponse(
+        return ListJobsResponse(
             jobs=trimmed,
             pools=self.pool_usage(),
             total_ended=len(others),
@@ -800,11 +799,11 @@ class BehaveService:
             limit_clamped=limit_clamped,
         )
 
-    def get_results(
+    def job_results(
         self,
         job_ids: list[str] | None = None,
-        feature_file: str = "",
-        scenario_name: str = "",
+        feature: str = "",
+        scenario: str = "",
         release: str = "",
         machine_type: str = "",
         state: str = "",
@@ -821,10 +820,8 @@ class BehaveService:
                     f"Allowed values: {allowed}"
                 ) from None
 
-        normalized_feature_file = (
-            parser.normalize_feature_file_arg(feature_file)
-            if feature_file
-            else None
+        normalized_feature = (
+            parser.normalize_feature_file_arg(feature) if feature else None
         )
         job_ids_filter = set(job_ids) if job_ids else None
         if limit <= 0:
@@ -843,8 +840,8 @@ class BehaveService:
                 request,
                 job_id=job_id,
                 job_ids=job_ids_filter,
-                feature_file=normalized_feature_file,
-                scenario_name=scenario_name or None,
+                feature=normalized_feature,
+                scenario=scenario or None,
                 release=release or None,
                 machine_type=machine_type or None,
             ):
@@ -877,8 +874,8 @@ class BehaveService:
             job_id=job_id,
             state=summary.state,
             ok=summary.ok,
-            feature_file=summary.feature_file,
-            scenario_name=summary.scenario_name,
+            feature=summary.feature,
+            scenario=summary.scenario,
             release=summary.release,
             machine_type=summary.machine_type,
             summary=None if report is None else report.summary,
@@ -902,8 +899,8 @@ class BehaveService:
                 else (False if state == JobState.INTERRUPTED else None)
             ),
             returncode=exit.returncode if exit is not None else None,
-            feature_file=request.feature_file,
-            scenario_name=request.scenario_name,
+            feature=request.feature,
+            scenario=request.scenario,
             release=request.release,
             machine_type=request.machine_type,
             campaign_id=request.campaign_id,
@@ -944,8 +941,8 @@ class BehaveService:
                 recent_output=results.log_tail(
                     job_id, DEFAULT_RUNNING_TAIL_LINES
                 ),
-                feature_file=request.feature_file,
-                scenario_name=request.scenario_name,
+                feature=request.feature,
+                scenario=request.scenario,
                 release=request.release,
                 machine_type=request.machine_type,
             )
@@ -967,8 +964,8 @@ class BehaveService:
                 if report is None
                 else None
             ),
-            feature_file=request.feature_file,
-            scenario_name=request.scenario_name,
+            feature=request.feature,
+            scenario=request.scenario,
             release=request.release,
             machine_type=request.machine_type,
         )

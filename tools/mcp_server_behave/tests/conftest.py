@@ -35,7 +35,7 @@ def fresh_campaign_store(monkeypatch):
 
 
 # One scenario covering every pool, so a test can start a job on any of
-# them. Its name and combos are what start_scenario must be given.
+# them. Its name and combos are what run_job must be given.
 UNIT_SCENARIO = "Attach command"
 
 
@@ -427,23 +427,6 @@ class FakeFeatureReader:
     def discover_units(self, repo_root, scope):
         self.seen_scope = scope
         return [unit for unit in self.units if scope.matches_unit(unit)]
-
-    def available_dimensions(self, repo_root):
-        def counted(field):
-            scenarios = {}
-            for unit in self.units:
-                scenarios.setdefault(getattr(unit, field), set()).add(
-                    (unit.feature, unit.scenario)
-                )
-            return [
-                {"name": name, "scenario_count": len(found)}
-                for name, found in sorted(scenarios.items())
-            ]
-
-        return {
-            "releases": counted("release"),
-            "machine_types": counted("machine_type"),
-        }
 
 
 class FakeJobFiles:

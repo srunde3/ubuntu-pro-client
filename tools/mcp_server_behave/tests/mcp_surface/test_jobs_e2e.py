@@ -50,7 +50,7 @@ def test_another_process_sees_a_running_job_and_kills_it(
     monkeypatch.setenv("MCP_STATE_DIR", str(tmp_path / "state"))
     service = create_service()
 
-    started = service.start_scenario(
+    started = service.run_job(
         FEATURE, SCENARIO, release="jammy", machine_type="lxd-container"
     )
     assert started.state == "running"
@@ -70,7 +70,7 @@ def test_another_process_sees_a_running_job_and_kills_it(
         time.sleep(SAMPLE_INTERVAL_SECONDS)
 
     assert seen == {"before": "running", "killed": True}
-    ended = service.get_artifacts(started.job_id)
+    ended = service.job_artifacts(started.job_id)
     assert ended.exit is not None
     assert ended.exit.killed is True
     assert ended.exit.ok is False
@@ -91,10 +91,10 @@ def test_two_jobs_on_one_lane_run_back_to_back_with_nobody_calling(
     monkeypatch.setenv("MCP_STATE_DIR", str(tmp_path / "state"))
     service = create_service()
 
-    first = service.start_scenario(
+    first = service.run_job(
         FEATURE, SCENARIO, release="jammy", machine_type="lxd-container"
     )
-    second = service.start_scenario(
+    second = service.run_job(
         FEATURE, SCENARIO, release="noble", machine_type="lxd-container"
     )
     assert (first.state, second.state) == ("running", "queued")
@@ -106,6 +106,6 @@ def test_two_jobs_on_one_lane_run_back_to_back_with_nobody_calling(
         assert time.monotonic() < deadline, "the queued job never ran"
         time.sleep(SAMPLE_INTERVAL_SECONDS)
 
-    first_record = service.get_artifacts(first.job_id)
-    second_record = service.get_artifacts(second.job_id)
+    first_record = service.job_artifacts(first.job_id)
+    second_record = service.job_artifacts(second.job_id)
     assert first_record.exit.finished_at <= second_record.record.started_at

@@ -27,7 +27,7 @@ lint = [
 
 [project.scripts]
 mcp-server-behave = "behave_mcp.server:main"
-behave-campaign = "behave_campaign.cli:main"
+behave-tests = "behave_campaign.cli:main"
 
 [build-system]
 requires = ["setuptools>=68"]
@@ -83,7 +83,7 @@ forbidden_modules = ["behave_campaign"]
 ignore_imports = ["behave_mcp.server -> behave_campaign.**"]
 
 [[tool.importlinter.contracts]]
-name = "behave_campaign uses only parser, domain.pools and domain.layout from behave_mcp; its CLI also builds the job service"
+name = "behave_campaign uses only parser, domain.pools and domain.layout from behave_mcp, but for its CLI"
 type = "forbidden"
 source_modules = ["behave_campaign"]
 forbidden_modules = [
@@ -99,12 +99,8 @@ forbidden_modules = [
   "behave_mcp.service",
   "behave_mcp.views",
 ]
-# Every front-end configures the checkout and reconciles its jobs, so the
-# CLI builds the job service from its adapters, as the server does.
-ignore_imports = [
-  "behave_campaign.cli -> behave_mcp.adapters",
-  "behave_campaign.cli -> behave_mcp.service",
-]
+# The CLI is a front-end for both packages, as server.py is.
+ignore_imports = ["behave_campaign.cli -> behave_mcp.**"]
 
 [[tool.importlinter.contracts]]
 name = "behave_mcp layers"

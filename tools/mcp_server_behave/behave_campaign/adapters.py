@@ -324,9 +324,6 @@ class ParserFeatureReader:
     def discover_units(self, repo_root: Path, scope: Scope) -> list[Unit]:
         return discovery.discover_units(repo_root, scope)
 
-    def available_dimensions(self, repo_root: Path) -> dict[str, Any]:
-        return discovery.available_dimensions(repo_root)
-
 
 class ServiceJobRunner:
     """Queues, reads and kills a campaign's jobs through ``BehaveService``.

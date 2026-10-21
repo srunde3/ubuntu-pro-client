@@ -29,10 +29,10 @@ async def test_mcp_e2e_long_running_attach_flow(monkeypatch):
 
     async with create_connected_server_and_client_session(mcp) as client:
         start_result = await client.call_tool(
-            "start_scenario",
+            "run_job",
             {
-                "feature_file": "features/cli/attach.feature",
-                "scenario_name": "Attach command with json output",
+                "feature": "features/cli/attach.feature",
+                "scenario": "Attach command with json output",
                 "release": "noble",
                 "machine_type": "lxd-container",
             },
@@ -41,13 +41,13 @@ async def test_mcp_e2e_long_running_attach_flow(monkeypatch):
         assert start_payload["state"] == "running"
         job_id = start_payload["job_id"]
 
-        jobs_while_running = await client.call_tool("list_scenario_jobs", {})
+        jobs_while_running = await client.call_tool("list_jobs", {})
         running_jobs = {
             job["job_id"]: job
             for job in result_json(jobs_while_running)["jobs"]
         }
         assert running_jobs[job_id]["state"] == "running"
-        assert running_jobs[job_id]["feature_file"] == (
+        assert running_jobs[job_id]["feature"] == (
             "features/cli/attach.feature"
         )
         assert running_jobs[job_id]["machine_type"] == "lxd-container"
@@ -55,7 +55,7 @@ async def test_mcp_e2e_long_running_attach_flow(monkeypatch):
         completed_payload = None
         try:
             status_result = await client.call_tool(
-                "wait_for_scenario_completion",
+                "wait_for_job",
                 {
                     "job_id": job_id,
                     "max_wait_seconds": 1800,
@@ -75,9 +75,7 @@ async def test_mcp_e2e_long_running_attach_flow(monkeypatch):
         assert completed_payload["summary"]["scenarios"]["total"] > 0
         assert completed_payload["summary"]["steps"]["total"] > 0
 
-        jobs_after_completion = await client.call_tool(
-            "list_scenario_jobs", {}
-        )
+        jobs_after_completion = await client.call_tool("list_jobs", {})
         finished_jobs = {
             job["job_id"]: job
             for job in result_json(jobs_after_completion)["jobs"]
@@ -86,14 +84,14 @@ async def test_mcp_e2e_long_running_attach_flow(monkeypatch):
         assert finished_jobs[job_id]["ok"] == completed_payload["ok"]
 
         logs_result = await client.call_tool(
-            "get_scenario_logs", {"job_id": job_id, "lines": 50}
+            "job_logs", {"job_id": job_id, "lines": 50}
         )
         logs_payload = result_json(logs_result)
         assert logs_payload["text"]
         assert logs_payload["total_lines"] > 0
 
         artifacts_result = await client.call_tool(
-            "get_scenario_artifacts", {"job_id": job_id}
+            "job_artifacts", {"job_id": job_id}
         )
         artifacts_payload = result_json(artifacts_result)
         assert artifacts_payload["exists"]["stdout_log"] is True
@@ -112,9 +110,7 @@ async def test_mcp_e2e_long_running_attach_flow(monkeypatch):
         assert finished_jobs[job_id]["ok"] == completed_payload["ok"]
 
         results = result_json(
-            await client.call_tool(
-                "get_scenario_results", {"job_ids": [job_id]}
-            )
+            await client.call_tool("job_results", {"job_ids": [job_id]})
         )
         (result,) = results["results"]
         assert result["job_id"] == job_id
@@ -124,13 +120,13 @@ async def test_mcp_e2e_long_running_attach_flow(monkeypatch):
 
         async def ids(**filters):
             payload = result_json(
-                await client.call_tool("get_scenario_results", filters)
+                await client.call_tool("job_results", filters)
             )
             return [r["job_id"] for r in payload["results"]]
 
-        assert job_id in await ids(feature_file="features/cli/attach.feature")
+        assert job_id in await ids(feature="features/cli/attach.feature")
         assert job_id not in await ids(
-            feature_file="features/cli/does-not-exist.feature"
+            feature="features/cli/does-not-exist.feature"
         )
         assert job_id in await ids(release="noble")
         assert job_id not in await ids(release="jammy")

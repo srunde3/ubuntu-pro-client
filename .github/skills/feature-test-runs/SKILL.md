@@ -14,8 +14,8 @@ Each tool's description says how to call it and what it returns.
 
 1. `list_dimensions` for the exact release and `machine_type` values;
    `list_features` or `find_scenarios` to pick what to run.
-2. `start_scenario` for one unit -- a scenario's exact name, one release and
-   one machine type it covers -- then `wait_for_scenario_completion`. Start
+2. `run_job` for one unit -- a scenario's exact name, one release and
+   one machine type it covers -- then `wait_for_job`. Start
    one job per unit; there is no multi-release or multi-machine-type job. A
    job whose pool is full is `queued` and starts by itself when a lane
    frees; a wait that runs out returns it with `timed_out: true`, so wait
@@ -25,15 +25,15 @@ Each tool's description says how to call it and what it returns.
 
 ## Diagnose a failed job
 
-Never read a whole log, through `get_scenario_logs` or from the path
-`get_scenario_artifacts` gives. A job's log is 150-3,000 lines and the
+Never read a whole log, through `job_logs` or from the path
+`job_artifacts` gives. A job's log is 150-3,000 lines and the
 cause is rarely in the tail.
 
 1. If a failing step has a non-empty `error_message`, judge from it.
 2. Otherwise -- `status: error`, an empty message, a unit that errored --
-   `get_scenario_errors`. `finished: false` means behave never reached its
+   `job_errors`. `finished: false` means behave never reached its
    summary: tox or pip failed, or the job was killed, so read `tail`.
-3. Only if a region's capped text is not enough, `get_scenario_logs` around
+3. Only if a region's capped text is not enough, `job_logs` around
    its `first_line`.
 
 A job with `state: interrupted` did not fail. With `reason: killed`, someone
@@ -65,5 +65,5 @@ not read each log.
   retry it hoping for a different answer.
 - A **skipped** scenario means a config the host lacks. `requires_config`
   on the catalog entry names them; jobs get them only from the checkout's
-  config (`behave-campaign config set behave.<name>`), which the user sets.
+  config (`behave-tests config set behave.<name>`), which the user sets.
   Report the option names. Never ask for a secret value in chat.

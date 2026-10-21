@@ -49,7 +49,7 @@ def validate_machine_type(
     if not max_jobs.get(pool):
         return (
             f"{pool} machine types are disabled for this checkout. Run "
-            f"behave-campaign config set max_jobs.{pool} N to allow "
+            f"behave-tests config set max_jobs.{pool} N to allow "
             f"{machine_type}."
         )
     return None
@@ -71,7 +71,7 @@ ScenarioCombos = tuple[str, Collection[tuple[str, str]]]
 
 def match_unit(
     scenarios: Iterable[ScenarioCombos],
-    scenario_name: str,
+    scenario: str,
     release: str,
     machine_type: str,
 ) -> UnitMatch:
@@ -81,7 +81,7 @@ def match_unit(
     a combo both cover makes the unit ambiguous, because behave would run
     them both.
     """
-    named = [combos for name, combos in scenarios if name == scenario_name]
+    named = [combos for name, combos in scenarios if name == scenario]
     if not named:
         return UnitMatch.NO_SCENARIO
     covering = sum(1 for combos in named if (release, machine_type) in combos)
@@ -132,25 +132,25 @@ def interruption(exit: JobExit | None) -> Interruption:
     return Interruption.DIED
 
 
-def exact_name_pattern(scenario_name: str) -> str:
+def exact_name_pattern(scenario: str) -> str:
     """A behave ``--name`` regex matching this scenario and nothing else.
 
     behave names each Scenario Outline row ``<name> -- @<row> <examples>``,
     so the row suffix is allowed; any other longer name is not.
     """
-    return "^{}(?: -- @.*)?$".format(re.escape(scenario_name))
+    return "^{}(?: -- @.*)?$".format(re.escape(scenario))
 
 
 def build_command(
-    feature_file: str,
-    scenario_name: str,
+    feature: str,
+    scenario: str,
     release: str,
     machine_type: str,
     json_report_path: Path,
 ) -> list[str]:
     """The behave run for exactly one unit."""
-    command = ["tox", "-e", "behave", "--", feature_file]
-    command.extend(["--name", exact_name_pattern(scenario_name)])
+    command = ["tox", "-e", "behave", "--", feature]
+    command.extend(["--name", exact_name_pattern(scenario)])
     command.extend(["-D", f"releases={release}"])
     command.extend(["-D", f"machine_types={machine_type}"])
     command.extend(["-f", "json", "-o", str(json_report_path)])
@@ -163,21 +163,21 @@ def job_matches_result_filters(
     *,
     job_id: str,
     job_ids: set[str] | None,
-    feature_file: str | None,
-    scenario_name: str | None,
+    feature: str | None,
+    scenario: str | None,
     release: str | None,
     machine_type: str | None,
 ) -> bool:
-    """Return whether a job's request satisfies ``get_scenario_results``
+    """Return whether a job's request satisfies ``job_results``
     filters. Only ``job_ids`` inspects ``job_id`` directly; the rest read
     fields of what the job was asked to run.
     """
     if job_ids is not None and job_id not in job_ids:
         return False
-    if feature_file is not None and record.feature_file != feature_file:
+    if feature is not None and record.feature != feature:
         return False
-    if scenario_name is not None:
-        if scenario_name.lower() not in record.scenario_name.lower():
+    if scenario is not None:
+        if scenario.lower() not in record.scenario.lower():
             return False
     if release is not None and release != record.release:
         return False

@@ -1,6 +1,6 @@
 # AGENTS.md for tools/mcp_server_behave
 
-This is a standalone `uv` project with two packages: `behave_mcp` runs behave jobs, serves the feature catalog and hosts the MCP server, and `behave_campaign` keeps the campaign record, schedules its jobs and provides the `behave-campaign` CLI. It is a local project with no consumers. Nothing here runs in CI.
+This is a standalone `uv` project with two packages: `behave_mcp` runs behave jobs, serves the feature catalog and hosts the MCP server, and `behave_campaign` keeps the campaign record, schedules its jobs and provides the `behave-tests` CLI. It is a local project with no consumers. Nothing here runs in CI.
 
 ## Read before changing code
 

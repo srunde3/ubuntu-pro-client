@@ -16,9 +16,11 @@ from pydantic import BaseModel, Field
 from starlette.responses import JSONResponse
 
 from behave_campaign.adapters import (
+    JobDirFiles,
     JsonlCampaignStore,
     ParserFeatureReader,
     ServiceJobRunner,
+    TarBundleWriter,
     system_now,
 )
 from behave_campaign.domain.events import MAX_EVENT_ERROR_CHARS
@@ -33,6 +35,7 @@ from behave_campaign.messages import (
     CampaignControlResponse,
     CampaignStatusResponse,
     CreateCampaignResponse,
+    ExportCampaignResponse,
     ListCampaignsResponse,
     RetryUnitsResponse,
     UnitHistoryResponse,
@@ -74,10 +77,10 @@ from behave_mcp.messages import (
     KillJobResponse,
     ListDimensionsResponse,
     ListFeaturesResponse,
-    ListScenarioJobsResponse,
+    ListJobsResponse,
     LogsResponse,
     ResultsResponse,
-    StartScenarioResponse,
+    RunJobResponse,
 )
 from behave_mcp.service import (
     BehaveService,
@@ -168,11 +171,7 @@ RepoRoot = Annotated[
 ]
 JobId = Annotated[
     str,
-    Field(
-        description=(
-            "A job_id returned by start_scenario or list_scenario_jobs."
-        )
-    ),
+    Field(description=("A job_id returned by run_job or list_jobs.")),
 ]
 ReleaseFilter = Annotated[
     str,
@@ -338,17 +337,17 @@ def list_features(
         "Return full detail for a single feature file: its title, tags, "
         "required config, and every scenario with name, type, tags, required "
         "config, Examples column names, and the distinct (release, "
-        "machine_type) combos it supports. feature_file must be a path "
+        "machine_type) combos it supports. feature must be a path "
         "returned by list_features."
     )
 )
 def describe_feature(
-    feature_file: Annotated[
+    feature: Annotated[
         str, Field(description="A path returned by list_features.")
     ],
     repo_root: RepoRoot = "",
 ) -> DescribeFeatureResponse:
-    return _service.describe_feature(feature_file, repo_root)
+    return _service.describe_feature(feature, repo_root)
 
 
 @tool(
@@ -367,7 +366,7 @@ def list_dimensions(repo_root: RepoRoot = "") -> ListDimensionsResponse:
     description=(
         "Find scenarios across all features matching optional release, "
         "machine_type, tag, and text (scenario-name substring) filters. "
-        "Returns matching feature_file, scenario_name, type, required config, "
+        "Returns matching feature, scenario, type, required config, "
         "and the combos that satisfy the release/machine_type filters. "
         "limit caps the matches, with total and truncated alongside; "
         "narrow the filters rather than raising it."
@@ -403,8 +402,8 @@ def find_scenarios(
     description=(
         "Queue one unit -- one scenario on one release and one machine "
         "type -- to run through tox in the background, and return a job_id "
-        "immediately. feature_file must be a path returned by "
-        "list_features, and scenario_name a scenario's exact name from "
+        "immediately. feature must be a path returned by "
+        "list_features, and scenario a scenario's exact name from "
         "describe_feature that covers release and machine_type. A "
         "selection that matches no unit, or more than one, is refused. The "
         "machine type draws on the lxd, cloud or wsl pool: state is "
@@ -413,15 +412,15 @@ def find_scenarios(
         "lane frees. A pool whose max jobs is 0 is disabled (cloud is by "
         "default). install_from controls where ubuntu-pro-client is "
         "installed from (defaults to 'local'; set to 'proposed' to test "
-        "the -proposed pocket). Call wait_for_scenario_completion to wait "
+        "the -proposed pocket). Call wait_for_job to wait "
         "for it."
     )
 )
-def start_scenario(
-    feature_file: Annotated[
+def run_job(
+    feature: Annotated[
         str, Field(description="A path returned by list_features.")
     ],
-    scenario_name: Annotated[
+    scenario: Annotated[
         str,
         Field(description="A scenario's exact name, from describe_feature."),
     ],
@@ -440,10 +439,10 @@ def start_scenario(
     ],
     repo_root: RepoRoot = "",
     install_from: InstallFromArg = InstallFrom.LOCAL,
-) -> StartScenarioResponse:
-    return _service.start_scenario(
-        feature_file,
-        scenario_name,
+) -> RunJobResponse:
+    return _service.run_job(
+        feature,
+        scenario,
         release,
         machine_type,
         repo_root,
@@ -466,7 +465,7 @@ def start_scenario(
         "when that happens."
     )
 )
-def list_scenario_jobs(
+def list_jobs(
     limit: Annotated[
         int,
         Field(
@@ -477,7 +476,7 @@ def list_scenario_jobs(
             )
         ),
     ] = DEFAULT_JOB_LIST_LIMIT,
-) -> ListScenarioJobsResponse:
+) -> ListJobsResponse:
     return _service.list_jobs(limit)
 
 
@@ -486,28 +485,28 @@ def list_scenario_jobs(
         "What came of each behave job: what it ran, its state and ok, "
         "behave's own counts, and every failing step with its message. "
         "One result per job, most recently started first, the same shape "
-        "wait_for_scenario_completion returns for one job. Filter by "
-        "job_ids, feature_file, scenario_name (substring), release, "
+        "wait_for_job returns for one job. Filter by "
+        "job_ids, feature, scenario (substring), release, "
         "machine_type and state (queued, running, finished, interrupted); "
         "limit "
         "caps the jobs listed, with total and truncated alongside. For "
-        "the cause behind an empty error_message, get_scenario_errors."
+        "the cause behind an empty error_message, job_errors."
     )
 )
-def get_scenario_results(
+def job_results(
     job_ids: Annotated[
         list[str] | None,
         Field(default=None, description="Only these jobs."),
     ] = None,
-    feature_file: Annotated[
+    feature: Annotated[
         str,
         Field(default="", description="Only jobs for this feature."),
     ] = "",
-    scenario_name: Annotated[
+    scenario: Annotated[
         str,
         Field(
             default="",
-            description="Only jobs whose scenario_name contains this.",
+            description="Only jobs whose scenario contains this.",
         ),
     ] = "",
     release: ReleaseFilter = "",
@@ -530,10 +529,10 @@ def get_scenario_results(
         ),
     ] = DEFAULT_RESULTS_LIMIT,
 ) -> ResultsResponse:
-    return _service.get_results(
+    return _service.job_results(
         job_ids=job_ids,
-        feature_file=feature_file,
-        scenario_name=scenario_name,
+        feature=feature,
+        scenario=scenario,
         release=release,
         machine_type=machine_type,
         state=state,
@@ -544,15 +543,15 @@ def get_scenario_results(
 @tool(
     description=(
         "Wait for a queued or running behave job to end by polling "
-        "internally. job_id must come from start_scenario or "
-        "list_scenario_jobs. Returns state finished with a compact "
+        "internally. job_id must come from run_job or "
+        "list_jobs. Returns state finished with a compact "
         "structured summary; state interrupted with recent output when it "
         "ended without a result, with reason killed or died (its process "
         "died: a crash or a reboot); or, if the wait runs out first, the "
         "job as it stands (queued or running) with timed_out true."
     )
 )
-def wait_for_scenario_completion(
+def wait_for_job(
     job_id: JobId,
     max_wait_seconds: Annotated[
         int,
@@ -562,7 +561,7 @@ def wait_for_scenario_completion(
         float, Field(description="Delay between internal status checks.")
     ] = DEFAULT_WAIT_POLL_INTERVAL_SECONDS,
 ) -> JobStatusResult:
-    return _service.wait_for_completion(
+    return _service.wait_for_job(
         job_id,
         max_wait_seconds,
         poll_interval_seconds,
@@ -577,13 +576,13 @@ def wait_for_scenario_completion(
         "exception raised. Use this first on a failed job -- the first "
         "region is usually the cause and later ones its consequences (a "
         "cleanup hook failing because the machine never existed). Then "
-        "get_scenario_logs(start=first_line) to read around one. When "
+        "job_logs(start=first_line) to read around one. When "
         "errors is empty but the job failed, behave itself may not have "
-        "run: read tail, or get_scenario_logs with a pattern."
+        "run: read tail, or job_logs with a pattern."
     )
 )
-def get_scenario_errors(job_id: JobId) -> ErrorsResponse:
-    return _service.get_errors(job_id)
+def job_errors(job_id: JobId) -> ErrorsResponse:
+    return _service.job_errors(job_id)
 
 
 @tool(
@@ -599,7 +598,7 @@ def get_scenario_errors(job_id: JobId) -> ErrorsResponse:
         "around (start=N)."
     )
 )
-def get_scenario_logs(
+def job_logs(
     job_id: JobId,
     pattern: Annotated[
         str,
@@ -635,7 +634,7 @@ def get_scenario_logs(
         ),
     ] = DEFAULT_LOG_LINES,
 ) -> LogsResponse:
-    return _service.get_logs(
+    return _service.job_logs(
         job_id,
         lines,
         pattern=pattern,
@@ -648,11 +647,11 @@ def get_scenario_logs(
     description=(
         "Return artifact paths and metadata for a behave job so agents can "
         "parse full logs and reports from disk. job_id must come from "
-        "start_scenario or list_scenario_jobs."
+        "run_job or list_jobs."
     )
 )
-def get_scenario_artifacts(job_id: JobId) -> ArtifactsResponse:
-    return _service.get_artifacts(job_id)
+def job_artifacts(job_id: JobId) -> ArtifactsResponse:
+    return _service.job_artifacts(job_id)
 
 
 @tool(
@@ -711,7 +710,7 @@ def create_campaign(
         repo_root=_workspace.resolve_repo_root(repo_root or None),
         releases=releases,
         machine_types=machine_types,
-        feature_files=features,
+        features=features,
         scenarios=scenarios,
         install_from=install_from.value,
         max_jobs=max_jobs.requested(),
@@ -1031,6 +1030,26 @@ def retry_units(
 
 @tool(
     description=(
+        "Write a complete campaign's evidence bundle, a .tar.gz for an SRU "
+        "bug: SUMMARY.md and units.csv for a reviewer, export.json, every "
+        "attempt's job files, and the raw campaign files. Only a complete "
+        "campaign exports. Written under the state directory's exports/, "
+        "never over an existing file. Returns the path, the counts, how "
+        "many jobs were bundled and any job files that were missing."
+    )
+)
+def export_campaign(campaign_id: CampaignIdArg) -> ExportCampaignResponse:
+    state = _workspace.resolve_state_dir()
+    return campaign_service().export_campaign(
+        campaign_id=campaign_id,
+        output=layout.export_file(state, campaign_id),
+        jobs=JobDirFiles(layout.jobs_dir(state)),
+        writer=TarBundleWriter(),
+    )
+
+
+@tool(
+    description=(
         "Kill a queued or running behave job, whichever process started "
         "it. A queued job never starts. Use it for a running job that has "
         "hung: tox is stopped and allowed to clean up, "
@@ -1055,7 +1074,7 @@ def main() -> None:
     if ignored:
         print(
             "mcp-server-behave: ignoring {}: jobs take behave settings only "
-            "from the checkout's config. Set each with behave-campaign "
+            "from the checkout's config. Set each with behave-tests "
             "config set behave.<option> VALUE.".format(", ".join(ignored)),
             file=sys.stderr,
         )

@@ -29,27 +29,30 @@ async def test_mcp_lists_expected_tools():
         result = await client.list_tools()
 
     tools = {tool.name: tool for tool in result.tools}
-    assert "list_features" in tools
-    assert "describe_feature" in tools
-    assert "list_dimensions" in tools
-    assert "find_scenarios" in tools
-    assert "start_scenario" in tools
-    assert "list_scenario_jobs" in tools
-    assert "get_scenario_results" in tools
-    assert "wait_for_scenario_completion" in tools
-    assert "get_scenario_logs" in tools
-    assert "get_scenario_errors" in tools
-    assert "get_scenario_artifacts" in tools
-    assert "create_campaign" in tools
-    assert "list_campaigns" in tools
-    assert "campaign_status" in tools
-    assert "control_campaign" in tools
-    for verb in ("run", "pause", "start", "resume", "cancel", "reopen"):
-        assert f"{verb}_campaign" not in tools
-    assert "retry_units" in tools
-    assert "kill_job" in tools
-    assert tools["start_scenario"].description
-    assert tools["create_campaign"].description
+    # One name per command, shared with the CLI and the service.
+    assert set(tools) == {
+        "list_features",
+        "describe_feature",
+        "list_dimensions",
+        "find_scenarios",
+        "run_job",
+        "list_jobs",
+        "job_results",
+        "wait_for_job",
+        "job_errors",
+        "job_logs",
+        "job_artifacts",
+        "kill_job",
+        "create_campaign",
+        "list_campaigns",
+        "campaign_status",
+        "unit_history",
+        "control_campaign",
+        "await_campaign_events",
+        "retry_units",
+        "export_campaign",
+    }
+    assert all(tool.description for tool in tools.values())
 
 
 @pytest.mark.asyncio
@@ -117,11 +120,11 @@ async def test_mcp_describe_feature_returns_detail(monkeypatch):
     async with create_connected_server_and_client_session(mcp) as client:
         result = await client.call_tool(
             "describe_feature",
-            {"feature_file": "features/cli/attach.feature"},
+            {"feature": "features/cli/attach.feature"},
         )
 
     payload = result_json(result)
-    assert payload["feature_file"] == "features/cli/attach.feature"
+    assert payload["feature"] == "features/cli/attach.feature"
     assert payload["scenarios"]
 
 
@@ -147,8 +150,7 @@ async def test_mcp_find_scenarios_matches_by_text(monkeypatch):
     payload = result_json(result)
     assert payload["matches"]
     assert all(
-        "attach" in match["scenario_name"].lower()
-        for match in payload["matches"]
+        "attach" in match["scenario"].lower() for match in payload["matches"]
     )
 
 
@@ -173,7 +175,7 @@ PASSING_REPORT = [
 
 
 @pytest.mark.asyncio
-async def test_mcp_start_wait_and_log_flow(monkeypatch, tmp_path):
+async def test_mcp_run_job_wait_and_log_flow(monkeypatch, tmp_path):
     monkeypatch.setenv("UBUNTU_PRO_CLIENT_REPO", str(_REPO_ROOT))
     monkeypatch.setenv("MCP_STATE_DIR", str(tmp_path))
 
@@ -199,10 +201,10 @@ async def test_mcp_start_wait_and_log_flow(monkeypatch, tmp_path):
 
     async with create_connected_server_and_client_session(mcp) as client:
         start_result = await client.call_tool(
-            "start_scenario",
+            "run_job",
             {
-                "feature_file": "features/cli/attach.feature",
-                "scenario_name": REAL_UNIT_SCENARIO,
+                "feature": "features/cli/attach.feature",
+                "scenario": REAL_UNIT_SCENARIO,
                 "release": "jammy",
                 "machine_type": "lxd-container",
             },
@@ -214,7 +216,7 @@ async def test_mcp_start_wait_and_log_flow(monkeypatch, tmp_path):
         job_id = start_payload["job_id"]
 
         completed_result = await client.call_tool(
-            "wait_for_scenario_completion",
+            "wait_for_job",
             {
                 "job_id": job_id,
                 "max_wait_seconds": 5,
@@ -228,23 +230,23 @@ async def test_mcp_start_wait_and_log_flow(monkeypatch, tmp_path):
         assert "artifacts" in completed_payload
 
         logs_result = await client.call_tool(
-            "get_scenario_logs", {"job_id": job_id, "lines": 2}
+            "job_logs", {"job_id": job_id, "lines": 2}
         )
         logs_payload = result_json(logs_result)
         assert logs_payload["text"] == "2: line2\n3: line3"
 
         artifacts_result = await client.call_tool(
-            "get_scenario_artifacts", {"job_id": job_id}
+            "job_artifacts", {"job_id": job_id}
         )
         artifacts_payload = result_json(artifacts_result)
         assert artifacts_payload["exists"]["stdout_log"] is True
 
-        jobs_result = await client.call_tool("list_scenario_jobs", {})
+        jobs_result = await client.call_tool("list_jobs", {})
         jobs_payload = result_json(jobs_result)
         assert job_id in {job["job_id"] for job in jobs_payload["jobs"]}
 
         results_result = await client.call_tool(
-            "get_scenario_results", {"job_ids": [job_id]}
+            "job_results", {"job_ids": [job_id]}
         )
         results_payload = result_json(results_result)
         assert results_payload["total"] == 1
@@ -259,13 +261,13 @@ async def test_mcp_start_wait_and_log_flow(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_mcp_start_requires_a_whole_unit():
+async def test_mcp_run_job_requires_a_whole_unit():
     async with create_connected_server_and_client_session(mcp) as client:
         result = await client.call_tool(
-            "start_scenario",
+            "run_job",
             {
-                "feature_file": "features/cli/attach.feature",
-                "scenario_name": UNIT_SCENARIO,
+                "feature": "features/cli/attach.feature",
+                "scenario": UNIT_SCENARIO,
                 "release": "jammy",
             },
         )
@@ -274,13 +276,13 @@ async def test_mcp_start_requires_a_whole_unit():
 
 
 @pytest.mark.asyncio
-async def test_mcp_start_rejects_unlisted_feature():
+async def test_mcp_run_job_rejects_unlisted_feature():
     async with create_connected_server_and_client_session(mcp) as client:
         result = await client.call_tool(
-            "start_scenario",
+            "run_job",
             {
-                "feature_file": "features/cli/does-not-exist.feature",
-                "scenario_name": UNIT_SCENARIO,
+                "feature": "features/cli/does-not-exist.feature",
+                "scenario": UNIT_SCENARIO,
                 "release": "jammy",
                 "machine_type": "lxd-container",
             },
@@ -291,7 +293,7 @@ async def test_mcp_start_rejects_unlisted_feature():
 
 
 @pytest.mark.asyncio
-async def test_mcp_start_rejects_cloud_machine_types():
+async def test_mcp_run_job_rejects_cloud_machine_types():
     """
     Avoid accidental calls to cloud providers for now.
 
@@ -300,10 +302,10 @@ async def test_mcp_start_rejects_cloud_machine_types():
 
     async with create_connected_server_and_client_session(mcp) as client:
         result = await client.call_tool(
-            "start_scenario",
+            "run_job",
             {
-                "feature_file": "features/cli/attach.feature",
-                "scenario_name": UNIT_SCENARIO,
+                "feature": "features/cli/attach.feature",
+                "scenario": UNIT_SCENARIO,
                 "release": "jammy",
                 "machine_type": "azure.generic",
             },

@@ -2,7 +2,7 @@
 
 Durable record of behave test units and attempts.
 
-A campaign outlives the MCP's job history. The MCP's `list_scenario_jobs`
+A campaign outlives the MCP's job history. The MCP's `list_jobs`
 window is bounded; an SRU verification runs for days, so what was attempted
 and what it established is recorded here instead.
 
@@ -87,41 +87,50 @@ uv sync --extra test
 export UBUNTU_PRO_CLIENT_REPO=../..   # or pass --repo-root on each command
 
 # See which releases and machine types the feature files can run.
-uv run behave-campaign dimensions
+uv run behave-tests dimension list
 
 # Create the campaign: "all the jammy lxd-vm tests". The id names the file
 # the way the server names it, under <repo>/.mcp_server_behave/campaigns/.
-uv run behave-campaign create --campaign-id 1234567 \
+uv run behave-tests campaign create --campaign-id 1234567 \
   --release jammy --machine-type lxd-vm
 
 # Repeat a filter to cover several values, as a real SRU usually does.
-uv run behave-campaign create --campaign-id 1234567 \
+uv run behave-tests campaign create --campaign-id 1234567 \
   --release bionic --release focal --release jammy \
   --release noble --release resolute --release stonking
 
 # With no filters, the campaign covers every feature file.
-uv run behave-campaign create --campaign-id 1234567
+uv run behave-tests campaign create --campaign-id 1234567
 
 # Record the install source, and max jobs per pool.
-uv run behave-campaign create --campaign-id 1234567 \
+uv run behave-tests campaign create --campaign-id 1234567 \
   --install-from proposed --max-lxd-jobs 6 --max-cloud-jobs 4 --max-wsl-jobs 1
 
-# Inspect a campaign a server is running.
-uv run behave-campaign status --campaign-id 1234567 --state failed
-uv run behave-campaign status --campaign-id 1234567 --group-by scenario
-uv run behave-campaign units --campaign-id 1234567 --state failed --format csv
-uv run behave-campaign history --campaign-id 1234567 \
+# Run it, and pause it. A server, if one is running, keeps it moving; so
+# does following its events.
+uv run behave-tests campaign run --campaign-id 1234567
+uv run behave-tests campaign pause --campaign-id 1234567 --kill
+
+# Inspect it.
+uv run behave-tests campaign status --campaign-id 1234567 --state failed
+uv run behave-tests campaign status --campaign-id 1234567 --group-by scenario
+uv run behave-tests campaign units --campaign-id 1234567 --state failed --format csv
+uv run behave-tests campaign history --campaign-id 1234567 \
   --feature features/cli/attach.feature
 
-# Follow a campaign a server is running, from a terminal.
-uv run behave-campaign events --campaign-id 1234567 --kinds actionable --follow
+# Follow it from a terminal, reconciling as it goes.
+uv run behave-tests campaign events --campaign-id 1234567 --kinds actionable --follow
 
 # Bundle a complete campaign's evidence.
-uv run behave-campaign export --campaign-id 1234567
+uv run behave-tests campaign export --campaign-id 1234567
 
 # A campaign directory anywhere else: its id is the directory's name.
-uv run behave-campaign status --campaign /tmp/1234567
+uv run behave-tests campaign status --campaign /tmp/1234567
 ```
+
+The same CLI runs one-off jobs (`behave-tests job …`), reads the feature
+catalogue and sets the checkout's config; see the
+[CLI reference](../../../dev-docs/reference/behave_tests_cli.md).
 
 All commands print JSON to stdout; `units` and `history` also take
 `--format csv`, one row per unit (or per attempt, for `history`). `status`,
@@ -164,7 +173,7 @@ on are rejected, because they usually mean the scope is not what was meant,
 and `wsl` takes at most 1 because WSL jobs share one Windows host. Each pool
 fills separately, so a busy WSL job never holds back LXD work. A campaign's
 max jobs is its own share: the checkout's max jobs
-(`behave-campaign config`) still caps how many jobs run at once in all.
+(`behave-tests config`) still caps how many jobs run at once in all.
 
 Splitting work across people happens out of band: each person creates their
 own campaign with the slice they agreed to run.
@@ -216,7 +225,7 @@ checkout whose feature files define the scope and whose jobs run.
 - `create_campaign` -- plan a campaign and store it, starting nothing.
   Returns the unit count so scope can be confirmed first. `max_jobs` takes
   `lxd`, `cloud` and `wsl`; each may not exceed the checkout's max jobs for
-  that pool (`behave-campaign config`), and a campaign with units in a
+  that pool (`behave-tests config`), and a campaign with units in a
   disabled pool is rejected. A campaign that would silently run
   slower than asked is rejected instead.
 - `list_campaigns` -- every stored campaign: its state, the header fields
@@ -241,6 +250,8 @@ checkout whose feature files define the scope and whose jobs run.
 - `retry_units` -- ask for another attempt at units that already had one,
   and set the intent to run.
 - `kill_job` -- kill a job that has hung.
+- `export_campaign` -- write a complete campaign's evidence bundle, the
+  same as `behave-tests campaign export`.
 
 ## Events
 

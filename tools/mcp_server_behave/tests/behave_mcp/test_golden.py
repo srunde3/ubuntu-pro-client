@@ -27,7 +27,7 @@ def test_write_record_byte_shape(tmp_path):
         '  "campaign_id": "",\n'
         '  "command": [],\n'
         '  "config": {},\n'
-        '  "feature_file": "",\n'
+        '  "feature": "",\n'
         '  "install_from": "",\n'
         '  "job_id": "jobshape",\n'
         '  "machine_type": "",\n'
@@ -38,7 +38,7 @@ def test_write_record_byte_shape(tmp_path):
         '    "dirty": null,\n'
         '    "root": ""\n'
         "  },\n"
-        '  "scenario_name": "",\n'
+        '  "scenario": "",\n'
         '  "started_at": null\n'
         "}\n"
     )
@@ -113,9 +113,7 @@ def test_completed_with_summary_key_order(tmp_path):
 
     payload = (
         _service(tmp_path, launcher)
-        .wait_for_completion(
-            job_id, max_wait_seconds=5, poll_interval_seconds=0.01
-        )
+        .wait_for_job(job_id, max_wait_seconds=5, poll_interval_seconds=0.01)
         .model_dump(mode="json")
     )
 
@@ -123,8 +121,8 @@ def test_completed_with_summary_key_order(tmp_path):
         "job_id",
         "state",
         "ok",
-        "feature_file",
-        "scenario_name",
+        "feature",
+        "scenario",
         "release",
         "machine_type",
         "summary",
@@ -147,9 +145,7 @@ def test_completed_fallback_key_order(tmp_path):
 
     payload = (
         _service(tmp_path, launcher)
-        .wait_for_completion(
-            job_id, max_wait_seconds=5, poll_interval_seconds=0.01
-        )
+        .wait_for_job(job_id, max_wait_seconds=5, poll_interval_seconds=0.01)
         .model_dump(mode="json")
     )
 
@@ -157,8 +153,8 @@ def test_completed_fallback_key_order(tmp_path):
         "job_id",
         "state",
         "ok",
-        "feature_file",
-        "scenario_name",
+        "feature",
+        "scenario",
         "release",
         "machine_type",
         "summary",
@@ -180,7 +176,7 @@ def test_timed_out_key_order(tmp_path):
     values = iter([0.0, 1.1])
     service = _service(tmp_path, launcher, monotonic=lambda: next(values))
 
-    payload = service.wait_for_completion(
+    payload = service.wait_for_job(
         job_id, max_wait_seconds=1, poll_interval_seconds=0.01
     ).model_dump(mode="json")
 

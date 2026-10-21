@@ -115,7 +115,7 @@ class TestCreateCampaign:
             service,
             releases=["jammy"],
             machine_types=["lxd-container"],
-            feature_files=["features/a.feature"],
+            features=["features/a.feature"],
             scenarios=["A"],
         )
 
@@ -451,18 +451,6 @@ class TestCampaignStatus:
         assert status.campaign.install_from == "proposed"
         assert status.campaign.max_jobs == {"lxd": 4}
         assert status.campaign.created_at == AT
-
-
-class TestDimensions:
-    def test_it_reports_releases_and_machine_types(self, service):
-        result = service.dimensions(repo_root="/repo")
-
-        assert [v.name for v in result.releases] == ["jammy", "noble"]
-        assert result.releases[0].scenario_count == 2
-        assert [v.name for v in result.machine_types] == [
-            "lxd-container",
-            "lxd-vm",
-        ]
 
 
 class TestUnitHistory:

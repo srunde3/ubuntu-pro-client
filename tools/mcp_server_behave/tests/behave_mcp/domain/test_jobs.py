@@ -241,8 +241,8 @@ def test_job_matches_result_filters_no_filters_matches_everything():
         JobRecord(),
         job_id="job1",
         job_ids=None,
-        feature_file=None,
-        scenario_name=None,
+        feature=None,
+        scenario=None,
         release=None,
         machine_type=None,
     )
@@ -254,8 +254,8 @@ def test_job_matches_result_filters_by_job_ids():
         metadata,
         job_id="job1",
         job_ids={"job1", "job2"},
-        feature_file=None,
-        scenario_name=None,
+        feature=None,
+        scenario=None,
         release=None,
         machine_type=None,
     )
@@ -263,21 +263,21 @@ def test_job_matches_result_filters_by_job_ids():
         metadata,
         job_id="job3",
         job_ids={"job1", "job2"},
-        feature_file=None,
-        scenario_name=None,
+        feature=None,
+        scenario=None,
         release=None,
         machine_type=None,
     )
 
 
-def test_job_matches_result_filters_by_feature_file():
-    metadata = JobRecord(feature_file="features/cli/attach.feature")
+def test_job_matches_result_filters_by_feature():
+    metadata = JobRecord(feature="features/cli/attach.feature")
     assert job_matches_result_filters(
         metadata,
         job_id="job1",
         job_ids=None,
-        feature_file="features/cli/attach.feature",
-        scenario_name=None,
+        feature="features/cli/attach.feature",
+        scenario=None,
         release=None,
         machine_type=None,
     )
@@ -285,21 +285,21 @@ def test_job_matches_result_filters_by_feature_file():
         metadata,
         job_id="job1",
         job_ids=None,
-        feature_file="features/cli/other.feature",
-        scenario_name=None,
+        feature="features/cli/other.feature",
+        scenario=None,
         release=None,
         machine_type=None,
     )
 
 
 def test_job_matches_result_filters_by_scenario_name_substring():
-    metadata = JobRecord(scenario_name="Attach invalid token")
+    metadata = JobRecord(scenario="Attach invalid token")
     assert job_matches_result_filters(
         metadata,
         job_id="job1",
         job_ids=None,
-        feature_file=None,
-        scenario_name="invalid",
+        feature=None,
+        scenario="invalid",
         release=None,
         machine_type=None,
     )
@@ -307,8 +307,8 @@ def test_job_matches_result_filters_by_scenario_name_substring():
         metadata,
         job_id="job1",
         job_ids=None,
-        feature_file=None,
-        scenario_name="expired",
+        feature=None,
+        scenario="expired",
         release=None,
         machine_type=None,
     )
@@ -320,8 +320,8 @@ def test_job_matches_result_filters_by_release_and_machine_type():
         metadata,
         job_id="job1",
         job_ids=None,
-        feature_file=None,
-        scenario_name=None,
+        feature=None,
+        scenario=None,
         release="jammy",
         machine_type="lxd-container",
     )
@@ -329,8 +329,8 @@ def test_job_matches_result_filters_by_release_and_machine_type():
         metadata,
         job_id="job1",
         job_ids=None,
-        feature_file=None,
-        scenario_name=None,
+        feature=None,
+        scenario=None,
         release="resolute",
         machine_type=None,
     )

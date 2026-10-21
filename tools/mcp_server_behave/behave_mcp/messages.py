@@ -61,8 +61,8 @@ class Dimensions(BaseModel):
 class ScenarioMatch(BaseModel):
     """A scenario hit with the combos satisfying some filter."""
 
-    feature_file: str = ""
-    scenario_name: str = ""
+    feature: str = ""
+    scenario: str = ""
     type: str = ""
     requires_config: list[str] = []
     combos: list[Combo] = []
@@ -131,8 +131,8 @@ class JobRequest(BaseModel):
 
     job_id: str = ""
     queued_at: str = ""
-    feature_file: str = ""
-    scenario_name: str = ""
+    feature: str = ""
+    scenario: str = ""
     release: str = ""
     machine_type: str = ""
     install_from: str = ""
@@ -151,8 +151,8 @@ class JobRecord(BaseModel):
 
     job_id: str = ""
     started_at: str | None = None
-    feature_file: str = ""
-    scenario_name: str = ""
+    feature: str = ""
+    scenario: str = ""
     release: str = ""
     machine_type: str = ""
     install_from: str = ""
@@ -229,7 +229,7 @@ class ListFeaturesResponse(BaseModel):
 
 
 class DescribeFeatureResponse(BaseModel):
-    feature_file: str = ""
+    feature: str = ""
     title: str = ""
     tags: list[str] = []
     requires_config: list[str] = []
@@ -253,7 +253,7 @@ class FindScenariosResponse(BaseModel):
     limit_clamped: bool = False
 
 
-class StartScenarioResponse(BaseModel):
+class RunJobResponse(BaseModel):
     """A job, queued and started at once when its pool had a free lane."""
 
     job_id: str = ""
@@ -297,8 +297,8 @@ class JobResult(BaseModel):
     job_id: str = ""
     state: JobState = JobState.RUNNING
     ok: bool | None = None
-    feature_file: str = ""
-    scenario_name: str = ""
+    feature: str = ""
+    scenario: str = ""
     release: str = ""
     machine_type: str = ""
     summary: dict[str, dict[str, int]] | None = None
@@ -424,8 +424,8 @@ class JobListing(BaseModel):
     reason: Interruption | None = None
     ok: bool | None = None
     returncode: int | None = None
-    feature_file: str = ""
-    scenario_name: str = ""
+    feature: str = ""
+    scenario: str = ""
     release: str = ""
     machine_type: str = ""
     campaign_id: str = ""
@@ -435,7 +435,7 @@ class JobListing(BaseModel):
     artifacts: Artifacts | None = None
 
 
-class ListScenarioJobsResponse(BaseModel):
+class ListJobsResponse(BaseModel):
     jobs: list[JobListing] = []
     pools: list[PoolUsage] = []
     total_ended: int = 0

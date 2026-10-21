@@ -98,10 +98,6 @@ class FeatureReader(Protocol):
         """
         ...
 
-    def available_dimensions(self, repo_root: Path) -> dict[str, Any]:
-        """Return the releases and machine types the feature files can run."""
-        ...
-
 
 class QueueRefused(CampaignError):
     """Raised when the job service will not queue a unit's job: its pool is

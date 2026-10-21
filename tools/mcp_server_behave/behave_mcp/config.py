@@ -16,12 +16,12 @@ _DEFAULT_PORT = 8000
 
 # What to do instead, for each variable the server no longer reads.
 REMOVED_ENV_VARS: dict[str, str] = {
-    "MCP_MAX_PARALLEL_JOBS": "use behave-campaign config set max_jobs.lxd N",
-    "MCP_MAX_LXD_JOBS": "use behave-campaign config set max_jobs.lxd N",
-    "MCP_MAX_CLOUD_JOBS": "use behave-campaign config set max_jobs.cloud N",
-    "MCP_MAX_WSL_JOBS": "use behave-campaign config set max_jobs.wsl N",
+    "MCP_MAX_PARALLEL_JOBS": "use behave-tests config set max_jobs.lxd N",
+    "MCP_MAX_LXD_JOBS": "use behave-tests config set max_jobs.lxd N",
+    "MCP_MAX_CLOUD_JOBS": "use behave-tests config set max_jobs.cloud N",
+    "MCP_MAX_WSL_JOBS": "use behave-tests config set max_jobs.wsl N",
     "MCP_ALLOW_CLOUD_MACHINE_TYPES": (
-        "use behave-campaign config set max_jobs.cloud N"
+        "use behave-tests config set max_jobs.cloud N"
     ),
     "MCP_TRANSPORT": (
         "the server always serves streamable HTTP on MCP_HOST and MCP_PORT"

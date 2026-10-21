@@ -1,9 +1,11 @@
-"""Command line interface over the campaign record.
+"""``behave-tests``: the command line peer of the MCP server.
 
-Every command is a handler: read arguments, call ``CampaignService``, print
-the response as JSON. Behaviour lives in the service, so the CLI and the MCP
-tools cannot drift apart. The only work done here is the work that is
-genuinely a command line's: parsing arguments and reading stdin.
+Commands are grouped by what they act on -- ``job``, ``campaign``,
+``feature``, ``scenario``, ``dimension`` and ``config`` -- and each is the
+same command as its MCP tool. Every command is a handler: read arguments,
+call one service method, print the response as JSON. Behaviour lives in the
+services, so the CLI and the MCP tools cannot drift apart. Every command
+ends with a reconcile, as every tool call does.
 """
 
 from __future__ import annotations
@@ -40,7 +42,17 @@ from behave_mcp.adapters import (
     LocalWorkspace,
 )
 from behave_mcp.domain import layout
+from behave_mcp.domain.limits import (
+    DEFAULT_FIND_LIMIT,
+    DEFAULT_JOB_LIST_LIMIT,
+    DEFAULT_LOG_CONTEXT,
+    DEFAULT_LOG_LINES,
+    DEFAULT_RESULTS_LIMIT,
+    DEFAULT_WAIT_POLL_INTERVAL_SECONDS,
+    DEFAULT_WAIT_TIMEOUT_SECONDS,
+)
 from behave_mcp.domain.pools import Pool
+from behave_mcp.messages import JobState
 from behave_mcp.service import (
     BehaveService,
     BehaveServiceError,
@@ -68,13 +80,41 @@ from .service import CampaignService
 Output = BaseModel | Iterator[BaseModel]
 
 
-def _service(campaign_dir: Path) -> CampaignService:
+def _service(
+    campaign_dir: Path, args: argparse.Namespace | None = None
+) -> CampaignService:
+    """The campaign service over one campaign's directory. With the
+    checkout known, it can queue and kill jobs, under the checkout's max
+    jobs; a campaign directory named outright cannot."""
+    jobs = None
+    ceiling = None
+    if args is not None:
+        try:
+            service = _job_service(_state_dir(args))
+        except ValueError:
+            service = None
+        if service is not None:
+            jobs = _job_runner(service)
+            ceiling = service.read_config().max_jobs
     return CampaignService(
         store=CampaignDirStore(campaign_dir),
         features=ParserFeatureReader(),
         now=system_now,
         repo_state=repo_state,
+        max_jobs_ceiling=ceiling,
+        jobs=jobs,
     )
+
+
+def _job_runner(service: BehaveService) -> ServiceJobRunner:
+    return ServiceJobRunner(
+        service, refusal=BehaveServiceError, unknown_job=UnknownJobError
+    )
+
+
+def _jobs(args: argparse.Namespace) -> BehaveService:
+    """The job service over this checkout's state directory."""
+    return _job_service(_state_dir(args))
 
 
 def _repo_root(args: argparse.Namespace) -> Path:
@@ -126,19 +166,139 @@ def _filters(args: argparse.Namespace) -> Filters:
     )
 
 
-def _command_dimensions(args: argparse.Namespace) -> BaseModel:
-    # dimensions reads feature files, not a campaign, so this command takes
-    # no --campaign and the store it is given is never touched.
-    return _service(Path()).dimensions(repo_root=_repo_root(args))
+# -- the catalogue --------------------------------------------------------
+
+
+def _command_feature_list(args: argparse.Namespace) -> BaseModel:
+    return _jobs(args).list_features(
+        release=args.release,
+        machine_type=args.machine_type,
+        tag=args.tag,
+        text=args.text,
+        repo_root=str(_repo_root(args)),
+    )
+
+
+def _command_feature_describe(args: argparse.Namespace) -> BaseModel:
+    return _jobs(args).describe_feature(
+        args.feature, repo_root=str(_repo_root(args))
+    )
+
+
+def _command_scenario_find(args: argparse.Namespace) -> BaseModel:
+    return _jobs(args).find_scenarios(
+        release=args.release,
+        machine_type=args.machine_type,
+        tag=args.tag,
+        text=args.text,
+        repo_root=str(_repo_root(args)),
+        limit=args.limit,
+    )
+
+
+def _command_dimension_list(args: argparse.Namespace) -> BaseModel:
+    return _jobs(args).list_dimensions(repo_root=str(_repo_root(args)))
+
+
+# -- jobs -----------------------------------------------------------------
+
+
+def _command_job_run(args: argparse.Namespace) -> BaseModel:
+    service = _jobs(args)
+    started = service.run_job(
+        args.feature,
+        args.scenario,
+        args.release,
+        args.machine_type,
+        repo_root=str(_repo_root(args)),
+        install_from=args.install_from,
+    )
+    if not args.wait:
+        return started
+    return service.wait_for_job(started.job_id, args.max_wait, args.interval)
+
+
+def _command_job_list(args: argparse.Namespace) -> BaseModel:
+    return _jobs(args).list_jobs(limit=args.limit)
+
+
+def _command_job_results(args: argparse.Namespace) -> BaseModel:
+    return _jobs(args).job_results(
+        job_ids=args.job_id or None,
+        feature=args.feature or "",
+        scenario=args.scenario or "",
+        release=args.release or "",
+        machine_type=args.machine_type or "",
+        state=args.state or "",
+        limit=args.limit,
+    )
+
+
+def _command_job_wait(args: argparse.Namespace) -> BaseModel:
+    return _jobs(args).wait_for_job(args.job_id, args.max_wait, args.interval)
+
+
+def _command_job_errors(args: argparse.Namespace) -> BaseModel:
+    return _jobs(args).job_errors(args.job_id)
+
+
+def _command_job_logs(args: argparse.Namespace) -> BaseModel:
+    return _jobs(args).job_logs(
+        args.job_id,
+        args.lines,
+        pattern=args.pattern,
+        context=args.context,
+        start=args.start,
+    )
+
+
+def _command_job_artifacts(args: argparse.Namespace) -> BaseModel:
+    return _jobs(args).job_artifacts(args.job_id)
+
+
+def _command_job_kill(args: argparse.Namespace) -> BaseModel:
+    return _jobs(args).kill_job(args.job_id)
+
+
+# -- campaigns ------------------------------------------------------------
+
+
+def _command_list(args: argparse.Namespace) -> BaseModel:
+    return CampaignService(
+        store=JsonlCampaignStore(layout.campaigns_dir(_state_dir(args))),
+        features=ParserFeatureReader(),
+        now=system_now,
+        repo_state=repo_state,
+    ).list_campaigns()
+
+
+def _command_run(args: argparse.Namespace) -> BaseModel:
+    return _service(_campaign_dir(args), args).run(
+        campaign_id=_campaign_id(args)
+    )
+
+
+def _command_pause(args: argparse.Namespace) -> BaseModel:
+    return _service(_campaign_dir(args), args).pause(
+        campaign_id=_campaign_id(args), kill=args.kill
+    )
+
+
+def _command_retry(args: argparse.Namespace) -> BaseModel:
+    return _service(_campaign_dir(args), args).retry_units(
+        campaign_id=_campaign_id(args),
+        filters=_filters(args),
+        reason=args.reason,
+    )
 
 
 def _command_create(args: argparse.Namespace) -> BaseModel:
-    return _service(_campaign_dir(args)).create_campaign(
+    return _service(_campaign_dir(args), args).create_campaign(
         campaign_id=_campaign_id(args),
         repo_root=_repo_root(args),
         releases=args.release or (),
         machine_types=args.machine_type or (),
-        feature_files=args.feature or (),
+        features=args.feature or (),
         scenarios=args.scenario or (),
         install_from=args.install_from,
         max_jobs={
@@ -231,11 +391,7 @@ def _reconcile(args: argparse.Namespace) -> None:
             features=ParserFeatureReader(),
             now=system_now,
             repo_state=repo_state,
-            jobs=ServiceJobRunner(
-                _job_service(state),
-                refusal=BehaveServiceError,
-                unknown_job=UnknownJobError,
-            ),
+            jobs=_job_runner(_job_service(state)),
         ).reconcile()
     except (BehaveServiceError, CampaignError, OSError) as error:
         # The command's own answer stands; the next caller retries.
@@ -260,9 +416,14 @@ def _command_events(args: argparse.Namespace) -> Output:
 
 
 def _follow_events(args: argparse.Namespace) -> Iterator[BaseModel]:
-    """Print each new batch until the campaign stops: paused or complete."""
+    """Print each new batch until the campaign stops: paused or complete.
+
+    Each poll reconciles first, so following a campaign from a terminal
+    keeps it moving when no server runs.
+    """
     since_seq = args.since_seq
     while True:
+        _reconcile(args)
         batch = _read_events(args, since_seq)
         if batch.events:
             yield batch
@@ -384,12 +545,17 @@ def _add_campaign(parser: argparse.ArgumentParser) -> None:
     _add_repo_root(parser)
 
 
-def _add_repo_root(parser: argparse.ArgumentParser) -> None:
+def _add_repo_root(
+    parser: argparse.ArgumentParser, *, nested: bool = False
+) -> None:
+    """``--repo-root``. ``nested`` is for a subcommand of a parser that
+    already takes it, so it is accepted in either place."""
     parser.add_argument(
         "--repo-root",
         type=Path,
         dest="repo_root",
         metavar="DIR",
+        default=argparse.SUPPRESS if nested else None,
         help=(
             "ubuntu-pro-client checkout holding features/ and the server's "
             "state (default: ${})".format(layout.REPO_ENV_VAR)
@@ -397,20 +563,149 @@ def _add_repo_root(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description="Track behave test units and attempts."
-    )
-    subparsers = parser.add_subparsers(dest="command")
+def _group(subparsers: Any, name: str, help_text: str) -> Any:
+    """A noun with its own verbs, as ``job`` or ``campaign``."""
+    parser = subparsers.add_parser(name, help=help_text)
+    return parser.add_subparsers(dest="verb", required=True, metavar="VERB")
 
-    dimensions = subparsers.add_parser(
-        "dimensions", help="list the releases and machine types available"
+
+def _verb(
+    verbs: Any,
+    name: str,
+    help_text: str,
+    handler: Callable[[argparse.Namespace], Any],
+) -> argparse.ArgumentParser:
+    parser = verbs.add_parser(name, help=help_text)
+    _add_repo_root(parser)
+    parser.set_defaults(handler=handler)
+    return parser
+
+
+def _add_catalogue_filters(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--release")
+    parser.add_argument("--machine-type", dest="machine_type")
+    parser.add_argument("--tag")
+    parser.add_argument("--text", help="a substring of the scenario name")
+
+
+def _add_wait(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--max-wait",
+        type=int,
+        default=DEFAULT_WAIT_TIMEOUT_SECONDS,
+        dest="max_wait",
+        metavar="SECONDS",
+        help="how long to wait before returning with timed_out",
     )
-    _add_repo_root(dimensions)
-    dimensions.set_defaults(handler=_command_dimensions)
+    parser.add_argument(
+        "--interval",
+        type=float,
+        default=DEFAULT_WAIT_POLL_INTERVAL_SECONDS,
+        metavar="SECONDS",
+    )
+
+
+def _add_job_commands(subparsers: Any) -> None:
+    jobs = _group(subparsers, "job", "run behave jobs and read what they did")
+
+    run = _verb(jobs, "run", "queue one unit's job", _command_job_run)
+    run.add_argument("feature", help="a path that feature list returns")
+    run.add_argument("scenario", help="a scenario's exact name")
+    run.add_argument("--release", required=True)
+    run.add_argument("--machine-type", required=True, dest="machine_type")
+    run.add_argument(
+        "--install-from",
+        default=DEFAULT_INSTALL_FROM,
+        choices=INSTALL_FROM_VALUES,
+        dest="install_from",
+    )
+    run.add_argument(
+        "--wait", action="store_true", help="wait for the job to end"
+    )
+    _add_wait(run)
+
+    listed = _verb(
+        jobs,
+        "list",
+        "queued and running jobs, then ended ones",
+        _command_job_list,
+    )
+    listed.add_argument("--limit", type=int, default=DEFAULT_JOB_LIST_LIMIT)
+
+    results = _verb(
+        jobs, "results", "what came of each job", _command_job_results
+    )
+    results.add_argument("--job-id", action="append", dest="job_id")
+    results.add_argument("--feature")
+    results.add_argument("--scenario", help="a substring of the name")
+    results.add_argument("--release")
+    results.add_argument("--machine-type", dest="machine_type")
+    results.add_argument("--state", choices=[s.value for s in JobState])
+    results.add_argument("--limit", type=int, default=DEFAULT_RESULTS_LIMIT)
+
+    for name, help_text, handler in (
+        ("wait", "wait for a job to end", _command_job_wait),
+        (
+            "errors",
+            "what went wrong in a job, from its log",
+            _command_job_errors,
+        ),
+        ("logs", "part of a job's log", _command_job_logs),
+        ("artifacts", "a job's files and records", _command_job_artifacts),
+        ("kill", "kill a queued or running job", _command_job_kill),
+    ):
+        verb = _verb(jobs, name, help_text, handler)
+        verb.add_argument("job_id", metavar="JOB_ID")
+        if name == "wait":
+            _add_wait(verb)
+        if name == "logs":
+            verb.add_argument("--lines", type=int, default=DEFAULT_LOG_LINES)
+            verb.add_argument("--pattern", help="a regex to search for")
+            verb.add_argument(
+                "--context", type=int, default=DEFAULT_LOG_CONTEXT
+            )
+            verb.add_argument("--start", type=int, default=0)
+
+
+def _add_catalogue_commands(subparsers: Any) -> None:
+    features = _group(subparsers, "feature", "the feature files")
+    listed = _verb(
+        features, "list", "every feature file", _command_feature_list
+    )
+    _add_catalogue_filters(listed)
+    described = _verb(
+        features,
+        "describe",
+        "one feature's scenarios",
+        _command_feature_describe,
+    )
+    described.add_argument("feature", help="a path that feature list returns")
+
+    scenarios = _group(subparsers, "scenario", "scenarios across features")
+    found = _verb(
+        scenarios, "find", "scenarios matching filters", _command_scenario_find
+    )
+    _add_catalogue_filters(found)
+    found.add_argument("--limit", type=int, default=DEFAULT_FIND_LIMIT)
+
+    dimensions = _group(
+        subparsers, "dimension", "the releases and machine types in use"
+    )
+    _verb(
+        dimensions,
+        "list",
+        "every release and machine type, with scenario counts",
+        _command_dimension_list,
+    )
+
+
+def _add_campaign_commands(subparsers: Any) -> None:
+    campaigns = _group(
+        subparsers, "campaign", "plan, run and report on campaigns"
+    )
 
     create = _add_command(
-        subparsers,
+        campaigns,
         "create",
         "create the campaign from the feature files",
         _command_create,
@@ -440,8 +735,29 @@ def build_parser() -> argparse.ArgumentParser:
             ),
         )
 
+    _verb(campaigns, "list", "every campaign on this checkout", _command_list)
+
+    run = campaigns.add_parser("run", help="set the intent to run")
+    _add_campaign(run)
+    run.set_defaults(handler=_command_run)
+
+    pause = campaigns.add_parser("pause", help="set the intent to hold")
+    _add_campaign(pause)
+    pause.add_argument(
+        "--kill", action="store_true", help="kill the jobs in flight"
+    )
+    pause.set_defaults(handler=_command_pause)
+
+    retry = _add_command(
+        campaigns,
+        "retry",
+        "ask for another attempt at units, and run",
+        _command_retry,
+    )
+    retry.add_argument("--reason", default="")
+
     status = _add_command(
-        subparsers, "status", "show current state per unit", _command_status
+        campaigns, "status", "show current state per unit", _command_status
     )
     status.add_argument(
         "--problems",
@@ -463,18 +779,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     units = _add_command(
-        subparsers, "units", "list every unit with its state", _command_units
+        campaigns, "units", "list every unit with its state", _command_units
     )
     units.add_argument("--limit", type=int, default=DEFAULT_UNITS_LIMIT)
     _add_format(units, _unit_rows)
 
     history = _add_command(
-        subparsers, "history", "show every attempt per unit", _command_history
+        campaigns, "history", "show every attempt per unit", _command_history
     )
     history.add_argument("--limit", type=int, default=DEFAULT_UNITS_LIMIT)
     _add_format(history, _attempt_rows)
 
-    exported = subparsers.add_parser(
+    exported = campaigns.add_parser(
         "export",
         help=(
             "write a complete campaign's evidence bundle: a summary for "
@@ -495,8 +811,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     exported.set_defaults(handler=_command_export)
 
-    events = subparsers.add_parser(
-        "events", help="read the events a running server has announced"
+    events = campaigns.add_parser(
+        "events", help="read the events a campaign's records announce"
     )
     _add_campaign(events)
     events.add_argument(
@@ -523,7 +839,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help=(
             "keep printing batches, one JSON document per line, until the "
-            "campaign is paused or complete"
+            "campaign is paused or complete, reconciling as it goes"
         ),
     )
     events.add_argument(
@@ -534,6 +850,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     events.set_defaults(handler=_command_events)
 
+
+def _add_config_command(subparsers: Any) -> None:
     config = subparsers.add_parser(
         "config",
         help=(
@@ -543,10 +861,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_repo_root(config)
     actions = config.add_subparsers(dest="action")
-    actions.add_parser("show", help="show the config (the default)")
+    shower = actions.add_parser("show", help="show the config (the default)")
+    _add_repo_root(shower, nested=True)
     setter = actions.add_parser(
         "set", help="set max_jobs.<pool> or behave.<option>"
     )
+    _add_repo_root(setter, nested=True)
     setter.add_argument("key", metavar="KEY")
     setter.add_argument(
         "value",
@@ -558,7 +878,22 @@ def build_parser() -> argparse.ArgumentParser:
         help="return max_jobs.<pool> to its default, or drop an option",
     )
     unsetter.add_argument("key", metavar="KEY")
+    _add_repo_root(unsetter, nested=True)
     config.set_defaults(handler=_command_config)
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="behave-tests",
+        description=(
+            "Run behave jobs and campaigns on an ubuntu-pro-client checkout."
+        ),
+    )
+    subparsers = parser.add_subparsers(dest="command", metavar="NOUN")
+    _add_job_commands(subparsers)
+    _add_campaign_commands(subparsers)
+    _add_catalogue_commands(subparsers)
+    _add_config_command(subparsers)
     return parser
 
 

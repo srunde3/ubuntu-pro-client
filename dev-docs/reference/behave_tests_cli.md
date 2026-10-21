@@ -1,32 +1,63 @@
-# `behave-campaign` CLI reference
+# `behave-tests` CLI reference
 
-`behave-campaign` creates, inspects and exports a behave test campaign: the
-record of which test units are in scope, what has been attempted, and what
-each attempt established. A unit is one scenario for one release on one
-machine type. The `behave` MCP server runs a campaign and records every
-attempt. The CLI also holds the checkout's config, which every job runs
-with.
+`behave-tests` is the command line peer of the `behave` MCP server. It runs
+behave jobs, plans and runs campaigns -- the record of which test units are
+in scope, what has been attempted, and what each attempt established -- and
+holds the checkout's config, which every job runs with. A unit is one
+scenario for one release on one machine type.
 
 Run it from `tools/mcp_server_behave`:
 
 ```bash
 uv sync --extra test
-uv run behave-campaign <command> [options]
+uv run behave-tests <noun> <verb> [options]
 ```
 
-Every command prints one JSON document to stdout and exits `0`; `units` and
-`history` also take `--format csv`. An invalid argument, an
-unknown value, a missing campaign, or an unreadable file prints a message to
-stderr and exits `2`. JSON shapes match the `behave` MCP server's campaign
-tools.
+Commands are grouped by what they act on: `job`, `campaign`, `feature`,
+`scenario`, `dimension` and `config`. Each is the same command as its MCP
+tool, with the same response shape:
 
-After every command, the CLI reconciles the checkout's job queue: any queued
-job whose pool has a free lane starts, as it would after an MCP tool call.
+| Command | MCP tool |
+| --- | --- |
+| `job run` | `run_job` |
+| `job list` | `list_jobs` |
+| `job results` | `job_results` |
+| `job wait` | `wait_for_job` |
+| `job errors` | `job_errors` |
+| `job logs` | `job_logs` |
+| `job artifacts` | `job_artifacts` |
+| `job kill` | `kill_job` |
+| `campaign create` | `create_campaign` |
+| `campaign list` | `list_campaigns` |
+| `campaign run`, `campaign pause` | `control_campaign` |
+| `campaign retry` | `retry_units` |
+| `campaign status` | `campaign_status` |
+| `campaign history` | `unit_history` |
+| `campaign events` | `await_campaign_events` |
+| `campaign export` | `export_campaign` |
+| `feature list` | `list_features` |
+| `feature describe` | `describe_feature` |
+| `scenario find` | `find_scenarios` |
+| `dimension list` | `list_dimensions` |
 
-`--campaign-id` resolves to `<repo-root>/.mcp_server_behave/campaigns/ID/`,
-or `$MCP_STATE_DIR/campaigns/ID/` when `MCP_STATE_DIR` is set -- the same
-file the `behave` MCP server uses for that id. `--repo-root` defaults to
-`$UBUNTU_PRO_CLIENT_REPO`.
+`campaign units` has no tool; `config` has no tool, because only the user
+changes the config.
+
+Every command prints one JSON document to stdout and exits `0`;
+`campaign units` and `campaign history` also take `--format csv`. An invalid
+argument, an unknown value, a missing job or campaign, or an unreadable file
+prints a message to stderr and exits `2`.
+
+After every command, the CLI reconciles the checkout: it brings every
+campaign up to date and starts any queued job whose pool has a free lane,
+as an MCP tool call does.
+
+Every command takes `--repo-root DIR`, the `ubuntu-pro-client` checkout
+whose feature files and state it uses. It defaults to
+`$UBUNTU_PRO_CLIENT_REPO`. The state directory is
+`<repo-root>/.mcp_server_behave/`, or `$MCP_STATE_DIR` when it is set -- the
+same one the `behave` MCP server uses. `--campaign-id ID` names a campaign
+there.
 
 Unit states: `unattempted`, `in_flight`, `passed`, `failed`, `skipped`,
 `error`.
@@ -36,24 +67,76 @@ Campaign states: `created`, `running`, `finishing`, `complete`, `pausing`,
 `intent` (`never_run`, `run` or `hold`) and its `progress` (`untouched`,
 `open`, `finishing` or `settled`).
 
+Job states: `queued`, `running`, `finished`, `interrupted`.
+
 Install sources: `local`, `archive`, `daily`, `staging`, `stable`,
 `proposed`.
 
-## dimensions
+## job run
 
-List the releases and machine types the feature files can run, each with a
-scenario count.
-
-Required arguments:
-
-* `--repo-root DIR`: An `ubuntu-pro-client` checkout holding `features/`.
-  Defaults to `$UBUNTU_PRO_CLIENT_REPO`.
+Queue one unit's job, and start it at once if its pool has a free lane.
 
 ```bash
-uv run behave-campaign dimensions --repo-root ../..
+uv run behave-tests job run FEATURE SCENARIO --release NAME \
+  --machine-type NAME [--install-from SOURCE] [--wait]
 ```
 
-## create
+* `FEATURE`: A path that `feature list` returns.
+* `SCENARIO`: A scenario's exact name, as `feature describe` lists it, that
+  covers the release and machine type.
+* `--release NAME`, `--machine-type NAME`: Required.
+* `--install-from SOURCE`: Defaults to `local`.
+* `--wait`: Wait for the job to end, as `job wait` does, and print that
+  instead.
+* `--max-wait SECONDS`, `--interval SECONDS`: For `--wait`. Default `1800`
+  and `5`.
+
+## job list
+
+Queued and running jobs, then the most recently ended ones, and each pool's
+max jobs and busy lanes.
+
+* `--limit N`: Most ended jobs to list. Defaults to `20`.
+
+## job results
+
+What came of each job: its state, `ok`, behave's counts and the failing
+steps.
+
+* `--job-id ID`: Only this job. Repeatable.
+* `--feature PATH`, `--scenario TEXT` (a substring), `--release NAME`,
+  `--machine-type NAME`, `--state STATE`: Filters.
+* `--limit N`: Defaults to `20`.
+
+## job wait, errors, logs, artifacts, kill
+
+Each takes a `JOB_ID`.
+
+* `job wait JOB_ID`: Wait for the job to end. A wait that runs out returns
+  the job as it stands, with `timed_out: true`. `--max-wait SECONDS` and
+  `--interval SECONDS` default to `1800` and `5`.
+* `job errors JOB_ID`: What went wrong, from the job's log.
+* `job logs JOB_ID`: Part of the job's log, every line numbered. `--lines N`
+  (default `100`), `--start N`, `--pattern REGEX` and `--context N` (default
+  `3`).
+* `job artifacts JOB_ID`: The job's files, its request, record and exit.
+* `job kill JOB_ID`: Kill a queued or running job. It ends interrupted,
+  never as a failure.
+
+## feature list, feature describe, scenario find, dimension list
+
+The feature catalogue, read from the checkout's feature files.
+
+* `feature list`: Every feature file, with `--release`, `--machine-type`,
+  `--tag` and `--text` filters.
+* `feature describe FEATURE`: One feature's scenarios and the combos each
+  covers.
+* `scenario find`: Scenarios across every feature, with the same filters
+  and `--limit N` (default `50`).
+* `dimension list`: Every release and machine type in use, each with a
+  scenario count.
+
+## campaign create
 
 Create a campaign from the feature files. Units are built from the
 combinations each scenario supports, narrowed by the filters. A campaign can
@@ -87,7 +170,7 @@ Optional arguments:
 Omit every filter to cover every feature file.
 
 ```bash
-uv run behave-campaign create --campaign-id 1234567 --repo-root ../.. \
+uv run behave-tests campaign create --campaign-id 1234567 --repo-root ../.. \
   --release jammy --release noble --machine-type lxd-vm \
   --install-from proposed --max-lxd-jobs 4
 ```
@@ -96,7 +179,23 @@ Errors: an unknown release, machine type, or feature; a campaign that already
 exists; no unit matching the filters; max jobs for a pool no unit in
 scope draws on; fewer than one for a pool, or more than one for `wsl`.
 
-## status
+## campaign list, run, pause, retry
+
+* `campaign list`: Every campaign on the checkout.
+* `campaign run --campaign-id ID`: Set the intent to run, and queue what
+  the campaign's max jobs allow at once.
+* `campaign pause --campaign-id ID [--kill]`: Set the intent to hold. Jobs
+  in flight finish, or with `--kill` are killed and their units recorded as
+  interrupted.
+* `campaign retry --campaign-id ID [--reason TEXT]`: Ask for another
+  attempt at units that already had one, and set the intent to run. With no
+  `--state`, it selects the failed, skipped and errored units. Takes the
+  same filters as `campaign status`.
+
+`run`, `pause` and `retry` need the checkout, so they refuse a campaign
+named with `--campaign DIR` alone.
+
+## campaign status
 
 Report a campaign's header, state, jobs in flight in each pool, in-flight units,
 and problem units.
@@ -124,11 +223,11 @@ Optional arguments:
 Filters narrow which units are counted and listed.
 
 ```bash
-uv run behave-campaign status --campaign-id 1234567 --group-by scenario
-uv run behave-campaign status --campaign-id 1234567 --release jammy
+uv run behave-tests campaign status --campaign-id 1234567 --group-by scenario
+uv run behave-tests campaign status --campaign-id 1234567 --release jammy
 ```
 
-## units
+## campaign units
 
 List every selected unit with its state, last `job_id` and
 `attempt_count`.
@@ -155,11 +254,11 @@ Optional arguments:
 * `--state STATE`: Only units in this state. Repeatable.
 
 ```bash
-uv run behave-campaign units --campaign-id 1234567 --state failed \
+uv run behave-tests campaign units --campaign-id 1234567 --state failed \
   --format csv > failed.csv
 ```
 
-## history
+## campaign history
 
 List every attempt at each selected unit, oldest first: `job_id`,
 `install_from`, `started_at`, `outcome`, `finished_at`, `interrupted`.
@@ -188,14 +287,14 @@ Optional arguments:
 * `--state STATE`: Only units in this state. Repeatable.
 
 ```bash
-uv run behave-campaign history --campaign-id 1234567 \
+uv run behave-tests campaign history --campaign-id 1234567 \
   --feature features/cli/attach.feature
 ```
 
-## events
+## campaign events
 
 Read the events the campaign's records announce. Events are derived from the
-record on every read, so they need no server and number the same way
+records on every read, so they need no server and number the same way
 everywhere. Each response carries the campaign's `state`, `intent`, `progress`, `in_flight`
 and `counts` as well as the events.
 
@@ -217,7 +316,8 @@ Optional arguments:
 * `--limit N`: Most events per response. Defaults to `100`; the maximum is
   `1000`.
 * `--follow`: Keep printing responses, one JSON document per line, until the
-  campaign is `paused` or `complete`.
+  campaign is `paused` or `complete`. Each poll reconciles first, so
+  following a campaign from a terminal keeps it moving when no server runs.
 * `--interval SECONDS`: Poll interval with `--follow`. Defaults to `5`.
 
 Families: `campaign`, `job`, `unit`, `anomaly`. Presets: `actionable`
@@ -225,13 +325,13 @@ Families: `campaign`, `job`, `unit`, `anomaly`. Presets: `actionable`
 `*` (everything).
 
 ```bash
-uv run behave-campaign events --campaign-id 1234567 \
+uv run behave-tests campaign events --campaign-id 1234567 \
   --kinds actionable --follow
 ```
 
 Errors: an unknown kind, family, or preset.
 
-## export
+## campaign export
 
 Write a complete campaign's evidence bundle as a `.tar.gz`, for attaching to
 an SRU bug. Prints the bundle's path, the counts by state, how many jobs were
@@ -269,7 +369,7 @@ and `audit/` still carry it. Exporting the same campaign twice gives
 identical bytes.
 
 ```bash
-uv run behave-campaign export --campaign-id 1234567
+uv run behave-tests campaign export --campaign-id 1234567
 ```
 
 Errors: a campaign that is not `complete`, naming its jobs in flight, and an output
@@ -283,9 +383,9 @@ once, and the behave options every job runs with. A change applies to every
 job that starts after it, campaign jobs included.
 
 ```bash
-uv run behave-campaign config [--repo-root DIR] [show]
-uv run behave-campaign config [--repo-root DIR] set KEY VALUE
-uv run behave-campaign config [--repo-root DIR] unset KEY
+uv run behave-tests config [--repo-root DIR] [show]
+uv run behave-tests config [--repo-root DIR] set KEY VALUE
+uv run behave-tests config [--repo-root DIR] unset KEY
 ```
 
 Prints each pool's `max_jobs` and `busy` lanes, and the behave options, each
@@ -304,7 +404,7 @@ Keys:
 A `VALUE` of `-` is read from stdin, so a secret stays out of shell history:
 
 ```bash
-echo "$TOKEN" | uv run behave-campaign config set behave.contract_token -
+echo "$TOKEN" | uv run behave-tests config set behave.contract_token -
 ```
 
 The config is `config.json` in the state directory, readable only by its

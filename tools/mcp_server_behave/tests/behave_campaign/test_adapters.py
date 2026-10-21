@@ -665,7 +665,7 @@ class TestCampaignsShareTheJobQueue:
                 campaign_id=campaign_id, repo_root=repo_root
             )
             campaigns.run(campaign_id=campaign_id)
-        one_off = service.start_scenario(
+        one_off = service.run_job(
             "features/a.feature", "A", "jammy", "lxd-container"
         )
 

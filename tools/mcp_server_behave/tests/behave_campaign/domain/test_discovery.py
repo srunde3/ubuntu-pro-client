@@ -1,9 +1,6 @@
 import pytest
 
-from behave_campaign.domain.discovery import (
-    available_dimensions,
-    discover_units,
-)
+from behave_campaign.domain.discovery import discover_units
 from behave_campaign.domain.records import CampaignError, Scope, Unit
 
 FEATURE = """@uses.config.contract_token
@@ -184,17 +181,3 @@ class TestDiscoverUnits:
     def test_repo_without_features_is_rejected(self, tmp_path):
         with pytest.raises(CampaignError, match="no feature files found"):
             discover_units(tmp_path, Scope())
-
-
-class TestAvailableDimensions:
-    def test_reports_releases_and_machine_types_with_counts(self, repo):
-        dimensions = available_dimensions(repo)
-
-        assert dimensions["releases"] == [
-            {"name": "jammy", "scenario_count": 2},
-            {"name": "noble", "scenario_count": 1},
-        ]
-        assert [value["name"] for value in dimensions["machine_types"]] == [
-            "lxd-container",
-            "lxd-vm",
-        ]

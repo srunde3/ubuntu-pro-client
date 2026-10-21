@@ -88,6 +88,7 @@ def repo(tmp_path):
     features.mkdir()
     (features / "a.feature").write_text(FEATURE_A)
     (features / "b.feature").write_text(FEATURE_B)
+    (tmp_path / "tox.ini").write_text("[tox]\n")
     return tmp_path
 
 
@@ -98,7 +99,7 @@ def run(tmp_path, campaign_file, repo, capsys):
             source = tmp_path / "input.json"
             source.write_text(json.dumps(payload))
             args = [*args, "--input", str(source)]
-        if args[0] == "create":
+        if args[1] == "create":
             args = [*args, "--repo-root", str(repo)]
         if "--campaign-id" not in args:
             args = [*args, "--campaign", str(campaign_file)]
@@ -112,14 +113,14 @@ def run(tmp_path, campaign_file, repo, capsys):
 
 @pytest.fixture
 def planned(run):
-    return run(["create"])
+    return run(["campaign", "create"])
 
 
 class TestInit:
     def test_campaign_covers_every_discovered_unit(self, planned, run):
         assert planned["summary"]["counts"]["unattempted"] == 3
         assert planned["campaign"]["total_units"] == 3
-        history = run(["history"])
+        history = run(["campaign", "history"])
         assert [unit_of(unit) for unit in history["units"]] == [
             UNIT_A_JAMMY,
             UNIT_A_NOBLE,
@@ -127,34 +128,38 @@ class TestInit:
         ]
 
     def test_filters_define_the_campaign(self, run):
-        result = run(["create", "--machine-type", "lxd-vm"])
+        result = run(["campaign", "create", "--machine-type", "lxd-vm"])
 
         assert result["summary"]["counts"]["unattempted"] == 1
-        history = run(["history"])
+        history = run(["campaign", "history"])
         assert [unit_of(unit) for unit in history["units"]] == [UNIT_A_NOBLE]
 
-    def test_lanes_are_set_per_pool(self, run):
-        result = run(["create", "--max-lxd-jobs", "4"])
+    def test_max_jobs_are_set_per_pool(self, run, repo, capsys):
+        # Within the checkout's own max jobs, which create checks.
+        main(["config", "--repo-root", str(repo), "set", "max_jobs.lxd", "4"])
+        capsys.readouterr()
+
+        result = run(["campaign", "create", "--max-lxd-jobs", "4"])
 
         assert result["campaign"]["max_jobs"] == {"lxd": 4}
 
-    def test_lanes_for_a_pool_out_of_scope_are_rejected(self, run):
-        error = run(["create", "--max-wsl-jobs", "1"], expect=2)
+    def test_max_jobs_for_a_pool_out_of_scope_are_rejected(self, run):
+        error = run(["campaign", "create", "--max-wsl-jobs", "1"], expect=2)
 
         assert "no unit in scope" in error
 
     def test_initialising_twice_is_rejected(self, planned, run):
-        error = run(["create"], expect=2)
+        error = run(["campaign", "create"], expect=2)
 
         assert "already holds a campaign" in error
 
     def test_unknown_filter_value_is_rejected(self, run):
-        error = run(["create", "--release", "bogus"], expect=2)
+        error = run(["campaign", "create", "--release", "bogus"], expect=2)
 
         assert "unknown release: bogus" in error
 
     def test_full_campaign_needs_no_filters(self, run):
-        result = run(["create"])
+        result = run(["campaign", "create"])
 
         assert result["summary"]["counts"]["unattempted"] == 3
         assert result["campaign"]["scope"] == {
@@ -165,7 +170,7 @@ class TestInit:
         }
 
     def test_campaign_header_records_how_it_was_built(self, run, repo):
-        result = run(["create", "--release", "jammy"])
+        result = run(["campaign", "create", "--release", "jammy"])
         campaign = result["campaign"]
 
         assert campaign["campaign_id"] == "records"
@@ -180,7 +185,7 @@ class TestUnits:
     ):
         record(campaign_file, [attempt(UNIT_A_JAMMY, "failed", "job-1")])
 
-        result = run(["units"])
+        result = run(["campaign", "units"])
 
         assert [(unit_of(u), u["state"]) for u in result["units"]] == [
             (UNIT_A_JAMMY, "failed"),
@@ -190,7 +195,9 @@ class TestUnits:
         assert result["truncated"] is False
 
     def test_filters_and_limit_apply(self, planned, run):
-        result = run(["units", "--release", "jammy", "--limit", "1"])
+        result = run(
+            ["campaign", "units", "--release", "jammy", "--limit", "1"]
+        )
 
         assert [unit_of(u) for u in result["units"]] == [UNIT_A_JAMMY]
         assert result["truncated"] is True
@@ -201,7 +208,14 @@ class TestUnits:
         record(campaign_file, [attempt(UNIT_A_JAMMY, "failed", "job-1")])
 
         code = main(
-            ["units", "--campaign", str(campaign_file), "--format", "csv"]
+            [
+                "campaign",
+                "units",
+                "--campaign",
+                str(campaign_file),
+                "--format",
+                "csv",
+            ]
         )
         out = capsys.readouterr().out.splitlines()
 
@@ -220,6 +234,7 @@ class TestUnits:
     ):
         main(
             [
+                "campaign",
                 "units",
                 "--campaign",
                 str(campaign_file),
@@ -247,6 +262,7 @@ class TestUnits:
 
         main(
             [
+                "campaign",
                 "history",
                 "--campaign",
                 str(campaign_file),
@@ -283,9 +299,16 @@ class TestAddressing:
         monkeypatch.delenv("MCP_STATE_DIR")
 
     def test_an_id_resolves_to_the_servers_file(self, run, repo):
-        created = run(["create", "--campaign-id", "1234567"])
+        created = run(["campaign", "create", "--campaign-id", "1234567"])
         status = run(
-            ["status", "--campaign-id", "1234567", "--repo-root", str(repo)]
+            [
+                "campaign",
+                "status",
+                "--campaign-id",
+                "1234567",
+                "--repo-root",
+                str(repo),
+            ]
         )
 
         expected = repo / ".mcp_server_behave" / "campaigns" / "1234567"
@@ -300,14 +323,14 @@ class TestAddressing:
 
         # create's run() adds --repo-root; status must find the same file
         # from the environment alone.
-        run(["create", "--campaign-id", "1234567"])
-        status = main(["status", "--campaign-id", "1234567"])
+        run(["campaign", "create", "--campaign-id", "1234567"])
+        status = main(["campaign", "status", "--campaign-id", "1234567"])
 
         assert status == 0
 
     def test_without_either_is_an_error(self, capsys):
         with pytest.raises(SystemExit) as exit:
-            main(["status"])
+            main(["campaign", "status"])
 
         assert exit.value.code == 2
         assert "--campaign-id" in capsys.readouterr().err
@@ -316,6 +339,7 @@ class TestAddressing:
         with pytest.raises(SystemExit) as exit:
             main(
                 [
+                    "campaign",
                     "status",
                     "--campaign-id",
                     "1234567",
@@ -328,14 +352,14 @@ class TestAddressing:
         assert "not allowed with" in capsys.readouterr().err
 
     def test_a_directory_names_its_own_id(self, planned, run, campaign_file):
-        result = run(["status"])
+        result = run(["campaign", "status"])
 
         assert result["campaign"]["campaign_id"] == campaign_file.name
 
     def test_missing_repo_root_is_a_clear_error(self, monkeypatch, capsys):
         monkeypatch.delenv("UBUNTU_PRO_CLIENT_REPO", raising=False)
 
-        code = main(["status", "--campaign-id", "1234567"])
+        code = main(["campaign", "status", "--campaign-id", "1234567"])
 
         assert code == 2
         assert "UBUNTU_PRO_CLIENT_REPO" in capsys.readouterr().err
@@ -348,14 +372,14 @@ class TestAddressing:
         assert record["campaign"]["type"] == "campaign"
 
     def test_status_reports_the_campaign(self, planned, run):
-        result = run(["status"])
+        result = run(["campaign", "status"])
 
         assert result["campaign"]["scope"]["release"] == []
 
 
 class TestQueries:
     def test_status_filters_narrow_units_and_counts(self, planned, run):
-        result = run(["status", "--machine-type", "lxd-vm"])
+        result = run(["campaign", "status", "--machine-type", "lxd-vm"])
 
         assert result["summary"]["counts"]["unattempted"] == 1
         assert result["in_flight"] == []
@@ -370,7 +394,7 @@ class TestQueries:
             ],
         )
 
-        result = run(["status"])
+        result = run(["campaign", "status"])
 
         assert result["summary"]["counts"]["failed"] == 1
         assert result["summary"]["counts"]["skipped"] == 1
@@ -392,7 +416,7 @@ class TestQueries:
             ],
         )
 
-        result = run(["status", "--group-by", "scenario"])
+        result = run(["campaign", "status", "--group-by", "scenario"])
 
         assert result["problems"] is None
         (row,) = result["problem_scenarios"]
@@ -404,7 +428,9 @@ class TestQueries:
         record(campaign_file, [attempt(UNIT_A_JAMMY, "failed", "job-1")])
         record(campaign_file, [attempt(UNIT_A_JAMMY, "passed", "job-2")])
 
-        result = run(["history", "--release", "jammy", "--scenario", "A"])
+        result = run(
+            ["campaign", "history", "--release", "jammy", "--scenario", "A"]
+        )
 
         attempts = result["units"][0]["attempts"]
 
@@ -422,13 +448,24 @@ class TestQueries:
     ):
         # An absent file used to read as a fresh campaign with header
         # defaults -- no lanes, no repo -- which looks like a real one.
-        for command in (["status"], ["history"], ["events"]):
+        for command in (
+            ["campaign", "status"],
+            ["campaign", "history"],
+            ["campaign", "events"],
+        ):
             error = run(command, expect=2)
             assert str(campaign_file) in error, command
 
     def test_a_missing_id_is_an_error(self, run, repo):
         error = run(
-            ["status", "--campaign-id", "absent", "--repo-root", str(repo)],
+            [
+                "campaign",
+                "status",
+                "--campaign-id",
+                "absent",
+                "--repo-root",
+                str(repo),
+            ],
             expect=2,
         )
 
@@ -441,7 +478,7 @@ class TestEvents:
     def test_reads_the_campaigns_events(self, planned, run, campaign_file):
         record(campaign_file, [attempt(UNIT_A_JAMMY, "failed", "job-1")])
 
-        result = run(["events"])
+        result = run(["campaign", "events"])
 
         assert [e["kind"] for e in result["events"]] == [
             "campaign.created",
@@ -464,12 +501,16 @@ class TestEvents:
             ],
         )
 
-        result = run(["events", "--since-seq", "4", "--kinds", "unit.*"])
+        result = run(
+            ["campaign", "events", "--since-seq", "4", "--kinds", "unit.*"]
+        )
 
         assert [e["kind"] for e in result["events"]] == ["unit.passed"]
 
     def test_unknown_kind_is_rejected(self, planned, run):
-        error = run(["events", "--kinds", "unit.exploded"], expect=2)
+        error = run(
+            ["campaign", "events", "--kinds", "unit.exploded"], expect=2
+        )
 
         assert "unit.exploded" in error
 
@@ -489,6 +530,7 @@ class TestEvents:
 
         code = main(
             [
+                "campaign",
                 "events",
                 "--campaign",
                 str(campaign_file),
@@ -522,6 +564,7 @@ class TestExport:
         """A campaign the server ran to completion, with its job files."""
         run(
             [
+                "campaign",
                 "create",
                 "--campaign-id",
                 "1234567",
@@ -552,6 +595,7 @@ class TestExport:
     def export(self, run, repo, *extra):
         return run(
             [
+                "campaign",
                 "export",
                 "--campaign-id",
                 "1234567",
@@ -583,6 +627,7 @@ class TestExport:
 
         error = run(
             [
+                "campaign",
                 "export",
                 "--campaign-id",
                 "1234567",
@@ -598,10 +643,17 @@ class TestExport:
         assert output.read_text() == "keep"
 
     def test_an_unfinished_campaign_is_refused(self, run, repo):
-        run(["create", "--campaign-id", "1234567"])
+        run(["campaign", "create", "--campaign-id", "1234567"])
 
         error = run(
-            ["export", "--campaign-id", "1234567", "--repo-root", str(repo)],
+            [
+                "campaign",
+                "export",
+                "--campaign-id",
+                "1234567",
+                "--repo-root",
+                str(repo),
+            ],
             expect=2,
         )
 
@@ -665,3 +717,117 @@ class TestConfig:
         error = config("set", key, value, expect=2)
 
         assert message in error
+
+
+@pytest.fixture
+def command(repo, capsys):
+    """Run one ``behave-tests`` command on the fixture checkout."""
+
+    def _command(*args, expect=0):
+        code = main([*args, "--repo-root", str(repo)])
+        captured = capsys.readouterr()
+        assert code == expect, captured.err
+        return json.loads(captured.out) if code == 0 else captured.err
+
+    return _command
+
+
+class TestCatalogue:
+    """The same commands as the catalogue tools, through the job service."""
+
+    def test_feature_list(self, command):
+        listed = command("feature", "list")
+
+        assert [f["path"] for f in listed["features"]] == [
+            "features/a.feature",
+            "features/b.feature",
+        ]
+
+    def test_feature_describe(self, command):
+        described = command("feature", "describe", "features/a.feature")
+
+        assert [s["name"] for s in described["scenarios"]] == ["A"]
+
+    def test_scenario_find(self, command):
+        found = command("scenario", "find", "--release", "noble")
+
+        assert [m["scenario"] for m in found["matches"]] == ["A"]
+
+    def test_dimension_list(self, command):
+        dimensions = command("dimension", "list")
+
+        assert [r["name"] for r in dimensions["releases"]] == [
+            "jammy",
+            "noble",
+        ]
+
+
+class TestJobs:
+    def test_a_checkout_with_no_jobs_lists_none(self, command):
+        listed = command("job", "list")
+
+        assert listed["jobs"] == []
+        assert [p["pool"] for p in listed["pools"]] == ["lxd", "cloud", "wsl"]
+
+    def test_results_of_no_jobs_are_empty(self, command):
+        assert command("job", "results")["results"] == []
+
+    def test_an_unknown_job_is_an_error(self, command):
+        error = command("job", "kill", "no-such-job", expect=2)
+
+        assert "Unknown job_id" in error
+
+
+class TestCampaignCommands:
+    """run, pause, retry and list, on a checkout that starts no jobs."""
+
+    @pytest.fixture
+    def created(self, command):
+        command("campaign", "create", "--campaign-id", "1234567")
+        # The lxd pool is disabled after the campaign exists, so a run
+        # queues nothing and no real job starts.
+        command("config", "set", "max_jobs.lxd", "0")
+        return "1234567"
+
+    def test_list_shows_the_checkout_s_campaigns(self, command, created):
+        listed = command("campaign", "list")
+
+        assert [c["campaign_id"] for c in listed["campaigns"]] == [created]
+
+    def test_run_sets_the_intent_and_reports_a_refusal(self, command, created):
+        ran = command("campaign", "run", "--campaign-id", created)
+        events = command(
+            "campaign",
+            "events",
+            "--campaign-id",
+            created,
+            "--kinds",
+            "anomaly.starved",
+        )
+
+        assert ran["intent"] == "run"
+        assert [e["data"]["pool"] for e in events["events"]] == ["lxd"]
+
+    def test_pause_holds_it(self, command, created):
+        command("campaign", "run", "--campaign-id", created)
+
+        paused = command("campaign", "pause", "--campaign-id", created)
+
+        assert (paused["intent"], paused["state"]) == ("hold", "paused")
+
+    def test_retry_with_nothing_to_retry_is_an_error(self, command, created):
+        error = command(
+            "campaign", "retry", "--campaign-id", created, expect=2
+        )
+
+        assert "nothing was re-queued" in error
+
+    def test_a_campaign_named_by_directory_cannot_run(
+        self, capsys, campaign_file, run
+    ):
+        run(["campaign", "create"])
+
+        code = main(["campaign", "run", "--campaign", str(campaign_file)])
+
+        assert code == 2
+        assert "job service" in capsys.readouterr().err

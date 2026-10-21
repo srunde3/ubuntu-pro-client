@@ -170,20 +170,6 @@ class UnitsResponse(BaseModel):
     limit_clamped: bool = False
 
 
-class DimensionValue(BaseModel):
-    """A release or machine_type, with how many scenarios reference it."""
-
-    name: str = ""
-    scenario_count: int = 0
-
-
-class DimensionsResponse(BaseModel):
-    """Releases and machine types the feature files can run."""
-
-    releases: list[DimensionValue] = []
-    machine_types: list[DimensionValue] = []
-
-
 class AttemptView(BaseModel):
     """One try at a unit: one job, from start to finish.
 

@@ -27,21 +27,6 @@ def _feature_details(repo_root: Path) -> list[Any]:
     return details
 
 
-def available_dimensions(repo_root: Path) -> dict[str, Any]:
-    """Return the releases and machine types the feature files can run."""
-    dimensions = parser.aggregate_dimensions(_feature_details(repo_root))
-    return {
-        "releases": [
-            {"name": value.name, "scenario_count": value.scenario_count}
-            for value in dimensions.releases
-        ],
-        "machine_types": [
-            {"name": value.name, "scenario_count": value.scenario_count}
-            for value in dimensions.machine_types
-        ],
-    }
-
-
 def _reject_unknown(
     values: Iterable[str], known: set[str], label: str
 ) -> None:

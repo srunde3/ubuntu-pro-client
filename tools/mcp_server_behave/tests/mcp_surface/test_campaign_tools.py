@@ -364,6 +364,37 @@ async def test_await_events_reports_the_campaign_being_created(repo, jobs):
 
 
 @pytest.mark.asyncio
+async def test_export_campaign_writes_the_bundle(repo, jobs, tmp_path):
+    async with create_connected_server_and_client_session(mcp) as client:
+        await client.call_tool("create_campaign", {"campaign_id": "1234567"})
+        await client.call_tool(
+            "control_campaign", {"campaign_id": "1234567", "action": "run"}
+        )
+        settle(jobs)
+
+        result = await client.call_tool(
+            "export_campaign", {"campaign_id": "1234567"}
+        )
+
+    payload = result_json(result)
+    assert payload["path"] == str(
+        tmp_path / "state" / "exports" / "1234567.tar.gz"
+    )
+    assert payload["counts"]["passed"] == 2
+
+
+@pytest.mark.asyncio
+async def test_an_unfinished_campaign_does_not_export(repo, jobs):
+    async with create_connected_server_and_client_session(mcp) as client:
+        await client.call_tool("create_campaign", {"campaign_id": "1234567"})
+        result = await client.call_tool(
+            "export_campaign", {"campaign_id": "1234567"}
+        )
+
+    assert "only a complete campaign" in result_error_text(result)
+
+
+@pytest.mark.asyncio
 async def test_unit_history_lists_every_attempt(repo, jobs):
     async with create_connected_server_and_client_session(mcp) as client:
         await client.call_tool("create_campaign", {"campaign_id": "1234567"})

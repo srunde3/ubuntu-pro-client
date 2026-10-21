@@ -4,7 +4,7 @@ DEFAULT_RUNNING_TAIL_LINES = 12
 
 
 # 500 lines of a behave log is ~90 KB, about what one tool result may
-# carry; the tail rarely holds the cause anyway (get_scenario_errors does).
+# carry; the tail rarely holds the cause anyway (job_errors does).
 DEFAULT_LOG_LINES = 100
 
 

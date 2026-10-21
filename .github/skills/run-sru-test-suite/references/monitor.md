@@ -13,7 +13,7 @@ Use the `behave` MCP tools; each tool's description says how to call it.
      message.
    - `unit.failed` with an empty message, or `unit.errored`: if you have
      already seen this class of failure, apply the same judgement.
-     Otherwise `get_scenario_errors` for its `job_id` and classify:
+     Otherwise `job_errors` for its `job_id` and classify:
      - **host configuration**: `KeyError: '<name> must be defined in
        pycloudlib.toml ...'`
      - **infrastructure**: `PlatformImageNotFound`,

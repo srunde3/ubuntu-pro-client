@@ -103,7 +103,7 @@ def test_a_campaign_runs_its_jobs_side_by_side(monkeypatch, tmp_path):
         repo_root=repo_root,
         releases=RELEASES,
         machine_types=["lxd-container"],
-        feature_files=[FEATURE],
+        features=[FEATURE],
         scenarios=[SCENARIO],
         max_jobs={Pool.LXD: LANES},
     )
@@ -134,7 +134,7 @@ def test_a_campaign_runs_its_jobs_side_by_side(monkeypatch, tmp_path):
     # The jobs really ran side by side, by their own clocks.
     spans = []
     for status in statuses:
-        artifacts = service.get_artifacts(status.job_id)
+        artifacts = service.job_artifacts(status.job_id)
         assert artifacts.record.campaign_id == CAMPAIGN_ID
         spans.append((artifacts.record.started_at, artifacts.exit.finished_at))
     assert _most_at_once(spans) == LANES, spans
@@ -178,7 +178,7 @@ def test_pause_with_kill_stops_a_real_job_and_run_redoes_it(
         repo_root=repo_root,
         releases=[RELEASES[0]],
         machine_types=["lxd-container"],
-        feature_files=[FEATURE],
+        features=[FEATURE],
         scenarios=[SCENARIO],
         max_jobs={Pool.LXD: 1},
     )
@@ -203,7 +203,7 @@ def test_pause_with_kill_stops_a_real_job_and_run_redoes_it(
         assert unit().attempts[-1].interrupted
         # The job's process group really went away.
         _wait_for(
-            lambda: service.get_artifacts(killed_job).exit is not None,
+            lambda: service.job_artifacts(killed_job).exit is not None,
             CAMPAIGN_TIMEOUT_SECONDS,
             "the killed job to exit",
         )

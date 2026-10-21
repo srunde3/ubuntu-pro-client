@@ -86,8 +86,6 @@ from behave_campaign.messages import (
     CampaignStatusResponse,
     CampaignSummary,
     CreateCampaignResponse,
-    DimensionsResponse,
-    DimensionValue,
     EventView,
     ExportCampaignResponse,
     ListCampaignsResponse,
@@ -176,7 +174,7 @@ class CampaignService:
         repo_root: Path,
         releases: Sequence[str] = (),
         machine_types: Sequence[str] = (),
-        feature_files: Sequence[str] = (),
+        features: Sequence[str] = (),
         scenarios: Sequence[str] = (),
         install_from: str = DEFAULT_INSTALL_FROM,
         max_jobs: Mapping[Pool, int] | None = None,
@@ -191,7 +189,7 @@ class CampaignService:
         validate_install_from(install_from)
 
         scope = Scope(
-            feature=tuple(feature_files),
+            feature=tuple(features),
             scenario=tuple(scenarios),
             release=tuple(releases),
             machine_type=tuple(machine_types),
@@ -629,22 +627,6 @@ class CampaignService:
             timed_out=not events,
         )
 
-    def dimensions(self, *, repo_root: Path) -> DimensionsResponse:
-        """Report the releases and machine types the feature files can run.
-
-        Reads feature files rather than any campaign, so it is what a caller
-        uses to pick a valid scope before creating one.
-        """
-        raw = self._features.available_dimensions(repo_root)
-        return DimensionsResponse(
-            releases=[DimensionValue(**value) for value in raw["releases"]],
-            machine_types=[
-                DimensionValue(**value) for value in raw["machine_types"]
-            ],
-        )
-
-    # -- exporting --------------------------------------------------------
-
     def export_campaign(
         self,
         *,
@@ -655,9 +637,9 @@ class CampaignService:
     ) -> ExportCampaignResponse:
         """Write a complete campaign's evidence bundle to ``output``.
 
-        The bundle holds SUMMARY.md, campaign.json and units.csv for a
+        The bundle holds SUMMARY.md, export.json and units.csv for a
         reviewer, every attempt's job files under ``jobs/``, and the raw
-        campaign record and event log under ``audit/``. Only a complete
+        campaign files under ``audit/``. Only a complete
         campaign exports: evidence is a finished record, never a snapshot.
         """
         records = self._store.read_records(campaign_id)

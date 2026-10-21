@@ -8,11 +8,11 @@ description: Architecture and design rules for tools/mcp_server_behave, the beha
 `tools/mcp_server_behave` is a standalone `uv` project for Python 3.10 and later. The root repository's Python 3.5 rule does not apply here. It ships two packages:
 
 - `behave_mcp` runs single behave jobs, serves the feature catalog, and hosts the MCP server.
-- `behave_campaign` keeps the durable record of a campaign, schedules its jobs, and provides the `behave-campaign` CLI.
+- `behave_campaign` keeps the durable record of a campaign, schedules its jobs, and provides the `behave-tests` CLI.
 
 ## Dependency direction
 
-`behave_campaign` may import `behave_mcp.parser`, `behave_mcp.domain.pools` and `behave_mcp.domain.layout`, and its `cli.py` may also import `behave_mcp.service` and `behave_mcp.adapters`, because every front-end configures the checkout and reconciles its jobs. Nothing in `behave_mcp` imports `behave_campaign`, except the tool handlers in `behave_mcp/server.py`. Keep it that way, so the module graph stays acyclic and `behave_campaign` can be extracted.
+`behave_campaign` may import `behave_mcp.parser`, `behave_mcp.domain.pools` and `behave_mcp.domain.layout`, and its `cli.py` may import any of `behave_mcp`, because it is a front-end for both packages, as `server.py` is. Nothing in `behave_mcp` imports `behave_campaign`, except the tool handlers in `behave_mcp/server.py`. Keep it that way, so the module graph stays acyclic and `behave_campaign` can be extracted.
 
 `uv run lint-imports` enforces these rules and the layer table below, using the contracts under `[tool.importlinter]` in `pyproject.toml`. If a change breaks a contract, first move the code to the layer it belongs in. Change a contract only when the architecture itself changes, in the same commit, with the reason in the commit message.
 
@@ -43,8 +43,8 @@ Small collaborators are passed as plain callables, not ports: the clock (`now_ut
 | A new kind of external interaction | a `Protocol` in `ports.py`, an adapter in `adapters.py`, and a fake for tests |
 | What a tool or command does | the service method |
 | A new MCP tool | a handler in `server.py` registered with the local `@tool`, plus the README and the agent skills |
-| A new CLI command | a handler in `cli.py` over a `CampaignService` method |
-| A new setting for jobs | `domain/config.py`, set with `behave-campaign config`, and the README's configuration section. Never an env var: a job must not depend on who starts it |
+| A new CLI command | a handler in `cli.py` under its noun group (`job`, `campaign`, `feature`, `scenario`, `dimension`, `config`), over the same service method as its MCP tool, with the same name |
+| A new setting for jobs | `domain/config.py`, set with `behave-tests config`, and the README's configuration section. Never an env var: a job must not depend on who starts it |
 | A new server env var | `config.py` (`Settings` and its parser) and the README's environment section |
 | A new path under the state directory | `domain/layout.py`, which names paths and reads no env vars. The caller resolves `MCP_STATE_DIR` and passes it in. |
 
@@ -56,9 +56,9 @@ Everything the server writes lives under its own checkout's `.mcp_server_behave/
 
 | Path | Holds | Written by |
 | --- | --- | --- |
-| `config.json` | the checkout's config (`CheckoutConfig`): max jobs, behave options; owner-only | `behave-campaign config` |
+| `config.json` | the checkout's config (`CheckoutConfig`): max jobs, behave options; owner-only | `behave-tests config` |
 | `reconcile.lock` | held while a process reconciles | whoever reconciles |
-| `jobs/<job_id>/request.json` | what to run (`JobRequest`), written once when queued | `BehaveService.start_scenario` |
+| `jobs/<job_id>/request.json` | what to run (`JobRequest`), written once when queued | `BehaveService.run_job` |
 | `jobs/<job_id>/job.json` | the launch record (`JobRecord`), written once while holding `job.lock` | `BehaveService.reconcile` |
 | `jobs/<job_id>/exit.json` | the exit (`JobExit`), written once by rename | the job process |
 | `jobs/<job_id>/job.lock` | held by the job process while the job lives; holds its PID | the job process |
@@ -68,7 +68,7 @@ Everything the server writes lives under its own checkout's `.mcp_server_behave/
 | `jobs/<job_id>/report.json` | behave's JSON report | the behave subprocess |
 | `campaigns/<id>/campaign.json` | the header and the units in scope, written once | `CampaignService` (create) |
 | `campaigns/<id>/records.jsonl` | every later record, append only; a torn last line is ignored and cut off by the next append | `CampaignService`, under `reconcile.lock` |
-| `exports/<id>.tar.gz` | the evidence bundle | CLI `export` |
+| `exports/<id>.tar.gz` | the evidence bundle | `export_campaign`, `behave-tests campaign export` |
 
 Only a campaign's intent is written, and events are never stored: `domain/feed.py` derives them from the records on every read. Its unit states, progress and named state are rebuilt by replaying its record file through `domain/state.py` (`reduce_units`, `progress`, `state_of`).
 
@@ -83,10 +83,11 @@ Only a campaign's intent is written, and events are never stored: `domain/feed.p
 ## Surface rules
 
 - Shape the service and CLI first: what a response carries, and how many calls a task takes. Tune MCP defaults, limits and schema size separately. Token cost justifies only the tuning.
+- One name per command: the MCP tool, the CLI command and the service method say the same thing (`run_job`, `job run`, `BehaveService.run_job`). Parameters use the glossary's terms: `feature`, `scenario`, `release`, `machine_type`.
 - Reuse the existing taxonomy. A combo is `{release, machine_type}`, and a unit is a scenario on one combo. Do not invent notation such as `release/machine_type` strings.
 - Every list that grows takes a `limit`, and reports `total` and `truncated` (plus `limit_clamped` when the limit was capped).
 - Reject unknown filter values with an error. An empty result would hide the typo.
-- Raise `BehaveServiceError` or `CampaignError` for caller mistakes. FastMCP reports them as `isError`, and the CLI prints them and exits 2. Return an expected outcome that is not an error, such as `capacity_exceeded` or `timeout`, as its own typed response.
+- Raise `BehaveServiceError` or `CampaignError` for caller mistakes. FastMCP reports them as `isError`, and the CLI prints them and exits 2. Return an expected outcome that is not an error, such as a queued job or a wait that ran out (`timed_out`), as its own typed response.
 
 ## Duplication and vocabulary
 

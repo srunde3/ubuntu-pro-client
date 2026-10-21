@@ -9,38 +9,38 @@ The server exposes these MCP tools:
 - `list_features` -- lightweight catalog of feature files.
   - Each entry: `path`, `title`, `scenario_count`, `requires_config`, `releases`, `machine_types`.
   - Optional `release`, `machine_type`, `tag`, `text` filters keep only features with at least one matching scenario.
-- `describe_feature` -- full detail for a single feature (`feature_file` must be a path from `list_features`).
+- `describe_feature` -- full detail for a single feature (`feature` must be a path from `list_features`).
   - Returns its title, tags, required config, and every scenario: name, type, tags, required config, `Examples` column names, and the distinct `(release, machine_type)` combos it supports.
 - `list_dimensions` -- every distinct `release` and `machine_type` (substrate) used across the whole suite, each with a count of scenarios that reference it.
   - Use it to discover valid filter values.
 - `find_scenarios` -- reverse lookup across all features.
   - Optional `release`, `machine_type`, `tag`, and `text` (scenario-name substring) filters.
-  - Returns matching `feature_file`, `scenario_name`, `type`, required config, and the combos satisfying the filters.
+  - Returns matching `feature`, `scenario`, `type`, required config, and the combos satisfying the filters.
   - `limit` caps the matches (default 50), with `total` and `truncated` alongside; `limit_clamped` is set when a value above the server max was capped.
-- `start_scenario` -- queues one unit to run in the background: one scenario on one release and one machine type.
+- `run_job` -- queues one unit to run in the background: one scenario on one release and one machine type.
   - Returns a `job_id` and its `state`: `running` when its pool had a free lane, else `queued` with `queue_position` (1 is next in its pool). A queued job starts by itself when a lane frees; see [How a job runs](#how-a-job-runs).
-  - `feature_file`, `scenario_name`, `release` and `machine_type` are all required. `scenario_name` is a scenario's exact name, as `describe_feature` lists it, and the scenario must cover that release and machine type. The job runs that scenario's rows for that combo and no other scenario.
+  - `feature`, `scenario`, `release` and `machine_type` are all required. `scenario` is a scenario's exact name, as `describe_feature` lists it, and the scenario must cover that release and machine type. The job runs that scenario's rows for that combo and no other scenario.
   - A selection that matches no unit is rejected, and so is one that matches more than one: two scenarios with the same name that both cover the combo, which behave would run together.
   - The job runs in its own session with no stdin, so `kill_job` stops it and everything it started.
   - Optional `install_from` controls where `ubuntu-pro-client` is installed from before the scenario runs (sets `UACLIENT_BEHAVE_INSTALL_FROM` for the behave subprocess). Allowed values: `local` (default), `archive`, `daily`, `staging`, `stable`, `proposed`.
   - The job's record holds `repo`: the checkout's `root`, and its git `commit`, `branch` and `dirty` flag when the job started (the last three `null` when it isn't a git checkout), so results can be correlated back to the exact code tested.
-- `list_scenario_jobs` -- lists queued and running jobs plus a bounded window of recently ended ones (finished or interrupted), and `pools`: each pool's max jobs and busy lanes, which is why a job is queued.
+- `list_jobs` -- lists queued and running jobs plus a bounded window of recently ended ones (finished or interrupted), and `pools`: each pool's max jobs and busy lanes, which is why a job is queued.
   - No known `job_id` or access to system processes required.
   - Reads every job off disk, so a job started by another server, by the CLI, or before a restart is listed and its state is current.
   - Optional `limit` caps how many ended jobs are returned (most recent first). `total_ended` and `truncated` in the response tell you if older jobs were dropped. `limit` must be positive; values above the server max are silently capped, with `limit_clamped` set when that happens.
-- `get_scenario_results` -- what came of each job: what it ran, `state` and `ok`, behave's own counts, and every failing step with its message.
-  - One `JobResult` per job, most recently started first -- the same shape `wait_for_scenario_completion` returns for one job.
-  - Optional `job_ids`, `feature_file`, `scenario_name` (substring), `release`, `machine_type`, and `state` filters; `limit` caps the jobs listed, with `total` and `truncated` alongside. `limit` must be positive; values above the server max are capped, with `limit_clamped` set.
-- `wait_for_scenario_completion` -- waits for a queued or running job to end.
+- `job_results` -- what came of each job: what it ran, `state` and `ok`, behave's own counts, and every failing step with its message.
+  - One `JobResult` per job, most recently started first -- the same shape `wait_for_job` returns for one job.
+  - Optional `job_ids`, `feature`, `scenario` (substring), `release`, `machine_type`, and `state` filters; `limit` caps the jobs listed, with `total` and `truncated` alongside. `limit` must be positive; values above the server max are capped, with `limit_clamped` set.
+- `wait_for_job` -- waits for a queued or running job to end.
   - Returns the job's `JobResult` (plus `returncode` and artifact paths) with `state` `finished` or `interrupted` (with `reason` `killed` or `died`). If the wait runs out first, it returns the job as it stands, `queued` or `running`, with `timed_out: true`.
-- `get_scenario_errors` -- what went wrong in a job, from its log: every traceback, hook error and failed assertion in the order they happened, each with its line range, the failing step above it, and the exception raised.
+- `job_errors` -- what went wrong in a job, from its log: every traceback, hook error and failed assertion in the order they happened, each with its line range, the failing step above it, and the exception raised.
   - The first region is usually the cause and later ones its consequences; `errors` is capped with `errors_total` alongside, long regions and lines are elided.
   - `finished` says whether behave reached its summary; `summary` is that block; `tail` and `log_path` are there when the parser has nothing to say (a tox or pip failure before behave, a killed job).
-- `get_scenario_logs` -- reads part of a job's stdout log, every line prefixed with its number.
+- `job_logs` -- reads part of a job's stdout log, every line prefixed with its number.
   - With `pattern` (a regex): the matching lines from `start` on, each with `context` lines around it, grep-style, until the next window would exceed `lines`. `matches` counts every match whether or not it fit.
   - Without: `lines` lines from `start`, or the last `lines` when `start` is 0.
   - `truncated` says the `lines` budget cut something; `log_path` is the file itself.
-- `get_scenario_artifacts` -- returns a job's file paths, which of them exist, its launch `record` and its `exit` (null until it ends).
+- `job_artifacts` -- returns a job's file paths, which of them exist, its launch `record` and its `exit` (null until it ends).
 
 Release and substrate values are derived by parsing each feature's Gherkin `Examples` tables with the `behave` library, so the catalog always reflects the current feature files (no hardcoded release/substrate lists).
 
@@ -69,7 +69,7 @@ For each job, these files live under `jobs/`:
 - `<job_id>/stdout.log`: combined stdout/stderr stream
 - `<job_id>/report.json`: behave JSON formatter output
 
-The JSON files are written to a temporary file and renamed into place, so a reader never sees half of one. `list_scenario_jobs` lists every directory holding a `request.json`.
+The JSON files are written to a temporary file and renamed into place, so a reader never sees half of one. `list_jobs` lists every directory holding a `request.json`.
 
 It also exposes a health endpoint at `/healthz` for basic checks.
 
@@ -128,12 +128,13 @@ is the only way a non-passing unit is ever re-run. It always sets the
 campaign's intent to run. `kill_job` kills a job that has hung: the job is
 interrupted, and a running campaign queues its unit again.
 
-The package is also usable on its own through the `behave-campaign` CLI,
-which names campaigns the way the server does (`--campaign-id`) and reads
-the same files; it shares this project's `pyproject.toml`, virtualenv, and
-CI job. See
-[behave_campaign/README.md](behave_campaign/README.md) for the record format,
-the CLI, and how MCP job results map onto attempts.
+Everything is also usable without the server through the `behave-tests`
+CLI, whose commands are the tools' own under noun-first names (`job run`
+for `run_job`, `campaign status` for `campaign_status`), reading and
+writing the same files. See the
+[CLI reference](../../dev-docs/reference/behave_tests_cli.md), and
+[behave_campaign/README.md](behave_campaign/README.md) for the record format
+and how job results map onto attempts.
 
 ## Running the server
 
@@ -220,14 +221,14 @@ modules may import which, within and between the two packages.
 ## Configuration
 
 Each checkout has one config, `config.json` in its state directory, set only
-with `behave-campaign config`. Every process that starts jobs reads it, so a
+with `behave-tests config`. Every process that starts jobs reads it, so a
 job runs the same whoever starts it.
 
 ```bash
-behave-campaign config                                   # show it
-behave-campaign config set max_jobs.lxd 3
-echo "$TOKEN" | behave-campaign config set behave.contract_token -
-behave-campaign config unset behave.custom_ppa
+behave-tests config                                   # show it
+behave-tests config set max_jobs.lxd 3
+echo "$TOKEN" | behave-tests config set behave.contract_token -
+behave-tests config unset behave.custom_ppa
 ```
 
 - `max_jobs.<pool>`: how many behave jobs may run at once in that pool.
@@ -283,7 +284,7 @@ Starting the server with a removed variable (`MCP_MAX_LXD_JOBS`,
 what to use instead.
 
 The catalog tools (`list_features`, `describe_feature`, `list_dimensions`,
-`find_scenarios`), `start_scenario` and `create_campaign` accept a `repo_root`
+`find_scenarios`), `run_job` and `create_campaign` accept a `repo_root`
 parameter:
 
 - `repo_root`: the checkout to read feature files from and run behave in. If a call omits it, the server falls back to `UBUNTU_PRO_CLIENT_REPO`, then to the checkout it runs from. It never moves where the server writes.
@@ -293,14 +294,14 @@ and campaign lives in the server's state directory.
 
 ## Safety constraints
 
-- `feature_file` must be one of the paths returned by `list_features`.
-- A job is exactly one unit: `scenario_name`, `release` and `machine_type` are required.
-- Cloud machine types are blocked by default and require `behave-campaign config set max_jobs.cloud N`.
+- `feature` must be one of the paths returned by `list_features`.
+- A job is exactly one unit: `scenario`, `release` and `machine_type` are required.
+- Cloud machine types are blocked by default and require `behave-tests config set max_jobs.cloud N`.
 - Concurrent jobs are capped per pool: one LXD job and one WSL job by default.
 
 ## How a job runs
 
-A job is queued first: `start_scenario` writes its `request.json` and then
+A job is queued first: `run_job` writes its `request.json` and then
 reconciles. **Reconcile** is one short step, run under `reconcile.lock` by
 whichever process calls it: it reads the config and every job's files, and
 starts the oldest queued jobs in each pool on that pool's free lanes. Pools
@@ -309,7 +310,7 @@ are independent, so a full LXD pool never holds back a WSL job.
 Nothing long-lived drives the queue. Reconcile runs:
 
 - after every MCP tool call, and every 5 seconds in the server;
-- after every `behave-campaign` command;
+- after every `behave-tests` command;
 - in a job's own process, after it records its exit and lets go of its lane,
   so the next queued job takes that lane at once.
 

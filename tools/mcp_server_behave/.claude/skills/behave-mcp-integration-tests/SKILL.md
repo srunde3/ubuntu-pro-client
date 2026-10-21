@@ -1,6 +1,6 @@
 ---
 name: behave-mcp-integration-tests
-description: What integration tests in tools/mcp_server_behave test, with good and bad examples. Covers MCP tools over the real protocol, server wiring and startup, the behave-campaign CLI, and the parser on the real features/ corpus. Use when writing or reviewing tests for an MCP tool, a CLI command, server.py wiring, startup config, or parsing of real feature files.
+description: What integration tests in tools/mcp_server_behave test, with good and bad examples. Covers MCP tools over the real protocol, server wiring and startup, the behave-tests CLI, and the parser on the real features/ corpus. Use when writing or reviewing tests for an MCP tool, a CLI command, server.py wiring, startup config, or parsing of real feature files.
 ---
 
 # behave MCP integration tests
