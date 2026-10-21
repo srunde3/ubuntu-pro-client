@@ -7,12 +7,7 @@ values raise ``ConfigError`` loudly rather than degrading at request time.
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-from behave_mcp.domain.pools import (
-    DEFAULT_POOL_LIMITS,
-    POOL_LIMIT_CAPS,
-    POOL_LIMIT_ENV_VARS,
-    Pool,
-)
+from behave_mcp.domain.config import BEHAVE_ENV_PREFIX
 
 HOST_ENV_VAR = "MCP_HOST"
 PORT_ENV_VAR = "MCP_PORT"
@@ -21,10 +16,13 @@ _DEFAULT_PORT = 8000
 
 # What to do instead, for each variable the server no longer reads.
 REMOVED_ENV_VARS: dict[str, str] = {
-    "MCP_MAX_PARALLEL_JOBS": (
-        "use MCP_MAX_LXD_JOBS, MCP_MAX_CLOUD_JOBS and MCP_MAX_WSL_JOBS"
+    "MCP_MAX_PARALLEL_JOBS": "use behave-campaign config set max_jobs.lxd N",
+    "MCP_MAX_LXD_JOBS": "use behave-campaign config set max_jobs.lxd N",
+    "MCP_MAX_CLOUD_JOBS": "use behave-campaign config set max_jobs.cloud N",
+    "MCP_MAX_WSL_JOBS": "use behave-campaign config set max_jobs.wsl N",
+    "MCP_ALLOW_CLOUD_MACHINE_TYPES": (
+        "use behave-campaign config set max_jobs.cloud N"
     ),
-    "MCP_ALLOW_CLOUD_MACHINE_TYPES": "use MCP_MAX_CLOUD_JOBS",
     "MCP_TRANSPORT": (
         "the server always serves streamable HTTP on MCP_HOST and MCP_PORT"
     ),
@@ -51,7 +49,6 @@ class ConfigError(Exception):
 class Settings:
     """Validated server settings parsed once at startup."""
 
-    pool_limits: Mapping[Pool, int]
     campaign_poll_timeout: int
     host: str
     port: int
@@ -64,7 +61,6 @@ def load_settings(environ: Mapping[str, str]) -> Settings:
     """
     _reject_removed(environ)
     return Settings(
-        pool_limits={pool: _parse_pool_limit(environ, pool) for pool in Pool},
         campaign_poll_timeout=_parse_campaign_poll_timeout(environ),
         host=environ.get(HOST_ENV_VAR, "").strip() or _DEFAULT_HOST,
         port=_parse_port(environ),
@@ -77,27 +73,15 @@ def _reject_removed(environ: Mapping[str, str]) -> None:
             raise ConfigError(f"{name} is no longer read: {instead}")
 
 
-def _parse_pool_limit(environ: Mapping[str, str], pool: Pool) -> int:
-    name = POOL_LIMIT_ENV_VARS[pool]
-    raw = environ.get(name, "").strip()
-    if not raw:
-        return DEFAULT_POOL_LIMITS[pool]
+def ignored_behave_settings(environ: Mapping[str, str]) -> list[str]:
+    """The behave settings in ``environ``, which no job will see.
 
-    cap = POOL_LIMIT_CAPS.get(pool)
-    expected = (
-        f"an integer between 0 and {cap}"
-        if cap is not None
-        else "a non-negative integer"
+    A job gets behave settings only from the service's config, so it is the
+    same whoever starts it.
+    """
+    return sorted(
+        name for name in environ if name.startswith(BEHAVE_ENV_PREFIX)
     )
-    try:
-        value = int(raw)
-    except ValueError:
-        raise ConfigError(f"{name} must be {expected}, got {raw!r}")
-
-    if value < 0 or (cap is not None and value > cap):
-        raise ConfigError(f"{name} must be {expected}, got {raw!r}")
-
-    return value
 
 
 def _parse_campaign_poll_timeout(environ: Mapping[str, str]) -> int:

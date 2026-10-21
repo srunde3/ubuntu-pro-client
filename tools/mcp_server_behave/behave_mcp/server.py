@@ -3,8 +3,6 @@ import os
 import sys
 import threading
 import time
-import uuid
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated, Any, Callable
 
@@ -40,15 +38,12 @@ from behave_campaign.messages import (
 from behave_campaign.repo import repo_state as read_repo_state
 from behave_campaign.runner import CampaignRunner
 from behave_campaign.service import CampaignService
-from behave_mcp.adapters import (
-    FileLanePool,
-    JobProcessLauncher,
-    LocalFeatureFileReader,
-    LocalJobResultStoreFactory,
-    LocalWorkspace,
+from behave_mcp.adapters import LocalWorkspace
+from behave_mcp.config import (
+    ConfigError,
+    ignored_behave_settings,
+    load_settings,
 )
-from behave_mcp.config import ConfigError, Settings, load_settings
-from behave_mcp.domain import layout
 from behave_mcp.domain.jobs import InstallFrom
 from behave_mcp.domain.limits import (
     DEFAULT_FIND_LIMIT,
@@ -65,16 +60,16 @@ from behave_mcp.messages import (
     DescribeFeatureResponse,
     ErrorsResponse,
     FindScenariosResponse,
+    JobStatusResult,
     KillJobResponse,
     ListDimensionsResponse,
     ListFeaturesResponse,
     ListScenarioJobsResponse,
     LogsResponse,
     ResultsResponse,
-    StartScenarioResult,
-    WaitForCompletionResult,
+    StartScenarioResponse,
 )
-from behave_mcp.service import BehaveService
+from behave_mcp.wiring import create_service, reconcile_quietly
 
 try:
     _settings = load_settings(os.environ)
@@ -103,14 +98,20 @@ def tool(**kwargs: Any) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     plus structuredContent -- and publish an outputSchema per tool that
     clients do not use. The compact form is a quarter smaller than the
     pretty one.
+
+    Every call ends with a reconcile, whatever the tool, so queued jobs
+    start as soon as anyone is talking to the server.
     """
 
     def register(fn: Callable[..., Any]) -> Callable[..., Any]:
         @functools.wraps(fn)
         def as_text(*args: Any, **kw: Any) -> TextContent:
-            return TextContent(
-                type="text", text=fn(*args, **kw).model_dump_json()
-            )
+            try:
+                return TextContent(
+                    type="text", text=fn(*args, **kw).model_dump_json()
+                )
+            finally:
+                reconcile_quietly(_service)
 
         return mcp.tool(structured_output=False, **kwargs)(as_text)
 
@@ -199,34 +200,11 @@ CampaignIdArg = Annotated[
 ]
 
 
-def _utc_timestamp() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+# How often the server reconciles on its own, in case nothing else does.
+RECONCILE_INTERVAL_SECONDS = 5.0
 
 
-def create_service(settings: Settings) -> BehaveService:
-    """Wire the production adapters into a ``BehaveService``.
-
-    The lanes and jobs live in the server's state directory, resolved per
-    call: nothing about a job is held in this process.
-    """
-    workspace = LocalWorkspace()
-    return BehaveService(
-        workspace=workspace,
-        settings=settings,
-        feature_reader=LocalFeatureFileReader(),
-        results=LocalJobResultStoreFactory(),
-        lanes=FileLanePool(
-            lambda: layout.lanes_dir(workspace.resolve_state_dir())
-        ),
-        launcher=JobProcessLauncher(workspace.resolve_jobs_dir),
-        monotonic=time.monotonic,
-        sleep=time.sleep,
-        now_utc=_utc_timestamp,
-        new_job_id=lambda: uuid.uuid4().hex[:8],
-    )
-
-
-_service = create_service(_settings)
+_service = create_service()
 _workspace = LocalWorkspace()
 # The runner holds the run lock and the ticker for the active campaign, so
 # unlike the per-call service there is exactly one for the server's lifetime.
@@ -283,7 +261,7 @@ def campaign_service() -> CampaignService:
         features=ParserFeatureReader(),
         now=system_now,
         repo_state=read_repo_state,
-        lane_ceiling=_settings.pool_limits,
+        lane_ceiling=_service.read_config().max_jobs,
     )
 
 
@@ -387,18 +365,20 @@ def find_scenarios(
 
 @tool(
     description=(
-        "Start one unit -- one scenario on one release and one machine "
-        "type -- through tox in the background, and return a job_id "
+        "Queue one unit -- one scenario on one release and one machine "
+        "type -- to run through tox in the background, and return a job_id "
         "immediately. feature_file must be a path returned by "
         "list_features, and scenario_name a scenario's exact name from "
         "describe_feature that covers release and machine_type. A "
         "selection that matches no unit, or more than one, is refused. The "
-        "machine type draws on the lxd, cloud or wsl pool, and a pool "
-        "whose MCP_MAX_*_JOBS limit is 0 is disabled (cloud is by "
+        "machine type draws on the lxd, cloud or wsl pool: state is "
+        "running when the pool had a free lane, else queued with "
+        "queue_position (1 is next); a queued job starts by itself when a "
+        "lane frees. A pool whose max jobs is 0 is disabled (cloud is by "
         "default). install_from controls where ubuntu-pro-client is "
         "installed from (defaults to 'local'; set to 'proposed' to test "
         "the -proposed pocket). Call wait_for_scenario_completion to wait "
-        "for completion."
+        "for it."
     )
 )
 def start_scenario(
@@ -424,7 +404,7 @@ def start_scenario(
     ],
     repo_root: RepoRoot = "",
     install_from: InstallFromArg = InstallFrom.LOCAL,
-) -> StartScenarioResult:
+) -> StartScenarioResponse:
     return _service.start_scenario(
         feature_file,
         scenario_name,
@@ -437,12 +417,14 @@ def start_scenario(
 
 @tool(
     description=(
-        "List behave jobs. Returns every currently active job plus a "
+        "List behave jobs. Returns every queued and running job plus a "
         "bounded window of recently ended ones (finished or interrupted; "
         "most recent first, capped at limit), read off disk, so jobs "
         "started by another process or before a restart are listed too. "
         "total_ended is the full ended-job count regardless of limit, and "
-        "truncated is set when older ended jobs were dropped to fit. "
+        "truncated is set when older ended jobs were dropped to fit. pools "
+        "gives each pool's max jobs and busy lanes, so a queued job's wait "
+        "is explained. "
         "limit must be positive (rejected otherwise); values above the "
         "server max are silently capped, with limit_clamped set to true "
         "when that happens."
@@ -465,12 +447,13 @@ def list_scenario_jobs(
 
 @tool(
     description=(
-        "What came of each behave job: what it ran, its status and ok, "
+        "What came of each behave job: what it ran, its state and ok, "
         "behave's own counts, and every failing step with its message. "
         "One result per job, most recently started first, the same shape "
         "wait_for_scenario_completion returns for one job. Filter by "
         "job_ids, feature_file, scenario_name (substring), release, "
-        "machine_type and status (running, finished, interrupted); limit "
+        "machine_type and state (queued, running, finished, interrupted); "
+        "limit "
         "caps the jobs listed, with total and truncated alongside. For "
         "the cause behind an empty error_message, get_scenario_errors."
     )
@@ -493,12 +476,12 @@ def get_scenario_results(
     ] = "",
     release: ReleaseFilter = "",
     machine_type: MachineTypeFilter = "",
-    status: Annotated[
+    state: Annotated[
         str,
         Field(
             default="",
-            description="Only jobs with this status: running, finished "
-            "or interrupted.",
+            description="Only jobs in this state: queued, running, "
+            "finished or interrupted.",
         ),
     ] = "",
     limit: Annotated[
@@ -517,34 +500,32 @@ def get_scenario_results(
         scenario_name=scenario_name,
         release=release,
         machine_type=machine_type,
-        status=status,
+        state=state,
         limit=limit,
     )
 
 
 @tool(
     description=(
-        "Wait for a running behave job to end by polling internally. "
-        "job_id must come from start_scenario or list_scenario_jobs. "
-        "Returns a compact structured summary when it finishes; status "
-        "interrupted with recent output when it ended without a result, "
-        "with reason killed or died (its process died: a crash or a "
-        "reboot); or a timeout payload with recent output if the wait "
-        "limit is reached."
+        "Wait for a queued or running behave job to end by polling "
+        "internally. job_id must come from start_scenario or "
+        "list_scenario_jobs. Returns state finished with a compact "
+        "structured summary; state interrupted with recent output when it "
+        "ended without a result, with reason killed or died (its process "
+        "died: a crash or a reboot); or, if the wait runs out first, the "
+        "job as it stands (queued or running) with timed_out true."
     )
 )
 def wait_for_scenario_completion(
     job_id: JobId,
     max_wait_seconds: Annotated[
         int,
-        Field(
-            description="How long to poll before returning a timeout payload."
-        ),
+        Field(description="How long to poll before returning with timed_out."),
     ] = DEFAULT_WAIT_TIMEOUT_SECONDS,
     poll_interval_seconds: Annotated[
         float, Field(description="Delay between internal status checks.")
     ] = DEFAULT_WAIT_POLL_INTERVAL_SECONDS,
-) -> WaitForCompletionResult:
+) -> JobStatusResult:
     return _service.wait_for_completion(
         job_id,
         max_wait_seconds,
@@ -1013,8 +994,9 @@ def retry_units(
 
 @tool(
     description=(
-        "Kill a running behave job, whichever process started it. Use it "
-        "for a job that has hung: tox is stopped and allowed to clean up, "
+        "Kill a queued or running behave job, whichever process started "
+        "it. A queued job never starts. Use it for a running job that has "
+        "hung: tox is stopped and allowed to clean up, "
         "and the job ends interrupted with reason killed, never as a "
         "failure; a campaign's next tick records its attempt as "
         "interrupted, rather than holding the lane open. killed is false "
@@ -1025,5 +1007,22 @@ def kill_job(job_id: JobId) -> KillJobResponse:
     return _service.kill_job(job_id)
 
 
+def _reconcile_forever() -> None:
+    while True:
+        time.sleep(RECONCILE_INTERVAL_SECONDS)
+        reconcile_quietly(_service)
+
+
 def main() -> None:
+    ignored = ignored_behave_settings(os.environ)
+    if ignored:
+        print(
+            "mcp-server-behave: ignoring {}: jobs take behave settings only "
+            "from the checkout's config. Set each with behave-campaign "
+            "config set behave.<option> VALUE.".format(", ".join(ignored)),
+            file=sys.stderr,
+        )
+    threading.Thread(
+        target=_reconcile_forever, name="reconcile", daemon=True
+    ).start()
     mcp.run(transport="streamable-http")

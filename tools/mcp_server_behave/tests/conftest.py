@@ -2,14 +2,29 @@
 """
 
 import json
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
 
 import behave_mcp.server as server_module
 from behave_campaign.ports import CampaignLockedError, LaneStartError
-from behave_mcp.adapters import LocalJobResultStore
+from behave_mcp.adapters import (
+    LocalFeatureFileReader,
+    LocalJobResultStore,
+    LocalJobResultStoreFactory,
+)
+from behave_mcp.domain.config import CheckoutConfig
+from behave_mcp.domain.pools import DEFAULT_MAX_JOBS
 from behave_mcp.messages import JobExit, RepoState
+from behave_mcp.service import BehaveService
+
+
+@pytest.fixture(autouse=True)
+def private_state_dir(monkeypatch, tmp_path):
+    """Every front-end reconciles; none may touch a real checkout's state.
+    A test that needs its own state directory sets this again."""
+    monkeypatch.setenv("MCP_STATE_DIR", str(tmp_path / "state"))
 
 
 @pytest.fixture(autouse=True)
@@ -97,14 +112,14 @@ class FakeLanePool:
     def __init__(self):
         self.held = {}
 
-    def take(self, pool, limit):
-        if self.held.get(pool, 0) >= limit:
+    def take(self, pool, max_jobs):
+        if self.held.get(pool, 0) >= max_jobs:
             return None
         self.held[pool] = self.held.get(pool, 0) + 1
         return FakeLease(pool, self)
 
-    def busy(self, pool, limit):
-        return min(self.held.get(pool, 0), limit)
+    def busy(self, pool):
+        return self.held.get(pool, 0)
 
 
 class FakeJobLauncher:
@@ -132,10 +147,12 @@ class FakeJobLauncher:
         self._unkillable = set(unkillable)
         self._finish_on_launch = finish_on_launch
 
-    def launch(self, job_id, command, cwd, env, lease):
+    def launch(self, job_id, command, cwd, env, lease, record):
         self.calls.append(
             {"job_id": job_id, "command": command, "cwd": cwd, "env": env}
         )
+        # The real launcher holds the job's lock by now.
+        record()
         lease.close()
         if self._error is not None:
             lease.release()
@@ -180,6 +197,55 @@ class FakeJobLauncher:
         lease = self._leases.pop(job_id, None)
         if lease is not None:
             lease.release()
+
+
+class FakeConfigStore:
+    """A ``ConfigStore`` in memory; ``error`` makes every read fail."""
+
+    def __init__(self, max_jobs=None, behave=None, *, error=None):
+        self.config = CheckoutConfig(
+            max_jobs={**DEFAULT_MAX_JOBS, **(max_jobs or {})},
+            behave=dict(behave or {}),
+        )
+        self._error = error
+
+    def read(self):
+        if self._error is not None:
+            raise ValueError(self._error)
+        return self.config
+
+    def write(self, config):
+        self.config = config
+
+
+class FakeReconcileLock:
+    """A ``ReconcileLock`` that counts how often it was held."""
+
+    def __init__(self):
+        self.held = 0
+
+    @contextmanager
+    def hold(self):
+        self.held += 1
+        yield
+
+
+def make_service(workspace, **ports) -> BehaveService:
+    """A ``BehaveService`` over fakes; any port or callable can be given."""
+    defaults = dict(
+        config=FakeConfigStore(),
+        feature_reader=LocalFeatureFileReader(),
+        results=LocalJobResultStoreFactory(),
+        lanes=FakeLanePool(),
+        launcher=FakeJobLauncher(),
+        reconcile_lock=FakeReconcileLock(),
+        monotonic=lambda: 0.0,
+        sleep=lambda seconds: None,
+        now_utc=lambda: "T0",
+        new_job_id=lambda: "job0001",
+    )
+    defaults.update(ports)
+    return BehaveService(workspace=workspace, **defaults)
 
 
 class FakeWorkspace:
@@ -253,7 +319,7 @@ def result_error_text(result):
 def job_result(passed=1, failed=0, job_id="job", failures=()):
     """A finished job as ``LaneRunner.poll`` reports it."""
     return {
-        "status": "finished",
+        "state": "finished",
         "ok": failed == 0,
         "job_id": job_id,
         "summary": {
@@ -324,7 +390,7 @@ class FakeLanes:
         if job_id in self.results or job_id in self.unkillable:
             return False
         self.results[job_id] = {
-            "status": "interrupted",
+            "state": "interrupted",
             "reason": "killed",
             "ok": False,
             "job_id": job_id,

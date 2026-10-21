@@ -3,12 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from behave_mcp.adapters import (
-    LocalFeatureFileReader,
-    LocalJobResultStore,
-    LocalJobResultStoreFactory,
-)
-from behave_mcp.config import Settings
+from behave_mcp.adapters import LocalJobResultStore, LocalJobResultStoreFactory
 from behave_mcp.domain.limits import (
     DEFAULT_JOB_LIST_LIMIT,
     MAX_JOB_LIST_LIMIT,
@@ -16,7 +11,7 @@ from behave_mcp.domain.limits import (
     MAX_RESULTS_LIMIT,
 )
 from behave_mcp.domain.pools import Pool
-from behave_mcp.messages import JobRecord, JobState, RepoState
+from behave_mcp.messages import JobRecord, JobRequest, JobState, RepoState
 from behave_mcp.ports import JobStartError
 from behave_mcp.service import (
     BehaveService,
@@ -26,21 +21,20 @@ from behave_mcp.service import (
 from tests.conftest import (
     UNIT_FEATURE,
     UNIT_SCENARIO,
+    FakeConfigStore,
     FakeJobLauncher,
     FakeLanePool,
     FakeWorkspace,
     job_file,
     make_repo_with_feature,
+    make_service,
 )
 
 
-def _settings(*, lxd=1, cloud=0, wsl=1) -> Settings:
-    return Settings(
-        pool_limits={Pool.LXD: lxd, Pool.CLOUD: cloud, Pool.WSL: wsl},
-        campaign_poll_timeout=60,
-        host="127.0.0.1",
-        port=8000,
-    )
+def _make_service(workspace, *, max_jobs=None, **ports) -> BehaveService:
+    if max_jobs is not None:
+        ports.setdefault("config", FakeConfigStore(max_jobs))
+    return make_service(workspace, **ports)
 
 
 def start(service, machine_type):
@@ -51,33 +45,6 @@ def start(service, machine_type):
         release="jammy",
         machine_type=machine_type,
     ).model_dump(mode="json")
-
-
-def _make_service(
-    workspace,
-    *,
-    settings=None,
-    launcher=None,
-    lanes=None,
-    monotonic=None,
-    sleep=None,
-    now_utc=None,
-    new_job_id=None,
-) -> BehaveService:
-    return BehaveService(
-        workspace=workspace,
-        settings=settings if settings is not None else _settings(),
-        feature_reader=LocalFeatureFileReader(),
-        results=LocalJobResultStoreFactory(),
-        lanes=lanes if lanes is not None else FakeLanePool(),
-        launcher=launcher if launcher is not None else FakeJobLauncher(),
-        monotonic=monotonic if monotonic is not None else (lambda: 0.0),
-        sleep=sleep if sleep is not None else (lambda seconds: None),
-        now_utc=now_utc if now_utc is not None else (lambda: "T0"),
-        new_job_id=(
-            new_job_id if new_job_id is not None else (lambda: "job0001")
-        ),
-    )
 
 
 def test_list_features_returns_feature_files(tmp_path):
@@ -296,7 +263,7 @@ def test_start_scenario_accepts_normalized_listed_feature(tmp_path):
         machine_type="lxd-container",
     ).model_dump(mode="json")
 
-    assert result["ok"] is True
+    assert result["state"] == "running"
     assert "artifacts" in result
     assert result["artifacts"]["record"].endswith("/job.json")
 
@@ -374,7 +341,7 @@ def test_start_scenario_builds_command(tmp_path):
         FakeWorkspace(
             repo_root=repo_root,
             jobs_dir=tmp_path,
-            env={"UACLIENT_BEHAVE_CONTRACT_TOKEN": "token"},
+            env={"PATH": "/bin"},
         ),
         launcher=launcher,
     )
@@ -386,7 +353,7 @@ def test_start_scenario_builds_command(tmp_path):
         machine_type="lxd-container",
     ).model_dump(mode="json")
 
-    assert result["ok"] is True
+    assert result["state"] == "running"
     assert "job_id" in result
     call = launcher.calls[0]
     assert call["command"][:5] == [
@@ -403,7 +370,7 @@ def test_start_scenario_builds_command(tmp_path):
         "features.behave_combo_formatter:ComboFormatter" not in call["command"]
     )
     assert call["cwd"] == str(repo_root)
-    assert call["env"]["UACLIENT_BEHAVE_CONTRACT_TOKEN"] == "token"
+    assert call["env"]["PATH"] == "/bin"
 
 
 def test_start_scenario_defaults_install_from_to_local(tmp_path):
@@ -461,7 +428,7 @@ def test_start_scenario_rejects_invalid_install_from(tmp_path):
         )
 
 
-def test_start_scenario_includes_the_repo_in_response_and_record(tmp_path):
+def test_a_job_records_the_repo_it_ran_in(tmp_path):
     repo_root = make_repo_with_feature(tmp_path, "features/cli/attach.feature")
     launcher = FakeJobLauncher()
     service = _make_service(
@@ -481,13 +448,6 @@ def test_start_scenario_includes_the_repo_in_response_and_record(tmp_path):
         release="jammy",
         machine_type="lxd-container",
     ).model_dump(mode="json")
-
-    assert result["repo"] == {
-        "root": str(repo_root),
-        "commit": "deadbeef",
-        "branch": "main",
-        "dirty": False,
-    }
 
     store = LocalJobResultStoreFactory().bind(tmp_path)
     record = store.read_record(result["job_id"])
@@ -517,7 +477,7 @@ def test_a_repo_root_override_runs_there_but_files_stay_with_the_server(
         repo_root=str(other_checkout),
     ).model_dump(mode="json")
 
-    assert result["ok"] is True
+    assert result["state"] == "running"
     assert launcher.calls[0]["cwd"] == str(other_checkout)
     assert (server_jobs / result["job_id"] / "job.json").is_file()
     record = json.loads(
@@ -589,7 +549,7 @@ def test_start_scenario_rejects_cloud_machine_type_by_default(
 
     with pytest.raises(
         BehaveServiceError,
-        match="cloud machine types are disabled.*MCP_MAX_CLOUD_JOBS",
+        match="cloud machine types are disabled.*max_jobs.cloud",
     ):
         service.start_scenario(
             "features/cli/attach.feature",
@@ -599,99 +559,83 @@ def test_start_scenario_rejects_cloud_machine_type_by_default(
         )
 
 
-def test_start_scenario_rejects_a_disabled_wsl_pool(tmp_path):
+def test_start_scenario_rejects_a_disabled_pool_naming_the_setting(tmp_path):
     repo_root = make_repo_with_feature(tmp_path, "features/cli/attach.feature")
     service = _make_service(
         FakeWorkspace(repo_root=repo_root, jobs_dir=tmp_path),
-        settings=_settings(wsl=0),
+        max_jobs={Pool.WSL: 0},
     )
 
-    with pytest.raises(BehaveServiceError, match="MCP_MAX_WSL_JOBS"):
-        service.start_scenario(
-            "features/cli/attach.feature",
-            scenario_name=UNIT_SCENARIO,
-            release="jammy",
-            machine_type="wsl",
-        )
+    with pytest.raises(BehaveServiceError, match="max_jobs.wsl"):
+        start(service, "wsl")
 
 
-def test_start_scenario_allows_cloud_machine_type_with_a_limit(tmp_path):
+def test_a_job_with_a_free_lane_starts_at_once(tmp_path):
     repo_root = make_repo_with_feature(tmp_path, "features/cli/attach.feature")
     service = _make_service(
         FakeWorkspace(repo_root=repo_root, jobs_dir=tmp_path),
-        settings=_settings(cloud=1),
+        max_jobs={Pool.CLOUD: 1},
     )
 
-    result = service.start_scenario(
-        "features/cli/attach.feature",
-        scenario_name=UNIT_SCENARIO,
-        release="jammy",
-        machine_type="azure.generic",
-    ).model_dump(mode="json")
+    result = start(service, "azure.generic")
 
-    assert result["ok"] is True
+    assert (result["state"], result["queue_position"]) == ("running", None)
 
 
-def test_start_scenario_fails_fast_when_capacity_reached(tmp_path):
+def queue_service(tmp_path, launcher, ids, **max_jobs):
+    """A service whose jobs get ``ids`` in turn, with ``max_jobs`` per
+    pool."""
     repo_root = make_repo_with_feature(tmp_path, "features/cli/attach.feature")
-    ids = iter(["job1", "job2"])
-    service = _make_service(
+    issued = iter(ids)
+    return _make_service(
         FakeWorkspace(repo_root=repo_root, jobs_dir=tmp_path),
-        settings=_settings(lxd=1),
-        new_job_id=lambda: next(ids),
+        max_jobs={Pool(pool): count for pool, count in max_jobs.items()},
+        launcher=launcher,
+        new_job_id=lambda: next(issued),
     )
-    first = start(service, "lxd-container")
+
+
+def test_a_job_with_no_free_lane_is_queued(tmp_path):
+    service = queue_service(tmp_path, FakeJobLauncher(tmp_path), ["j1", "j2"])
+    start(service, "lxd-container")
 
     second = start(service, "lxd-container")
 
-    assert first["ok"] is True
-    assert second["status"] == "capacity_exceeded"
-    assert second["full_pools"] == [{"pool": "lxd", "limit": 1, "running": 1}]
-    assert "MCP_MAX_LXD_JOBS" in second["error"]
+    assert (second["state"], second["queue_position"]) == ("queued", 1)
 
 
 def test_a_full_pool_leaves_other_pools_free(tmp_path):
-    repo_root = make_repo_with_feature(tmp_path, "features/cli/attach.feature")
-    ids = iter(["job1", "job2", "job3"])
-    service = _make_service(
-        FakeWorkspace(repo_root=repo_root, jobs_dir=tmp_path),
-        settings=_settings(lxd=2, wsl=1),
-        new_job_id=lambda: next(ids),
+    service = queue_service(
+        tmp_path, FakeJobLauncher(tmp_path), ["w1", "w2", "l1"], lxd=2, wsl=1
     )
     start(service, "wsl")
 
     second_wsl = start(service, "wsl")
     lxd = start(service, "lxd-container")
 
-    assert second_wsl["full_pools"] == [
-        {"pool": "wsl", "limit": 1, "running": 1}
-    ]
-    assert lxd["ok"] is True
+    assert second_wsl["state"] == "queued"
+    assert lxd["state"] == "running"
 
 
-def test_a_finished_job_frees_its_lane(tmp_path):
-    repo_root = make_repo_with_feature(tmp_path, "features/cli/attach.feature")
-    ids = iter(["job1", "job2"])
+def test_a_freed_lane_goes_to_the_oldest_queued_job(tmp_path):
     launcher = FakeJobLauncher(tmp_path)
-    service = _make_service(
-        FakeWorkspace(repo_root=repo_root, jobs_dir=tmp_path),
-        settings=_settings(lxd=1),
-        launcher=launcher,
-        new_job_id=lambda: next(ids),
-    )
+    clock = iter(["T1", "T2", "T3", "T4", "T5", "T6"])
+    service = queue_service(tmp_path, launcher, ["j1", "j2", "j3"])
+    service._now_utc = lambda: next(clock)
     start(service, "lxd-container")
-    launcher.finish("job1")
+    start(service, "lxd-container")
+    start(service, "lxd-container")
 
-    second = start(service, "lxd-container")
+    launcher.finish("j1")
+    service.reconcile()
 
-    assert second["ok"] is True
+    assert [call["job_id"] for call in launcher.calls] == ["j1", "j2"]
+    assert service.job_status("j3").queue_position == 1
 
 
-def test_a_launch_that_fails_frees_its_lane_and_reads_as_interrupted(
-    tmp_path,
-):
-    repo_root = make_repo_with_feature(tmp_path, "features/cli/attach.feature")
+def test_a_launch_that_fails_ends_the_job_with_the_reason(tmp_path):
     lanes = FakeLanePool()
+    repo_root = make_repo_with_feature(tmp_path, "features/cli/attach.feature")
     service = _make_service(
         FakeWorkspace(repo_root=repo_root, jobs_dir=tmp_path),
         lanes=lanes,
@@ -699,11 +643,95 @@ def test_a_launch_that_fails_frees_its_lane_and_reads_as_interrupted(
         new_job_id=lambda: JOB_ID,
     )
 
-    with pytest.raises(BehaveServiceError, match="Failed to start behave"):
-        start(service, "lxd-container")
+    result = start(service, "lxd-container")
 
-    assert lanes.busy(Pool.LXD, 1) == 0
-    assert service.job_status(JOB_ID).status == "interrupted"
+    assert result["state"] == "finished"
+    status = service.job_status(JOB_ID)
+    assert (status.ok, status.error) == (False, "Could not start: boom")
+    assert lanes.busy(Pool.LXD) == 0
+
+
+def test_a_queued_job_can_be_killed_and_never_starts(tmp_path):
+    launcher = FakeJobLauncher(tmp_path)
+    service = queue_service(tmp_path, launcher, ["j1", "j2"])
+    start(service, "lxd-container")
+    start(service, "lxd-container")
+
+    killed = service.kill_job("j2")
+    launcher.finish("j1")
+    service.reconcile()
+
+    assert killed.killed is True
+    status = service.job_status("j2")
+    assert (status.state, status.reason) == ("interrupted", "killed")
+    assert [call["job_id"] for call in launcher.calls] == ["j1"]
+
+
+def test_a_wait_that_runs_out_returns_the_queued_job(tmp_path):
+    service = queue_service(tmp_path, FakeJobLauncher(tmp_path), ["j1", "j2"])
+    clock = iter([0.0, 10.0])
+    service._monotonic = lambda: next(clock)
+    start(service, "lxd-container")
+    start(service, "lxd-container")
+
+    result = service.wait_for_completion(
+        "j2", max_wait_seconds=5, poll_interval_seconds=1
+    )
+
+    assert (result.state, result.timed_out) == ("queued", True)
+
+
+def test_a_job_gets_behave_settings_only_from_the_config(tmp_path):
+    repo_root = make_repo_with_feature(tmp_path, "features/cli/attach.feature")
+    launcher = FakeJobLauncher(tmp_path)
+    service = _make_service(
+        FakeWorkspace(
+            repo_root=repo_root,
+            jobs_dir=tmp_path,
+            env={"PATH": "/bin", "UACLIENT_BEHAVE_CUSTOM_PPA": "inherited"},
+        ),
+        config=FakeConfigStore(behave={"contract_token": "secret"}),
+        launcher=launcher,
+        new_job_id=lambda: JOB_ID,
+    )
+
+    start(service, "lxd-container")
+
+    env = launcher.calls[0]["env"]
+    assert env["UACLIENT_BEHAVE_CONTRACT_TOKEN"] == "secret"
+    assert "UACLIENT_BEHAVE_CUSTOM_PPA" not in env
+    assert env["PATH"] == "/bin"
+
+
+def test_a_job_records_its_config_without_secret_values(tmp_path):
+    repo_root = make_repo_with_feature(tmp_path, "features/cli/attach.feature")
+    service = _make_service(
+        FakeWorkspace(repo_root=repo_root, jobs_dir=tmp_path),
+        config=FakeConfigStore(
+            behave={"contract_token": "secret", "custom_ppa": "ppa:x/y"}
+        ),
+        launcher=FakeJobLauncher(tmp_path),
+        new_job_id=lambda: JOB_ID,
+    )
+
+    start(service, "lxd-container")
+
+    record = LocalJobResultStore(tmp_path).read_record(JOB_ID)
+    assert record.config == {
+        "contract_token": "<set>",
+        "custom_ppa": "ppa:x/y",
+    }
+
+
+def test_an_invalid_config_is_reported_by_name(tmp_path):
+    service = job_service(
+        tmp_path,
+        FakeJobLauncher(tmp_path),
+        config=FakeConfigStore(error="config.json: unknown pool"),
+    )
+
+    with pytest.raises(BehaveServiceError, match="unknown pool"):
+        service.reconcile()
 
 
 # ---- one job, read from its files and its lock ----
@@ -715,18 +743,23 @@ JOB_ID = "job-under-test"
 OTHER_JOB_ID = "job-from-another-run"
 
 
-def launched(tmp_path, job_id=JOB_ID, **record):
-    """A job as the service launched it: its record, nothing more."""
+def launched(tmp_path, job_id=JOB_ID, launch=True, **record):
+    """A job as the service queued it, and launched it unless ``launch`` is
+    false: its request, then its record."""
     fields = dict(
         job_id=job_id,
-        started_at="T0",
         feature_file="features/cli/attach.feature",
         scenario_name=UNIT_SCENARIO,
         release="jammy",
         machine_type="lxd-container",
     )
     fields.update(record)
-    LocalJobResultStore(tmp_path).write_record(job_id, JobRecord(**fields))
+    started_at = fields.pop("started_at", "T0")
+    queued_at = fields.pop("queued_at", started_at)
+    store = LocalJobResultStore(tmp_path)
+    store.write_request(job_id, JobRequest(queued_at=queued_at, **fields))
+    if launch:
+        store.write_record(job_id, JobRecord(started_at=started_at, **fields))
 
 
 def job_service(tmp_path, launcher, **kwargs):
@@ -753,8 +786,8 @@ PASSING_REPORT = [
 
 
 def arrange(tmp_path, state):
-    """A launched job in ``state``, and the launcher that knows of it."""
-    launched(tmp_path)
+    """A job in ``state``, and the launcher that knows of it."""
+    launched(tmp_path, launch=state != JobState.QUEUED)
     launcher = FakeJobLauncher(tmp_path)
     if state == JobState.RUNNING:
         launcher.running.add(JOB_ID)
@@ -766,7 +799,8 @@ def arrange(tmp_path, state):
 
 # What a status read reports for a job in each state.
 STATUS_OF = {
-    JobState.RUNNING: ("running", True),
+    JobState.QUEUED: ("queued", None),
+    JobState.RUNNING: ("running", None),
     JobState.FINISHED: ("finished", True),
     JobState.INTERRUPTED: ("interrupted", False),
 }
@@ -782,7 +816,7 @@ def test_job_status_reads_the_state_off_disk(tmp_path, state, expected):
 
     payload = service.job_status(JOB_ID)
 
-    assert (payload.status, payload.ok) == expected
+    assert (payload.state, getattr(payload, "ok", None)) == expected
 
 
 def test_a_completed_job_reports_its_recorded_exit_and_report(tmp_path):
@@ -820,7 +854,7 @@ def test_a_killed_job_is_interrupted_whatever_tox_returned(tmp_path):
 
     status = service.job_status(JOB_ID)
 
-    assert (status.status, status.reason, status.ok) == (
+    assert (status.state, status.reason, status.ok) == (
         "interrupted",
         "killed",
         False,
@@ -851,7 +885,7 @@ def test_wait_for_completion_returns_once_the_job_ends(tmp_path):
         JOB_ID, max_wait_seconds=5, poll_interval_seconds=0.01
     )
 
-    assert result.status == "finished"
+    assert result.state == "finished"
     assert result.ok is True
 
 
@@ -865,7 +899,7 @@ def test_wait_for_completion_returns_an_interrupted_job(tmp_path):
         JOB_ID, max_wait_seconds=5, poll_interval_seconds=0.01
     )
 
-    assert (result.status, result.reason) == ("interrupted", "died")
+    assert (result.state, result.reason) == ("interrupted", "died")
     assert "line2" in result.recent_output
 
 
@@ -878,8 +912,7 @@ def test_wait_for_completion_times_out_on_a_running_job(tmp_path):
         JOB_ID, max_wait_seconds=5, poll_interval_seconds=1
     ).model_dump(mode="json")
 
-    assert result["status"] == "timeout"
-    assert result["last_status"] == "running"
+    assert (result["state"], result["timed_out"]) == ("running", True)
     assert "line2" in result["recent_output"]
 
 
@@ -904,6 +937,7 @@ def test_an_unknown_job_id_is_actionable(tmp_path, call):
 
 # What kill_job does to a job in each state.
 KILL_OF = {
+    JobState.QUEUED: (True, "before it started"),
     JobState.RUNNING: (True, "Kill sent"),
     JobState.FINISHED: (False, "already finished"),
     JobState.INTERRUPTED: (False, "already been interrupted"),
@@ -924,7 +958,8 @@ def test_kill_job_by_state(tmp_path, state, expected):
     killed, message = expected
     assert result.killed is killed
     assert message in result.message
-    assert launcher.killed == ([JOB_ID] if killed else [])
+    signalled = state == JobState.RUNNING
+    assert launcher.killed == ([JOB_ID] if signalled else [])
 
 
 def test_a_job_process_that_cannot_be_reached_is_reported(tmp_path):
@@ -1050,6 +1085,7 @@ def test_get_artifacts_reports_paths_record_and_exit(tmp_path):
     result = service.get_artifacts(JOB_ID).model_dump(mode="json")
 
     assert result["exists"] == {
+        "request": True,
         "record": True,
         "exit": True,
         "stdout_log": True,
@@ -1080,7 +1116,7 @@ def test_list_jobs_reads_every_job_off_disk(tmp_path):
 
     result = service.list_jobs()
 
-    assert {(job.job_id, job.status) for job in result.jobs} == {
+    assert {(job.job_id, job.state) for job in result.jobs} == {
         ("a-running", JobState.RUNNING),
         ("b-done", JobState.FINISHED),
         ("c-gone", JobState.INTERRUPTED),
@@ -1173,7 +1209,7 @@ def test_get_results_reports_one_result_per_job(tmp_path):
 
     (job,) = result["results"]
     assert result["total"] == 1
-    assert job["status"] == "finished"
+    assert job["state"] == "finished"
     assert (job["release"], job["machine_type"]) == ("resolute", "lxd-vm")
     assert job["summary"]["scenarios"]["failed"] == 1
     assert job["failures"][0]["error_message"] == "boom"
@@ -1204,16 +1240,16 @@ def test_get_results_filters_by_status(tmp_path):
     launcher.running.add(OTHER_JOB_ID)
     service = job_service(tmp_path, launcher)
 
-    result = service.get_results(status="interrupted")
+    result = service.get_results(state="interrupted")
 
     assert [r.job_id for r in result.results] == [JOB_ID]
 
 
-def test_get_results_rejects_an_invalid_status(tmp_path):
+def test_get_results_rejects_an_invalid_state(tmp_path):
     service = job_service(tmp_path, FakeJobLauncher(tmp_path))
 
-    with pytest.raises(BehaveServiceError, match="Invalid status filter"):
-        service.get_results(status="bogus")
+    with pytest.raises(BehaveServiceError, match="Invalid state filter"):
+        service.get_results(state="bogus")
 
 
 def test_get_results_rejects_a_non_positive_limit(tmp_path):

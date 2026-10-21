@@ -4,7 +4,8 @@
 record of which test units are in scope, what has been attempted, and what
 each attempt established. A unit is one scenario for one release on one
 machine type. The `behave` MCP server runs a campaign and records every
-attempt; the CLI does neither.
+attempt. The CLI also holds the checkout's config, which every job runs
+with.
 
 Run it from `tools/mcp_server_behave`:
 
@@ -18,6 +19,9 @@ Every command prints one JSON document to stdout and exits `0`; `units` and
 unknown value, a missing campaign, or an unreadable file prints a message to
 stderr and exits `2`. JSON shapes match the `behave` MCP server's campaign
 tools.
+
+After every command, the CLI reconciles the checkout's job queue: any queued
+job whose pool has a free lane starts, as it would after an MCP tool call.
 
 `--campaign-id` resolves to `<repo-root>/.mcp_server_behave/campaigns/ID/`,
 or `$MCP_STATE_DIR/campaigns/ID/` when `MCP_STATE_DIR` is set -- the same
@@ -270,6 +274,40 @@ uv run behave-campaign export --campaign-id 1234567
 Errors: a campaign that is not `complete`, naming its jobs in flight, and an output
 path that already exists. Missing job files are not an error; they are listed in the output
 and marked `files missing` in the summary.
+
+## config
+
+Show or change the checkout's config: how many jobs each pool may run at
+once, and the behave options every job runs with. A change applies to every
+job that starts after it, campaign jobs included.
+
+```bash
+uv run behave-campaign config [--repo-root DIR] [show]
+uv run behave-campaign config [--repo-root DIR] set KEY VALUE
+uv run behave-campaign config [--repo-root DIR] unset KEY
+```
+
+Prints each pool's `max_jobs` and `busy` lanes, and the behave options, each
+secret as `<set>`.
+
+Keys:
+
+* `max_jobs.lxd`, `max_jobs.cloud`, `max_jobs.wsl`: How many jobs the pool
+  may run at once. Defaults are `1`, `0` and `1`; `0` disables the pool.
+  `max_jobs.wsl` is at most `1`. `unset` returns the default.
+* `behave.<option>`: An option behave reads from `UACLIENT_BEHAVE_<OPTION>`,
+  such as `contract_token` or `custom_ppa`. `install_from`, `releases` and
+  `machine_types` are set per job and are refused. `unset` drops the
+  option.
+
+A `VALUE` of `-` is read from stdin, so a secret stays out of shell history:
+
+```bash
+echo "$TOKEN" | uv run behave-campaign config set behave.contract_token -
+```
+
+The config is `config.json` in the state directory, readable only by its
+owner.
 
 ## Files
 

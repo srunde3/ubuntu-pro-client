@@ -211,9 +211,9 @@ checkout whose feature files define the scope and whose jobs run.
 
 - `create_campaign` -- plan a campaign and store it, starting nothing.
   Returns the unit count so scope can be confirmed first. `lanes` takes
-  `lxd`, `cloud` and `wsl`; each may not exceed the server's limit for that
-  pool (`MCP_MAX_LXD_JOBS` and so on), and a campaign with units in a pool
-  the server has disabled is rejected. A campaign that would silently run
+  `lxd`, `cloud` and `wsl`; each may not exceed the checkout's max jobs for
+  that pool (`behave-campaign config`), and a campaign with units in a
+  disabled pool is rejected. A campaign that would silently run
   slower than asked is rejected instead.
 - `list_campaigns` -- every stored campaign: its state, the header fields
   that identify it, and how many values each scope filter names.

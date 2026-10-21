@@ -22,7 +22,7 @@ MCP_FINISHED = "finished"
 MCP_INTERRUPTED = "interrupted"
 
 
-# The statuses a job that has stopped running reports.
+# The states of a job that has ended.
 MCP_ENDED = (MCP_FINISHED, MCP_INTERRUPTED)
 
 
@@ -87,11 +87,11 @@ def finished_from_mcp(unit: Unit, result: Any) -> FinishedRecord:
     if not isinstance(result, dict):
         raise CampaignError("each MCP result must be a JSON object")
 
-    status = result.get("status")
-    if status != MCP_FINISHED:
+    state = result.get("state")
+    if state != MCP_FINISHED:
         raise CampaignError(
-            "cannot record an outcome for MCP status '{}'; only a "
-            "finished job has one".format(status)
+            "cannot record an outcome for a job in state '{}'; only a "
+            "finished job has one".format(state)
         )
     if "job_id" not in result:
         raise CampaignError("MCP result is missing 'job_id'")
@@ -114,7 +114,7 @@ def classify_result(
     cannot be classified is recorded as ``error`` with the reason in
     ``reason``: a scheduler has nobody to raise at.
     """
-    if isinstance(result, dict) and result.get("status") == MCP_INTERRUPTED:
+    if isinstance(result, dict) and result.get("state") == MCP_INTERRUPTED:
         reason = result.get("reason")
         return InterruptedRecord(
             unit=unit,

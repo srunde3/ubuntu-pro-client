@@ -17,7 +17,6 @@ scenario. On a host with LXD and the config set, the same campaign provisions
 containers and the assertions still hold.
 """
 
-import os
 import time
 from pathlib import Path
 
@@ -36,9 +35,8 @@ from behave_campaign.domain.state import reduce_units, state_of
 from behave_campaign.repo import repo_state
 from behave_campaign.runner import CampaignRunner, ThreadTicker
 from behave_campaign.service import CampaignService
-from behave_mcp.config import load_settings
 from behave_mcp.domain.pools import Pool
-from behave_mcp.server import create_service
+from behave_mcp.wiring import create_service
 
 FEATURE = "features/_version.feature"
 # Naming one scenario keeps the campaign to exactly one unit per release, so
@@ -65,17 +63,16 @@ def test_a_campaign_runs_its_lanes_concurrently(monkeypatch, tmp_path):
     campaign_dir = tmp_path / "state" / "campaigns"
     store = JsonlCampaignStore(campaign_dir)
 
-    # A service of its own, so the lane limit is this test's rather than
-    # whatever the server process was started with.
-    settings = load_settings({**os.environ, "MCP_MAX_LXD_JOBS": str(LANES)})
-    service = create_service(settings)
+    # The test's own state directory, so max jobs is this test's.
+    service = create_service()
+    service.set_config("max_jobs.lxd", str(LANES))
 
     created = CampaignService(
         store=store,
         features=ParserFeatureReader(),
         now=system_now,
         repo_state=repo_state,
-        lane_ceiling=settings.pool_limits,
+        lane_ceiling=service.read_config().max_jobs,
     ).create_campaign(
         campaign_id=CAMPAIGN_ID,
         repo_root=repo_root,
@@ -183,14 +180,13 @@ def test_pause_with_kill_stops_a_real_job_and_run_redoes_it(
 
     campaign_dir = tmp_path / "state" / "campaigns"
     store = JsonlCampaignStore(campaign_dir)
-    settings = load_settings({**os.environ, "MCP_MAX_LXD_JOBS": "1"})
-    service = create_service(settings)
+    service = create_service()
     CampaignService(
         store=store,
         features=ParserFeatureReader(),
         now=system_now,
         repo_state=repo_state,
-        lane_ceiling=settings.pool_limits,
+        lane_ceiling=service.read_config().max_jobs,
     ).create_campaign(
         campaign_id=KILL_CAMPAIGN_ID,
         repo_root=repo_root,

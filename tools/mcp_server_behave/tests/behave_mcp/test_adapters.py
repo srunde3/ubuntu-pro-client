@@ -8,12 +8,15 @@ import pytest
 
 import behave_mcp.adapters as adapters_module
 from behave_mcp.adapters import (
+    FileConfigStore,
     FileLanePool,
+    FileReconcileLock,
     JobProcessLauncher,
     LocalFeatureFileReader,
     LocalJobResultStoreFactory,
     LocalWorkspace,
 )
+from behave_mcp.domain.config import CheckoutConfig
 from behave_mcp.domain.pools import Pool
 from behave_mcp.messages import JobExit, JobRecord
 from tests.conftest import job_file, make_repo_with_feature
@@ -131,6 +134,9 @@ def test_exists_and_list_job_ids(tmp_path):
     assert not empty.stdout_log
     assert not empty.json_report
 
+    (job_file(tmp_path, "jobx", "request.json")).write_text(
+        "{}", encoding="utf-8"
+    )
     (job_file(tmp_path, "jobx", "job.json")).write_text("{}", encoding="utf-8")
     (job_file(tmp_path, "jobx", "stdout.log")).write_text(
         "x", encoding="utf-8"
@@ -375,11 +381,17 @@ def launcher(tmp_path):
     return JobProcessLauncher(lambda: tmp_path / "jobs")
 
 
+def _no_record():
+    pass
+
+
 def _launch(tmp_path, lanes, launcher, job_id, command):
     (tmp_path / "jobs" / job_id).mkdir(parents=True)
     lease = lanes.take(Pool.LXD, 1)
     assert lease is not None, "no free lane"
-    launcher.launch(job_id, command, str(tmp_path), PATH_ONLY, lease)
+    launcher.launch(
+        job_id, command, str(tmp_path), PATH_ONLY, lease, _no_record
+    )
 
 
 def _exit(tmp_path, job_id):
@@ -397,13 +409,13 @@ class TestFileLanePool:
 
         assert first is not None and second is not None
         assert third is None
-        assert lanes.busy(Pool.LXD, 2) == 2
+        assert lanes.busy(Pool.LXD) == 2
 
     def test_closing_a_lease_frees_its_lane(self, lanes):
         lease = lanes.take(Pool.LXD, 1)
         lease.close()
 
-        assert lanes.busy(Pool.LXD, 1) == 0
+        assert lanes.busy(Pool.LXD) == 0
         assert lanes.take(Pool.LXD, 1) is not None
 
     def test_pools_are_separate(self, lanes):
@@ -433,7 +445,7 @@ class TestFileLanePool:
             assert holder.stdout.readline().strip() == "held"
 
             assert lanes.take(Pool.LXD, 1) is None
-            assert lanes.busy(Pool.LXD, 1) == 1
+            assert lanes.busy(Pool.LXD) == 1
         finally:
             holder.kill()
             holder.wait()
@@ -441,7 +453,71 @@ class TestFileLanePool:
         assert lanes.take(Pool.LXD, 1) is not None
 
 
-class TestLockedJobLauncher:
+class TestLaneCounting:
+    def test_a_lane_above_a_lowered_max_jobs_still_counts(self, tmp_path):
+        lanes = FileLanePool(lambda: tmp_path / "lanes")
+        held = [lanes.take(Pool.LXD, 3) for _ in range(3)]
+
+        # Max jobs lowered to 1 while three jobs still hold lanes 0 to 2.
+        assert lanes.busy(Pool.LXD) == 3
+        assert lanes.take(Pool.LXD, 1) is None
+
+        for lease in held:
+            lease.close()
+        assert lanes.take(Pool.LXD, 1) is not None
+
+
+class TestFileConfigStore:
+    def test_no_file_is_the_defaults(self, tmp_path):
+        assert FileConfigStore(lambda: tmp_path).read() == CheckoutConfig()
+
+    def test_a_written_config_reads_back_and_only_its_owner_can(
+        self, tmp_path
+    ):
+        store = FileConfigStore(lambda: tmp_path)
+        config = CheckoutConfig(
+            max_jobs={Pool.LXD: 3, Pool.CLOUD: 0, Pool.WSL: 1},
+            behave={"contract_token": "secret"},
+        )
+
+        store.write(config)
+
+        assert store.read() == config
+        mode = (tmp_path / "config.json").stat().st_mode & 0o777
+        assert mode == 0o600
+
+    def test_an_invalid_file_is_named(self, tmp_path):
+        (tmp_path / "config.json").write_text('{"max_jobs": {"moon": 1}}')
+
+        with pytest.raises(ValueError, match="config.json.*unknown pool"):
+            FileConfigStore(lambda: tmp_path).read()
+
+
+class TestFileReconcileLock:
+    def test_a_second_holder_waits_for_the_first(self, tmp_path):
+        lock = FileReconcileLock(lambda: tmp_path)
+        script = (
+            "import fcntl, sys\n"
+            "f = open(sys.argv[1], 'w')\n"
+            "fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)\n"
+        )
+
+        with lock.hold():
+            other = subprocess.run(
+                [
+                    sys.executable,
+                    "-c",
+                    script,
+                    str(tmp_path / "reconcile.lock"),
+                ],
+                capture_output=True,
+            )
+
+        assert other.returncode != 0
+        assert b"BlockingIOError" in other.stderr
+
+
+class TestJobProcessLauncher:
     def test_a_job_runs_to_a_recorded_exit(self, tmp_path, lanes, launcher):
         _launch(tmp_path, lanes, launcher, "job", ["sh", "-c", "exit 3"])
 
@@ -478,10 +554,10 @@ class TestLockedJobLauncher:
 
         # The launcher has let go of both; only the job process holds them.
         assert launcher.is_running("job")
-        assert lanes.busy(Pool.LXD, 1) == 1
+        assert lanes.busy(Pool.LXD) == 1
 
         assert _eventually(lambda: not launcher.is_running("job"))
-        assert lanes.busy(Pool.LXD, 1) == 0
+        assert lanes.busy(Pool.LXD) == 0
         assert _exit(tmp_path, "job").ok is True
 
     def test_a_signal_stops_the_job_and_records_a_kill(
@@ -545,7 +621,7 @@ class TestLockedJobLauncher:
 
         assert _eventually(lambda: not launcher.is_running("job"))
         assert _exit(tmp_path, "job") is None
-        assert lanes.busy(Pool.LXD, 1) == 0
+        assert lanes.busy(Pool.LXD) == 0
         # The parent-death signal stops the job when its process dies.
         assert _eventually(lambda: not _pid_alive(child))
 
@@ -560,12 +636,32 @@ class TestLockedJobLauncher:
         lease = lanes.take(Pool.LXD, 1)
 
         launcher.launch(
-            "job", ["sleep", "30"], str(tmp_path), PATH_ONLY, lease
+            "job", ["sleep", "30"], str(tmp_path), PATH_ONLY, lease, _no_record
         )
 
         assert _eventually(lambda: _exit(tmp_path, "job") is not None)
         exit = _exit(tmp_path, "job")
         assert (exit.killed, exit.returncode) == (True, None)
+
+    def test_the_record_is_written_while_the_job_lock_is_held(
+        self, tmp_path, lanes, launcher
+    ):
+        seen = []
+
+        def record():
+            seen.append(launcher.is_running("job"))
+
+        (tmp_path / "jobs" / "job").mkdir(parents=True)
+        launcher.launch(
+            "job",
+            ["true"],
+            str(tmp_path),
+            PATH_ONLY,
+            lanes.take(Pool.LXD, 1),
+            record,
+        )
+
+        assert seen == [True]
 
     def test_a_command_that_cannot_start_records_why(
         self, tmp_path, lanes, launcher
@@ -578,10 +674,10 @@ class TestLockedJobLauncher:
         assert "No such file" in exit.error
 
 
-def test_list_job_ids_globs_meta_files(tmp_path):
+def test_list_job_ids_finds_every_queued_job(tmp_path):
     store = LocalJobResultStoreFactory().bind(tmp_path)
-    (job_file(tmp_path, "job1", "job.json")).write_text("{}", encoding="utf-8")
-    (job_file(tmp_path, "job2", "job.json")).write_text("{}", encoding="utf-8")
+    (job_file(tmp_path, "job1", "request.json")).write_text("{}")
+    (job_file(tmp_path, "job2", "request.json")).write_text("{}")
     (job_file(tmp_path, "job2", "stdout.log")).write_text("", encoding="utf-8")
 
     assert store.list_job_ids() == ["job1", "job2"]

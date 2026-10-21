@@ -4,54 +4,35 @@ from behave_mcp.config import (
     REMOVED_ENV_VARS,
     ConfigError,
     Settings,
+    ignored_behave_settings,
     load_settings,
 )
-from behave_mcp.domain.pools import Pool
 
 
 def test_load_settings_defaults():
     settings = load_settings({})
     assert settings == Settings(
-        pool_limits={Pool.LXD: 1, Pool.CLOUD: 0, Pool.WSL: 1},
         campaign_poll_timeout=60,
         host="127.0.0.1",
         port=8000,
     )
 
 
-def test_load_settings_pool_limits():
-    settings = load_settings(
-        {
-            "MCP_MAX_LXD_JOBS": "8",
-            "MCP_MAX_CLOUD_JOBS": "6",
-            "MCP_MAX_WSL_JOBS": "0",
-        }
-    )
-    assert settings.pool_limits == {
-        Pool.LXD: 8,
-        Pool.CLOUD: 6,
-        Pool.WSL: 0,
-    }
+def test_behave_settings_in_the_environment_are_reported_as_ignored():
+    environ = {"PATH": "/bin", "UACLIENT_BEHAVE_CONTRACT_TOKEN": "x"}
 
-
-@pytest.mark.parametrize(
-    "name", ["MCP_MAX_LXD_JOBS", "MCP_MAX_CLOUD_JOBS", "MCP_MAX_WSL_JOBS"]
-)
-@pytest.mark.parametrize("raw", ["abc", "-1"])
-def test_load_settings_pool_limit_invalid_raises(name, raw):
-    with pytest.raises(ConfigError, match=name):
-        load_settings({name: raw})
-
-
-def test_load_settings_wsl_limit_above_one_raises():
-    with pytest.raises(ConfigError, match="between 0 and 1"):
-        load_settings({"MCP_MAX_WSL_JOBS": "2"})
+    assert ignored_behave_settings(environ) == [
+        "UACLIENT_BEHAVE_CONTRACT_TOKEN"
+    ]
 
 
 # For each variable the server no longer reads, words its error must name.
 REMOVED_GUIDANCE = {
-    "MCP_MAX_PARALLEL_JOBS": "MCP_MAX_LXD_JOBS",
-    "MCP_ALLOW_CLOUD_MACHINE_TYPES": "MCP_MAX_CLOUD_JOBS",
+    "MCP_MAX_PARALLEL_JOBS": "max_jobs.lxd",
+    "MCP_MAX_LXD_JOBS": "max_jobs.lxd",
+    "MCP_MAX_CLOUD_JOBS": "max_jobs.cloud",
+    "MCP_MAX_WSL_JOBS": "max_jobs.wsl",
+    "MCP_ALLOW_CLOUD_MACHINE_TYPES": "max_jobs.cloud",
     "MCP_TRANSPORT": "streamable HTTP",
 }
 

@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 from mcp.shared.memory import create_connected_server_and_client_session
 
+import behave_mcp.server as server_module
 from behave_mcp.server import mcp
 from tests.conftest import result_json
 
@@ -23,7 +24,8 @@ async def test_mcp_e2e_long_running_attach_flow(monkeypatch):
 
     repo_root = Path(__file__).resolve().parents[4]
     monkeypatch.setenv("UBUNTU_PRO_CLIENT_REPO", str(repo_root))
-    monkeypatch.setenv("UACLIENT_BEHAVE_CONTRACT_TOKEN", contract_token)
+    # Jobs take behave settings only from the checkout's config.
+    server_module._service.set_config("behave.contract_token", contract_token)
 
     async with create_connected_server_and_client_session(mcp) as client:
         start_result = await client.call_tool(
@@ -36,23 +38,15 @@ async def test_mcp_e2e_long_running_attach_flow(monkeypatch):
             },
         )
         start_payload = result_json(start_result)
-        assert start_payload["ok"] is True
-        assert start_payload["status"] == "started"
+        assert start_payload["state"] == "running"
         job_id = start_payload["job_id"]
-
-        # repo_root here should be a real Pro client git checkout.
-        repo = start_payload["repo"]
-        assert repo["commit"]
-        assert len(repo["commit"]) == 40
-        assert repo["branch"]
-        assert isinstance(repo["dirty"], bool)
 
         jobs_while_running = await client.call_tool("list_scenario_jobs", {})
         running_jobs = {
             job["job_id"]: job
             for job in result_json(jobs_while_running)["jobs"]
         }
-        assert running_jobs[job_id]["status"] == "running"
+        assert running_jobs[job_id]["state"] == "running"
         assert running_jobs[job_id]["feature_file"] == (
             "features/cli/attach.feature"
         )
@@ -74,7 +68,7 @@ async def test_mcp_e2e_long_running_attach_flow(monkeypatch):
             await client.call_tool("kill_job", {"job_id": job_id})
 
         assert completed_payload is not None
-        assert completed_payload["status"] == "finished"
+        assert completed_payload["state"] == "finished"
         assert isinstance(completed_payload.get("ok"), bool)
         assert "returncode" in completed_payload
         assert completed_payload["summary"] is not None
@@ -88,7 +82,7 @@ async def test_mcp_e2e_long_running_attach_flow(monkeypatch):
             job["job_id"]: job
             for job in result_json(jobs_after_completion)["jobs"]
         }
-        assert finished_jobs[job_id]["status"] == "finished"
+        assert finished_jobs[job_id]["state"] == "finished"
         assert finished_jobs[job_id]["ok"] == completed_payload["ok"]
 
         logs_result = await client.call_tool(
@@ -105,9 +99,16 @@ async def test_mcp_e2e_long_running_attach_flow(monkeypatch):
         assert artifacts_payload["exists"]["stdout_log"] is True
         assert artifacts_payload["exists"]["json_report"] is True
         assert artifacts_payload["exists"]["record"] is True
-        assert artifacts_payload["exists"]["status"] is True
+        assert artifacts_payload["exists"]["exit"] is True
         assert artifacts_payload["exit"]["ok"] == completed_payload["ok"]
-        assert artifacts_payload["record"]["repo"] == repo
+        # repo_root here should be a real Pro client git checkout.
+        repo = artifacts_payload["record"]["repo"]
+        assert len(repo["commit"]) == 40
+        assert repo["branch"]
+        assert isinstance(repo["dirty"], bool)
+        assert artifacts_payload["record"]["config"] == {
+            "contract_token": "<set>"
+        }
         assert finished_jobs[job_id]["ok"] == completed_payload["ok"]
 
         results = result_json(
@@ -117,7 +118,7 @@ async def test_mcp_e2e_long_running_attach_flow(monkeypatch):
         )
         (result,) = results["results"]
         assert result["job_id"] == job_id
-        assert result["status"] == "finished"
+        assert result["state"] == "finished"
         assert result["summary"]["scenarios"]["total"] >= 1
         assert result["release"] == "noble"
 
@@ -135,5 +136,5 @@ async def test_mcp_e2e_long_running_attach_flow(monkeypatch):
         assert job_id not in await ids(release="jammy")
         assert job_id in await ids(machine_type="lxd-container")
         assert job_id not in await ids(machine_type="lxd-vm")
-        assert await ids(job_ids=[job_id], status="finished") == [job_id]
-        assert await ids(job_ids=[job_id], status="running") == []
+        assert await ids(job_ids=[job_id], state="finished") == [job_id]
+        assert await ids(job_ids=[job_id], state="running") == []

@@ -39,10 +39,8 @@ from behave_campaign.ports import (
     CampaignExistsError,
     CampaignLockedError,
     CampaignNotFoundError,
-    LaneStartError,
 )
 from behave_mcp.domain import layout
-from behave_mcp.domain.pools import Pool
 
 
 def system_now() -> str:
@@ -350,19 +348,13 @@ class ServiceLaneRunner:
             repo_root=str(repo_root),
             install_from=install_from,
         )
-        if getattr(result, "status", "") != "started":
-            full_pools = getattr(result, "full_pools", None) or []
-            raise LaneStartError(
-                getattr(result, "error", "") or "could not start a job",
-                full_pool=Pool(full_pools[0].pool) if full_pools else None,
-            )
         return str(result.job_id)
 
     def poll(self, job_id: str) -> Any | None:
-        status = self._service.job_status(job_id)
-        if getattr(status, "status", "") not in MCP_ENDED:
+        status = self._service.job_status(job_id).model_dump(mode="json")
+        if status.get("state") not in MCP_ENDED:
             return None
-        return status.model_dump()
+        return status
 
     def kill(self, job_id: str) -> bool:
         return bool(self._service.kill_job(job_id).killed)

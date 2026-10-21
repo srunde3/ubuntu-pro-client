@@ -5,14 +5,16 @@ on. Concrete adapters live in ``behave_mcp.adapters``; tests may inject fakes.
 """
 
 from pathlib import Path
-from typing import Any, NamedTuple, Protocol
+from typing import Any, Callable, ContextManager, NamedTuple, Protocol
 
+from behave_mcp.domain.config import CheckoutConfig
 from behave_mcp.domain.pools import Pool
 from behave_mcp.messages import (
     Artifacts,
     ExistsFlags,
     JobExit,
     JobRecord,
+    JobRequest,
     RepoState,
 )
 from behave_mcp.parser import FeatureDetail
@@ -33,13 +35,15 @@ class Lease(Protocol):
 class LanePool(Protocol):
     """Lanes shared by every process using one state directory."""
 
-    def take(self, pool: Pool, limit: int) -> Lease | None:
-        """Take a free lane in ``pool``, or return None if all ``limit`` of
-        its lanes are held."""
+    def take(self, pool: Pool, max_jobs: int) -> Lease | None:
+        """Take a free lane in ``pool``, or return None if ``max_jobs`` or
+        more of its lanes are held."""
         ...
 
-    def busy(self, pool: Pool, limit: int) -> int:
-        """Return how many of ``pool``'s ``limit`` lanes are held."""
+    def busy(self, pool: Pool) -> int:
+        """Return how many of ``pool``'s lanes are held, whatever their
+        number, so a lowered max jobs still counts the jobs already
+        running."""
         ...
 
 
@@ -54,10 +58,14 @@ class JobLauncher(Protocol):
         cwd: str,
         env: dict[str, str],
         lease: Lease,
+        record: Callable[[], None],
     ) -> None:
         """Start ``command`` for ``job_id`` under a job process that takes
         over ``lease`` and the job's own lock for as long as it lives.
 
+        ``record`` writes the launch record. It is called once the job's
+        lock is held and before the job process exists, so the record is
+        never seen without a held lock while the launch is in progress.
         The launcher's own hold on ``lease`` is closed either way. Raises
         JobStartError if the job process cannot be started.
         """
@@ -69,6 +77,27 @@ class JobLauncher(Protocol):
 
     def kill(self, job_id: str) -> bool:
         """Ask a running job to stop; return whether the kill was sent."""
+        ...
+
+
+class ReconcileLock(Protocol):
+    """One lock per state directory, held while reconcile runs."""
+
+    def hold(self) -> ContextManager[None]:
+        """Wait for the lock and hold it for the ``with`` block."""
+        ...
+
+
+class ConfigStore(Protocol):
+    """The service's config for this checkout."""
+
+    def read(self) -> CheckoutConfig:
+        """Return the config, or the defaults if none is stored. Raises
+        ValueError naming the problem if the stored one is invalid."""
+        ...
+
+    def write(self, config: CheckoutConfig) -> None:
+        """Store the config, whole or not at all."""
         ...
 
 
@@ -106,6 +135,14 @@ class JobResultStore(Protocol):
         """Return the artifact locations to surface to the caller."""
         ...
 
+    def read_request(self, job_id: str) -> JobRequest | None:
+        """Return what the job is to run, or None if it was never queued."""
+        ...
+
+    def write_request(self, job_id: str, request: JobRequest) -> None:
+        """Queue the job: write what it is to run, once."""
+        ...
+
     def read_record(self, job_id: str) -> JobRecord:
         """Return the job's record, or an empty one if missing/invalid."""
         ...
@@ -140,7 +177,7 @@ class JobResultStore(Protocol):
         ...
 
     def list_job_ids(self) -> list[str]:
-        """Return every job id discovered at this location."""
+        """Return every job ever queued at this location."""
         ...
 
 

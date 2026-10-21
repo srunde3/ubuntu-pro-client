@@ -195,8 +195,9 @@ Good: a fake with the port's real signature, which records calls and behaves lik
 
 ```python
 class FakeJobLauncher:
-    def launch(self, job_id, command, cwd, env, lease):
+    def launch(self, job_id, command, cwd, env, lease, record):
         self.calls.append({"job_id": job_id, "command": command, ...})
+        record()  # the real launcher holds the job's lock by now
         lease.close()
         if self._error is not None:
             lease.release()

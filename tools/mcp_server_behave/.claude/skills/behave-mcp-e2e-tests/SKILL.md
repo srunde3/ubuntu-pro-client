@@ -31,12 +31,15 @@ Good: it chooses work that needs no machine when the machine is not the point. `
 
 Bad: it depends on a token or LXD without saying so. Check for the requirement and `pytest.skip` with a reason, as `test_e2e.py` does for the token.
 
-Good: it owns its limits and its state. It builds its service from settings it chooses, and keeps all job and campaign files under `tmp_path`.
+Good: it owns its config and its state. It points `MCP_STATE_DIR` under `tmp_path`, so every job and campaign file is its own, and sets the config it needs there.
 
 ```python
-settings = load_settings({**os.environ, "MCP_MAX_LXD_JOBS": str(LANES)})
-service = create_service(settings)
+monkeypatch.setenv("MCP_STATE_DIR", str(tmp_path / "state"))
+service = create_service()
+service.set_config("max_jobs.lxd", str(LANES))
 ```
+
+Good: it proves what no caller does. Only the job process's own reconcile can start a queued job when the test makes nothing but reads, so two jobs on one lane finishing back to back proves it.
 
 Good: it always cleans up. `runner.shutdown()` and `kill_job` on a still-running job sit in a `finally` block. A leaked behave process holds an LXD instance or a lane after the test ends.
 

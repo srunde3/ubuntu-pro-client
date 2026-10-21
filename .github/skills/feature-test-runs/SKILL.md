@@ -16,7 +16,10 @@ Each tool's description says how to call it and what it returns.
    `list_features` or `find_scenarios` to pick what to run.
 2. `start_scenario` for one unit -- a scenario's exact name, one release and
    one machine type it covers -- then `wait_for_scenario_completion`. Start
-   one job per unit; there is no multi-release or multi-machine-type job.
+   one job per unit; there is no multi-release or multi-machine-type job. A
+   job whose pool is full is `queued` and starts by itself when a lane
+   frees; a wait that runs out returns it with `timed_out: true`, so wait
+   again.
 3. For more than a handful of scenarios, use the campaign tools instead; see
    [run-sru-test-suite](../run-sru-test-suite/SKILL.md).
 
@@ -33,7 +36,7 @@ cause is rarely in the tail.
 3. Only if a region's capped text is not enough, `get_scenario_logs` around
    its `first_line`.
 
-A job with `status: interrupted` did not fail. With `reason: killed`, someone
+A job with `state: interrupted` did not fail. With `reason: killed`, someone
 killed it; with `reason: died`, its process died before it could record an
 exit -- a crash, a hard kill or a reboot. Nothing it did counts; start it
 again.
@@ -61,6 +64,6 @@ not read each log.
   **candidate defect** in the client or the test. Quote the diff; do not
   retry it hoping for a different answer.
 - A **skipped** scenario means a config the host lacks. `requires_config`
-  on the catalog entry names them; the value comes from
-  `UACLIENT_BEHAVE_<NAME>` or `~/.config/protest.yaml`. Report the variable
-  names. Never ask for a secret value in chat.
+  on the catalog entry names them; jobs get them only from the checkout's
+  config (`behave-campaign config set behave.<name>`), which the user sets.
+  Report the option names. Never ask for a secret value in chat.

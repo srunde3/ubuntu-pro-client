@@ -42,19 +42,30 @@ POOL_OF: dict[str, Pool] = {
 MAX_WSL_JOBS = 1
 
 
-POOL_LIMIT_ENV_VARS: dict[Pool, str] = {
-    Pool.LXD: "MCP_MAX_LXD_JOBS",
-    Pool.CLOUD: "MCP_MAX_CLOUD_JOBS",
-    Pool.WSL: "MCP_MAX_WSL_JOBS",
-}
-
-
-# Cloud jobs cost money, so they stay off until a limit is set.
-DEFAULT_POOL_LIMITS: dict[Pool, int] = {
+# Cloud jobs cost money, so they stay off until max jobs is set.
+DEFAULT_MAX_JOBS: dict[Pool, int] = {
     Pool.LXD: 1,
     Pool.CLOUD: 0,
     Pool.WSL: 1,
 }
 
 
-POOL_LIMIT_CAPS: dict[Pool, int] = {Pool.WSL: MAX_WSL_JOBS}
+MAX_JOBS_CAPS: dict[Pool, int] = {Pool.WSL: MAX_WSL_JOBS}
+
+
+def max_jobs_error(pool: Pool, value: object) -> str | None:
+    """Why ``value`` cannot be ``pool``'s max jobs, or None if it can."""
+    cap = MAX_JOBS_CAPS.get(pool)
+    expected = (
+        f"an integer between 0 and {cap}"
+        if cap is not None
+        else "a non-negative integer"
+    )
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or value < 0
+        or (cap is not None and value > cap)
+    ):
+        return f"{pool} max jobs must be {expected}, got {value!r}"
+    return None

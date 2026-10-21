@@ -31,18 +31,12 @@ from behave_campaign.ports import (
     CampaignLockedError,
     CampaignNotFoundError,
 )
-from behave_mcp.adapters import (
-    LocalFeatureFileReader,
-    LocalJobResultStoreFactory,
-)
-from behave_mcp.config import Settings
 from behave_mcp.domain.pools import Pool
-from behave_mcp.service import BehaveService
 from tests.conftest import (
     FakeJobLauncher,
-    FakeLanePool,
     FakeWorkspace,
     job_file,
+    make_service,
 )
 
 UNIT_A = Unit("features/a.feature", "A", "jammy", "lxd-container")
@@ -566,20 +560,9 @@ class TestServiceLaneRunner:
         (repo_root / "features").mkdir(parents=True)
         (repo_root / "features" / "a.feature").write_text(FEATURE_A)
         (repo_root / "tox.ini").write_text("[tox]\n")
-        service = BehaveService(
-            workspace=FakeWorkspace(repo_root=repo_root, jobs_dir=tmp_path),
-            settings=Settings(
-                pool_limits={Pool.LXD: 1, Pool.CLOUD: 0, Pool.WSL: 1},
-                campaign_poll_timeout=60,
-                host="127.0.0.1",
-                port=8000,
-            ),
-            feature_reader=LocalFeatureFileReader(),
-            results=LocalJobResultStoreFactory(),
-            lanes=FakeLanePool(),
+        service = make_service(
+            FakeWorkspace(repo_root=repo_root, jobs_dir=tmp_path),
             launcher=launcher,
-            monotonic=lambda: 0.0,
-            sleep=lambda seconds: None,
             now_utc=lambda: AT,
             new_job_id=lambda: "job-a",
         )
@@ -621,4 +604,4 @@ class TestServiceLaneRunner:
 
         result = lanes.poll(job_id)
 
-        assert result["status"] == "interrupted"
+        assert (result["state"], result["reason"]) == ("interrupted", "died")

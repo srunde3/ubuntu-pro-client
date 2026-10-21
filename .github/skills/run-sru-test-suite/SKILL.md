@@ -32,9 +32,9 @@ failure classes mean on this host.
    confirmation before starting**.
 
 If `create_campaign` rejects the scope or the lanes, resolve it with the
-user; do not work around it. A pool the server has disabled or limited below
-the lanes asked for is a server setting (`MCP_MAX_LXD_JOBS`,
-`MCP_MAX_CLOUD_JOBS`, `MCP_MAX_WSL_JOBS`) that only the user can change.
+user; do not work around it. A pool disabled or limited below the lanes
+asked for is the checkout's config (`behave-campaign config set
+max_jobs.<pool> N`), which only the user changes.
 
 ## Run it
 

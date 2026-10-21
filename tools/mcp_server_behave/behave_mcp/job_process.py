@@ -1,12 +1,13 @@
 """The process each behave job runs under.
 
-``python -m behave_mcp.job_process <job dir> -- <command>``
+``python -m behave_mcp.job_process <job dir> [--lane-fd N] -- <command>``
 
 The launcher hands this process the job's lane lock and its job lock, and
-then lets go of both, so they are held exactly as long as this process
-lives. It runs the command (tox) as a child in its own process group,
-writes the child's output to the job's ``stdout.log``, and when the child
-exits writes the job's ``exit.json`` once, by rename, before exiting.
+then lets go of both, so they are held as long as this process runs the
+job. It runs the command (tox) as a child in its own process group, writes
+the child's output to the job's ``stdout.log``, and when the child exits
+writes the job's ``exit.json`` once, by rename. Then it lets go of the lane
+and reconciles, so the next queued job takes that lane at once, and exits.
 
 Its own session keeps the server's death or signals from reaching it. The
 child gets a parent-death signal, so it cannot outlive this process. Taken
@@ -32,6 +33,7 @@ from typing import Sequence
 from behave_mcp.adapters import LocalJobResultStore
 from behave_mcp.domain import layout
 from behave_mcp.messages import JobExit
+from behave_mcp.wiring import create_service, reconcile_quietly
 
 # From <sys/prctl.h>: deliver a signal to this process when its parent dies.
 PR_SET_PDEATHSIG = 1
@@ -114,15 +116,31 @@ class JobProcess:
         )
 
 
+USAGE = (
+    "usage: python -m behave_mcp.job_process JOB_DIR [--lane-fd N] -- "
+    "COMMAND..."
+)
+
+
 def main(argv: Sequence[str]) -> int:
-    if len(argv) < 3 or argv[1] != "--":
-        print("usage: python -m behave_mcp.job_process JOB_DIR -- COMMAND...")
+    args = list(argv)
+    lane_fd: int | None = None
+    if len(args) > 2 and args[1] == "--lane-fd":
+        lane_fd = int(args[2])
+        del args[1:3]
+    if len(args) < 3 or args[1] != "--":
+        print(USAGE)
         return 2
-    job = JobProcess(Path(argv[0]))
+    job_dir = Path(args[0])
+    job = JobProcess(job_dir)
     signal.signal(signal.SIGTERM, job.kill)
     signal.signal(signal.SIGINT, job.kill)
     job.ready()
-    job.run(argv[2:])
+    job.run(args[2:])
+    if lane_fd is not None:
+        os.close(lane_fd)
+    # jobs/<id>/ lives in the state directory's jobs/.
+    reconcile_quietly(create_service(state_dir=job_dir.parent.parent))
     return 0
 
 

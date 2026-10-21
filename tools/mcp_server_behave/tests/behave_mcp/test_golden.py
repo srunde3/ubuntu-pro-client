@@ -6,20 +6,14 @@ JSON key ordering of tool response payloads.
 
 import json
 
-from behave_mcp.adapters import (
-    LocalFeatureFileReader,
-    LocalJobResultStore,
-    LocalJobResultStoreFactory,
-)
-from behave_mcp.config import Settings
-from behave_mcp.domain.pools import DEFAULT_POOL_LIMITS
-from behave_mcp.messages import JobExit, JobRecord
+from behave_mcp.adapters import LocalJobResultStore, LocalJobResultStoreFactory
+from behave_mcp.messages import JobExit, JobRecord, JobRequest
 from behave_mcp.service import BehaveService
 from tests.conftest import (
     FakeJobLauncher,
-    FakeLanePool,
     FakeWorkspace,
     job_file,
+    make_service,
 )
 
 
@@ -31,6 +25,7 @@ def test_write_record_byte_shape(tmp_path):
         "{\n"
         '  "artifacts": null,\n'
         '  "command": [],\n'
+        '  "config": {},\n'
         '  "feature_file": "",\n'
         '  "install_from": "",\n'
         '  "job_id": "jobshape",\n'
@@ -67,34 +62,19 @@ def test_write_exit_byte_shape(tmp_path):
     assert path.read_text(encoding="utf-8") == expected
 
 
-_SETTINGS = Settings(
-    pool_limits=DEFAULT_POOL_LIMITS,
-    campaign_poll_timeout=60,
-    host="127.0.0.1",
-    port=8000,
-)
-
-
 def _service(tmp_path, launcher, monotonic=lambda: 0.0) -> BehaveService:
-    return BehaveService(
-        workspace=FakeWorkspace(repo_root=tmp_path, jobs_dir=tmp_path),
-        settings=_SETTINGS,
-        feature_reader=LocalFeatureFileReader(),
-        results=LocalJobResultStoreFactory(),
-        lanes=FakeLanePool(),
+    return make_service(
+        FakeWorkspace(repo_root=tmp_path, jobs_dir=tmp_path),
         launcher=launcher,
         monotonic=monotonic,
-        sleep=lambda seconds: None,
-        now_utc=lambda: "T0",
-        new_job_id=lambda: "job0001",
     )
 
 
 def _launched(tmp_path, job_id):
-    """A job's record, as the service writes it at launch."""
-    LocalJobResultStore(tmp_path).write_record(
-        job_id, JobRecord(job_id=job_id)
-    )
+    """A job's request and record, as the service writes them."""
+    store = LocalJobResultStore(tmp_path)
+    store.write_request(job_id, JobRequest(job_id=job_id))
+    store.write_record(job_id, JobRecord(job_id=job_id))
     launcher = FakeJobLauncher(tmp_path)
     launcher.running.add(job_id)
     return launcher
@@ -140,7 +120,7 @@ def test_completed_with_summary_key_order(tmp_path):
 
     assert list(payload.keys()) == [
         "job_id",
-        "status",
+        "state",
         "ok",
         "feature_file",
         "scenario_name",
@@ -149,6 +129,7 @@ def test_completed_with_summary_key_order(tmp_path):
         "summary",
         "failures",
         "returncode",
+        "error",
         "artifacts",
         "recent_output",
     ]
@@ -173,7 +154,7 @@ def test_completed_fallback_key_order(tmp_path):
 
     assert list(payload.keys()) == [
         "job_id",
-        "status",
+        "state",
         "ok",
         "feature_file",
         "scenario_name",
@@ -182,12 +163,13 @@ def test_completed_fallback_key_order(tmp_path):
         "summary",
         "failures",
         "returncode",
+        "error",
         "artifacts",
         "recent_output",
     ]
 
 
-def test_timeout_key_order(tmp_path):
+def test_timed_out_key_order(tmp_path):
     job_id = "job0001"
     (job_file(tmp_path, job_id, "stdout.log")).write_text(
         "running\n", encoding="utf-8"
@@ -202,12 +184,10 @@ def test_timeout_key_order(tmp_path):
     ).model_dump(mode="json")
 
     assert list(payload.keys()) == [
-        "status",
-        "ok",
+        "state",
         "job_id",
-        "max_wait_seconds",
-        "poll_interval_seconds",
-        "last_status",
         "recent_output",
+        "timed_out",
         "artifacts",
     ]
+    assert (payload["state"], payload["timed_out"]) == ("running", True)

@@ -17,22 +17,22 @@ The server exposes these MCP tools:
   - Optional `release`, `machine_type`, `tag`, and `text` (scenario-name substring) filters.
   - Returns matching `feature_file`, `scenario_name`, `type`, required config, and the combos satisfying the filters.
   - `limit` caps the matches (default 50), with `total` and `truncated` alongside; `limit_clamped` is set when a value above the server max was capped.
-- `start_scenario` -- starts one unit in the background: one scenario on one release and one machine type.
-  - Returns a `job_id`.
+- `start_scenario` -- queues one unit to run in the background: one scenario on one release and one machine type.
+  - Returns a `job_id` and its `state`: `running` when its pool had a free lane, else `queued` with `queue_position` (1 is next in its pool). A queued job starts by itself when a lane frees; see [How a job runs](#how-a-job-runs).
   - `feature_file`, `scenario_name`, `release` and `machine_type` are all required. `scenario_name` is a scenario's exact name, as `describe_feature` lists it, and the scenario must cover that release and machine type. The job runs that scenario's rows for that combo and no other scenario.
   - A selection that matches no unit is rejected, and so is one that matches more than one: two scenarios with the same name that both cover the combo, which behave would run together.
   - The job runs in its own session with no stdin, so `kill_job` stops it and everything it started.
   - Optional `install_from` controls where `ubuntu-pro-client` is installed from before the scenario runs (sets `UACLIENT_BEHAVE_INSTALL_FROM` for the behave subprocess). Allowed values: `local` (default), `archive`, `daily`, `staging`, `stable`, `proposed`.
-  - Returns `repo`: the checkout's `root`, and its git `commit`, `branch` and `dirty` flag at launch time (the last three `null` when it isn't a git checkout), so results can be correlated back to the exact code tested. Also persisted on the job record.
-- `list_scenario_jobs` -- lists active jobs plus a bounded window of recently ended ones (finished or interrupted).
+  - The job's record holds `repo`: the checkout's `root`, and its git `commit`, `branch` and `dirty` flag when the job started (the last three `null` when it isn't a git checkout), so results can be correlated back to the exact code tested.
+- `list_scenario_jobs` -- lists queued and running jobs plus a bounded window of recently ended ones (finished or interrupted), and `pools`: each pool's max jobs and busy lanes, which is why a job is queued.
   - No known `job_id` or access to system processes required.
   - Reads every job off disk, so a job started by another server, by the CLI, or before a restart is listed and its state is current.
   - Optional `limit` caps how many ended jobs are returned (most recent first). `total_ended` and `truncated` in the response tell you if older jobs were dropped. `limit` must be positive; values above the server max are silently capped, with `limit_clamped` set when that happens.
-- `get_scenario_results` -- what came of each job: what it ran, `status` and `ok`, behave's own counts, and every failing step with its message.
+- `get_scenario_results` -- what came of each job: what it ran, `state` and `ok`, behave's own counts, and every failing step with its message.
   - One `JobResult` per job, most recently started first -- the same shape `wait_for_scenario_completion` returns for one job.
-  - Optional `job_ids`, `feature_file`, `scenario_name` (substring), `release`, `machine_type`, and `status` filters; `limit` caps the jobs listed, with `total` and `truncated` alongside. `limit` must be positive; values above the server max are capped, with `limit_clamped` set.
-- `wait_for_scenario_completion` -- waits for completion.
-  - Returns the job's `JobResult` (plus `returncode` and artifact paths), or a timeout payload.
+  - Optional `job_ids`, `feature_file`, `scenario_name` (substring), `release`, `machine_type`, and `state` filters; `limit` caps the jobs listed, with `total` and `truncated` alongside. `limit` must be positive; values above the server max are capped, with `limit_clamped` set.
+- `wait_for_scenario_completion` -- waits for a queued or running job to end.
+  - Returns the job's `JobResult` (plus `returncode` and artifact paths) with `state` `finished` or `interrupted` (with `reason` `killed` or `died`). If the wait runs out first, it returns the job as it stands, `queued` or `running`, with `timed_out: true`.
 - `get_scenario_errors` -- what went wrong in a job, from its log: every traceback, hook error and failed assertion in the order they happened, each with its line range, the failing step above it, and the exception raised.
   - The first region is usually the cause and later ones its consequences; `errors` is capped with `errors_total` alongside, long regions and lines are elided.
   - `finished` says whether behave reached its summary; `summary` is that block; `tail` and `log_path` are there when the parser has nothing to say (a tox or pip failure before behave, a killed job).
@@ -51,22 +51,25 @@ still land here, so one server keeps one set of jobs and campaigns:
 
 ```
 .mcp_server_behave/
-  jobs/        one directory per behave job
-  lanes/       one lock file per lane, held by the job using it
-  campaigns/   one directory per campaign: its record and run lock
+  config.json     this checkout's config; see [Configuration](#configuration)
+  reconcile.lock  held while a process reconciles the queue
+  jobs/           one directory per behave job
+  lanes/          one lock file per lane, held by the job using it
+  campaigns/      one directory per campaign: its record and run lock
 ```
 
 `MCP_STATE_DIR` moves the whole thing; there is no separate variable per kind.
 
-For each started job, the server writes artifacts under `jobs/`:
+For each job, these files live under `jobs/`:
 
-- `<job_id>/job.json`: what the job was asked to do -- unit, command, install source, checkout and its git state, start time, artifact paths. Written once, at launch.
+- `<job_id>/request.json`: what the job is to run -- unit, built command, install source, checkout, queue time. Written once, when it is queued.
+- `<job_id>/job.json`: what the job ran with -- the request, plus its start time, the checkout's git state, every behave option in force (each secret shown only as `<set>`) and artifact paths. Written once, when it starts.
 - `<job_id>/exit.json`: how it ended -- `returncode`, `ok`, `killed`, `finished_at`, and the `error` when tox could not start. Written once, by the job process; a job without one is running, or was interrupted.
 - `<job_id>/job.lock`: held by the job process for as long as it lives, and holding its PID. See [How a job runs](#how-a-job-runs).
 - `<job_id>/stdout.log`: combined stdout/stderr stream
 - `<job_id>/report.json`: behave JSON formatter output
 
-Both JSON files are written to a temporary file and renamed into place, so a reader never sees half of one. `list_scenario_jobs` lists every directory holding a `job.json`.
+The JSON files are written to a temporary file and renamed into place, so a reader never sees half of one. `list_scenario_jobs` lists every directory holding a `request.json`.
 
 It also exposes a health endpoint at `/healthz` for basic checks.
 
@@ -134,11 +137,14 @@ the CLI, and how MCP job results map onto attempts.
 ## Running the server
 
 The server serves MCP over streamable HTTP. Start it from
-`tools/mcp_server_behave`, with the environment its behave jobs need:
+`tools/mcp_server_behave`:
 
 ```bash
-UACLIENT_BEHAVE_CONTRACT_TOKEN=... uv run mcp-server-behave
+uv run mcp-server-behave
 ```
+
+What the jobs need, such as a contract token, goes in the checkout's
+[configuration](#configuration), not the server's environment.
 
 It listens on `http://127.0.0.1:8000/mcp`; `MCP_HOST` and `MCP_PORT` change
 the address, and `/healthz` answers `{"status": "ok"}`. It finds the checkout
@@ -210,21 +216,37 @@ uv run lint-imports
 `lint-imports` checks the import contracts in `pyproject.toml`: which
 modules may import which, within and between the two packages.
 
-## Environment variables
+## Configuration
 
-The server forwards its **entire** environment to the behave subprocess.
-Whatever env vars the MCP server itself is started with,
-including things like `UACLIENT_BEHAVE_CONTRACT_TOKEN` and
-`UACLIENT_BEHAVE_INSTALL_FROM`, are visible to the spawned `behave` process.
-Set what the jobs need in the environment you start the server in.
+Each checkout has one config, `config.json` in its state directory, set only
+with `behave-campaign config`. Every process that starts jobs reads it, so a
+job runs the same whoever starts it.
 
-The server also reads these variables at startup:
+```bash
+behave-campaign config                                   # show it
+behave-campaign config set max_jobs.lxd 3
+echo "$TOKEN" | behave-campaign config set behave.contract_token -
+behave-campaign config unset behave.custom_ppa
+```
 
-- `MCP_MAX_LXD_JOBS`, `MCP_MAX_CLOUD_JOBS`, `MCP_MAX_WSL_JOBS`: how many
-  behave jobs may run at once in each pool. Defaults are `1`, `0` and `1`.
-  `0` disables the pool, so cloud machine types are off until
-  `MCP_MAX_CLOUD_JOBS` is set. `MCP_MAX_WSL_JOBS` may only be `0` or `1`,
-  because WSL jobs share one Windows host.
+- `max_jobs.<pool>`: how many behave jobs may run at once in that pool.
+  Defaults are `lxd` 1, `cloud` 0, `wsl` 1. `0` disables the pool, so cloud
+  machine types are off until `max_jobs.cloud` is set. `wsl` may only be `0`
+  or `1`, because WSL jobs share one Windows host.
+- `behave.<option>`: any option behave reads from `UACLIENT_BEHAVE_<OPTION>`
+  (`features/environment.py`), such as `contract_token` or `custom_ppa`.
+  `install_from`, `releases` and `machine_types` are set per job and cannot
+  be configured. Secrets (the contract tokens, the staging service account
+  password, the Landscape keys) are never shown: `config` prints them as
+  `<set>`, and `-` reads the value from stdin so it stays out of your shell
+  history. `config.json` is readable only by you.
+
+A change applies to every job that starts after it, campaign jobs included.
+
+A job gets no `UACLIENT_BEHAVE_*` variable from the process that starts it,
+only those from the config, plus `UACLIENT_BEHAVE_INSTALL_FROM` from its own
+request. The server warns at startup about any it was started with. behave
+still reads `~/.config/protest.yaml` itself, underneath the config.
 
 Each machine type draws on one pool:
 
@@ -234,20 +256,30 @@ Each machine type draws on one pool:
 | `cloud` | `aws.*`, `gcp.*`, `azure.*`, including `pro` and `pro-fips` |
 | `wsl` | `wsl` |
 
-A job holds one lane in the pool its `machine_type` draws on, for as long as
-it runs. Lanes are lock files under `lanes/<pool>/`, so every server and CLI
-on one state directory shares them. Each process reads its own limits: two
-processes with different limits share the lower-numbered lanes, so the
-effective limit is the larger. When the pool is full, `start_scenario` fails fast with `status: capacity_exceeded` and
-`full_pools` naming each full pool with its limit and running count. Starting
-the server with a removed variable (`MCP_MAX_PARALLEL_JOBS`,
-`MCP_ALLOW_CLOUD_MACHINE_TYPES` or `MCP_TRANSPORT`) is an error that says
-what to use instead.
+A running job holds one lane in its pool. Lanes are lock files under
+`lanes/<pool>/`, shared by every process on the state directory. Busy counts
+every held lane, so lowering max jobs takes effect at once: nothing new
+starts until busy falls below it.
 
-Other startup variables:
+## Environment variables
+
+The server reads these at startup:
 
 - `MCP_HOST`: host to bind. Defaults to `127.0.0.1`.
 - `MCP_PORT`: port to bind. Defaults to `8000`.
+- `MCP_CAMPAIGN_POLL_TIMEOUT`: longest wait `await_campaign_events` may be
+  asked for, in seconds. Defaults to `60`, and must be between 1 and 120 --
+  the real ceiling is the MCP client's own request timeout, which varies per
+  host. A call asking for longer is rejected rather than quietly shortened.
+- `MCP_STATE_DIR`: where everything is written -- the config, job artifacts
+  under `jobs/`, campaign records under `campaigns/`. Defaults to
+  `.mcp_server_behave` in the server's checkout (`UBUNTU_PRO_CLIENT_REPO`, or
+  the checkout it runs from).
+
+Starting the server with a removed variable (`MCP_MAX_LXD_JOBS`,
+`MCP_MAX_CLOUD_JOBS`, `MCP_MAX_WSL_JOBS`, `MCP_MAX_PARALLEL_JOBS`,
+`MCP_ALLOW_CLOUD_MACHINE_TYPES` or `MCP_TRANSPORT`) is an error that says
+what to use instead.
 
 The catalog tools (`list_features`, `describe_feature`, `list_dimensions`,
 `find_scenarios`), `start_scenario` and `create_campaign` accept a `repo_root`
@@ -258,48 +290,60 @@ parameter:
 Tools that look up a job or a campaign by id take no `repo_root`: every job
 and campaign lives in the server's state directory.
 
-- `MCP_CAMPAIGN_POLL_TIMEOUT`: longest wait `await_campaign_events` may be
-  asked for, in seconds. Defaults to `60`, and must be between 1 and 120 --
-  the real ceiling is the MCP client's own request timeout, which varies per
-  host. A call asking for longer is rejected rather than quietly shortened.
-
-- `MCP_STATE_DIR`: where the server writes everything -- job artifacts under
-  `jobs/`, campaign records under `campaigns/`. Defaults to
-  `.mcp_server_behave` in the server's checkout (`UBUNTU_PRO_CLIENT_REPO`, or
-  the checkout it runs from).
-
 ## Safety constraints
 
 - `feature_file` must be one of the paths returned by `list_features`.
 - A job is exactly one unit: `scenario_name`, `release` and `machine_type` are required.
-- Cloud machine types are blocked by default and require setting `MCP_MAX_CLOUD_JOBS`.
+- Cloud machine types are blocked by default and require `behave-campaign config set max_jobs.cloud N`.
 - Concurrent jobs are capped per pool: one LXD job and one WSL job by default.
 
 ## How a job runs
 
+A job is queued first: `start_scenario` writes its `request.json` and then
+reconciles. **Reconcile** is one short step, run under `reconcile.lock` by
+whichever process calls it: it reads the config and every job's files, and
+starts the oldest queued jobs in each pool on that pool's free lanes. Pools
+are independent, so a full LXD pool never holds back a WSL job.
+
+Nothing long-lived drives the queue. Reconcile runs:
+
+- after every MCP tool call, and every 5 seconds in the server;
+- after every `behave-campaign` command;
+- in a job's own process, after it records its exit and lets go of its lane,
+  so the next queued job takes that lane at once.
+
+Any number of servers and CLIs may share one state directory: they
+coordinate through the lock and the files, and they all read the same
+config.
+
 Each job runs under its own job process, `python -m behave_mcp.job_process`,
-in its own session, so the server's death or a signal to it never reaches the
-job. The server starts the job process and hands it two locks: the job's lane
-and `jobs/<id>/job.lock`. The job process holds both for its whole life, runs
-tox as its child, and when tox exits writes `exit.json` and exits.
+in its own session, so the death of whatever started it, or a signal to it,
+never reaches the job. Reconcile takes a lane and `jobs/<id>/job.lock`,
+writes `job.json` while holding the lock, starts the job process and hands
+it both. The job process holds them while it runs tox as its child, and when
+tox exits it writes `exit.json`.
 
 That is what makes a job's state readable from any process, after any crash:
 
-| `exit.json` | `job.lock` held | state |
-| --- | --- | --- |
-| yes, `killed: false` | either | `finished` |
-| yes, `killed: true` | either | `interrupted`, reason `killed` |
-| no | yes | `running` |
-| no | no | `interrupted`, reason `died`: the job process died without writing an exit |
+| `exit.json` | `job.json` | `job.lock` held | state |
+| --- | --- | --- | --- |
+| yes, `killed: false` | either | either | `finished` |
+| yes, `killed: true` | either | either | `interrupted`, reason `killed` |
+| no | no | either | `queued` |
+| no | yes | yes | `running` |
+| no | yes | no | `interrupted`, reason `died`: the job process died without writing an exit |
 
 An interrupted job has no result: it is never a failure or an error, and
 nothing it did counts.
 
-tox gets a parent-death signal, so it cannot outlive its job process.
-`kill_job` sends SIGTERM to the job process, which passes it to tox's process
-group and waits for it, so pycloudlib can delete what it made; the exit is
-recorded with `killed: true`. A hard kill or a reboot can leave an instance
-behind: cleaning those up is pycloudlib's business, not this tool's.
+A job that cannot be started at all finishes at once, `ok: false`, with the
+reason in `error`. tox gets a parent-death signal, so it cannot outlive its
+job process. `kill_job` on a queued job records it as killed before it
+starts. On a running job it sends SIGTERM to the job process, which passes
+it to tox's process group and waits for it, so pycloudlib can delete what it
+made; the exit is recorded with `killed: true`. A hard kill or a reboot can
+leave an instance behind: cleaning those up is pycloudlib's business, not
+this tool's.
 
 ## TODOs
 

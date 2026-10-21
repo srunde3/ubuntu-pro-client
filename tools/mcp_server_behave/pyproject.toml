@@ -83,7 +83,7 @@ forbidden_modules = ["behave_campaign"]
 ignore_imports = ["behave_mcp.server -> behave_campaign.**"]
 
 [[tool.importlinter.contracts]]
-name = "behave_campaign uses only parser, domain.pools and domain.layout from behave_mcp"
+name = "behave_campaign uses only parser, domain.pools and domain.layout from behave_mcp; its CLI also uses wiring"
 type = "forbidden"
 source_modules = ["behave_campaign"]
 forbidden_modules = [
@@ -98,7 +98,11 @@ forbidden_modules = [
   "behave_mcp.server",
   "behave_mcp.service",
   "behave_mcp.views",
+  "behave_mcp.wiring",
 ]
+# Every front-end configures the checkout and reconciles its jobs, so the
+# CLI builds the job service, through the one wiring module.
+ignore_imports = ["behave_campaign.cli -> behave_mcp.wiring"]
 
 [[tool.importlinter.contracts]]
 name = "behave_mcp layers"
@@ -106,6 +110,7 @@ type = "layers"
 containers = ["behave_mcp"]
 layers = [
   "server | job_process",
+  "wiring",
   "service | adapters",
   "ports | config | views",
   "parser",

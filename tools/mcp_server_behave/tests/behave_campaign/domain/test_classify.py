@@ -28,7 +28,7 @@ def completed(
     if unknown:
         scenarios["unknown"] = unknown
     return {
-        "status": "finished",
+        "state": "finished",
         "ok": ok,
         "job_id": job_id,
         "summary": {"scenarios": scenarios, "features": {}},
@@ -51,7 +51,7 @@ CLASSIFY_CASES = [
         completed(passed=0, skipped=2), Outcome.SKIPPED, False, id="only-skips"
     ),
     pytest.param(
-        {"status": "finished", "ok": False, "job_id": "j", "summary": None},
+        {"state": "finished", "ok": False, "job_id": "j", "summary": None},
         Outcome.ERROR,
         False,
         id="no-report",
@@ -89,7 +89,7 @@ def test_classify_result(result, outcome, flagged):
 @pytest.mark.parametrize("reason", INTERRUPTIONS)
 def test_an_interrupted_job_is_an_interrupted_attempt(reason):
     result = {
-        "status": "interrupted",
+        "state": "interrupted",
         "reason": reason,
         "ok": False,
         "job_id": "job1",
@@ -103,7 +103,7 @@ def test_an_interrupted_job_is_an_interrupted_attempt(reason):
 
 
 def test_an_interruption_with_no_known_reason_is_a_death():
-    result = {"status": "interrupted", "ok": False, "job_id": "job1"}
+    result = {"state": "interrupted", "ok": False, "job_id": "job1"}
 
     closed = classify_result(UNIT_A, result, AT)
 
@@ -129,7 +129,7 @@ def test_an_unclassifiable_result_keeps_the_job_id_and_says_why():
 class TestMcpResultAdapter:
     def completed(self, scenarios, **overrides):
         result = {
-            "status": "finished",
+            "state": "finished",
             "ok": True,
             "job_id": "job-1",
             "returncode": 0,
@@ -139,14 +139,14 @@ class TestMcpResultAdapter:
         result.update(overrides)
         return result
 
-    @pytest.mark.parametrize("status", ["running", "timeout"])
+    @pytest.mark.parametrize("status", ["queued", "running"])
     def test_a_job_still_in_flight_has_no_outcome_to_record(self, status):
         # The scheduler owns an unfinished job: it wrote the start itself
         # and will write the finish. Recording one here would be inventing
         # a result nobody has.
         with pytest.raises(CampaignError) as error:
             finished_from_mcp(
-                UNIT_A, {"status": status, "ok": True, "job_id": "job-1"}
+                UNIT_A, {"state": status, "ok": True, "job_id": "job-1"}
             )
 
         assert "only a finished job" in str(error.value)
@@ -194,13 +194,3 @@ class TestMcpResultAdapter:
 
         with pytest.raises(CampaignError, match="ok=false"):
             finished_from_mcp(UNIT_A, result)
-
-    def test_capacity_exceeded_is_not_an_attempt(self):
-        rejected = {
-            "status": "capacity_exceeded",
-            "ok": False,
-            "error": "full",
-        }
-
-        with pytest.raises(CampaignError, match="capacity_exceeded"):
-            finished_from_mcp(UNIT_A, rejected)

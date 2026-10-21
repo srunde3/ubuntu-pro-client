@@ -30,6 +30,11 @@ from behave_campaign.domain.records import (
 from behave_campaign.domain.state import GROUPINGS, GroupBy
 from behave_mcp.domain import layout
 from behave_mcp.domain.pools import Pool
+from behave_mcp.wiring import (
+    BehaveServiceError,
+    create_service,
+    reconcile_quietly,
+)
 
 from .adapters import (
     CampaignDirStore,
@@ -168,6 +173,26 @@ def _command_export(args: argparse.Namespace) -> BaseModel:
         jobs=JobDirFiles(layout.jobs_dir(state)),
         writer=TarBundleWriter(),
     )
+
+
+def _command_config(args: argparse.Namespace) -> BaseModel:
+    service = create_service(state_dir=_state_dir(args))
+    if args.action == "set":
+        value = sys.stdin.read().strip() if args.value == "-" else args.value
+        return service.set_config(args.key, value)
+    if args.action == "unset":
+        return service.set_config(args.key, None)
+    return service.config_view()
+
+
+def _reconcile(args: argparse.Namespace) -> None:
+    """Start any queued job with a free lane, as every front-end does."""
+    try:
+        state = _state_dir(args)
+    except ValueError:
+        # No checkout named: there is no state directory to reconcile.
+        return
+    reconcile_quietly(create_service(state_dir=state))
 
 
 def _read_events(
@@ -461,6 +486,32 @@ def build_parser() -> argparse.ArgumentParser:
         help="seconds between polls with --follow (default: 5)",
     )
     events.set_defaults(handler=_command_events)
+
+    config = subparsers.add_parser(
+        "config",
+        help=(
+            "show or change this checkout's config: max jobs per pool, and "
+            "the behave options every job runs with"
+        ),
+    )
+    _add_repo_root(config)
+    actions = config.add_subparsers(dest="action")
+    actions.add_parser("show", help="show the config (the default)")
+    setter = actions.add_parser(
+        "set", help="set max_jobs.<pool> or behave.<option>"
+    )
+    setter.add_argument("key", metavar="KEY")
+    setter.add_argument(
+        "value",
+        metavar="VALUE",
+        help="the value, or - to read it from stdin (for secrets)",
+    )
+    unsetter = actions.add_parser(
+        "unset",
+        help="return max_jobs.<pool> to its default, or drop an option",
+    )
+    unsetter.add_argument("key", metavar="KEY")
+    config.set_defaults(handler=_command_config)
     return parser
 
 
@@ -484,9 +535,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             json.dump(output.model_dump(), sys.stdout, sort_keys=True)
             sys.stdout.write("\n")
             sys.stdout.flush()
-    except (ValueError, OSError) as error:
+    except (ValueError, OSError, BehaveServiceError) as error:
         print(str(error), file=sys.stderr)
         return 2
+    finally:
+        _reconcile(args)
     return 0
 
 

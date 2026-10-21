@@ -1,3 +1,4 @@
+import io
 import json
 import tarfile
 
@@ -275,6 +276,12 @@ class TestUnits:
 class TestAddressing:
     """A campaign is named the way the server names it, or by its file."""
 
+    @pytest.fixture(autouse=True)
+    def default_state_dir(self, monkeypatch):
+        """These tests are about the state directory a checkout has when
+        nothing overrides it."""
+        monkeypatch.delenv("MCP_STATE_DIR")
+
     def test_an_id_resolves_to_the_servers_file(self, run, repo):
         created = run(["create", "--campaign-id", "1234567"])
         status = run(
@@ -503,6 +510,13 @@ class TestEvents:
 
 
 class TestExport:
+
+    @pytest.fixture(autouse=True)
+    def default_state_dir(self, monkeypatch):
+        """These tests are about the state directory a checkout has when
+        nothing overrides it."""
+        monkeypatch.delenv("MCP_STATE_DIR")
+
     @pytest.fixture
     def finished(self, run, repo):
         """A campaign the server ran to completion, with its job files."""
@@ -592,3 +606,62 @@ class TestExport:
         )
 
         assert "only a complete campaign can be exported" in error
+
+
+class TestConfig:
+    @pytest.fixture
+    def config(self, repo, capsys, monkeypatch):
+        def _config(*action, stdin=None, expect=0):
+            if stdin is not None:
+                monkeypatch.setattr("sys.stdin", io.StringIO(stdin))
+            code = main(["config", "--repo-root", str(repo), *action])
+            captured = capsys.readouterr()
+            assert code == expect, captured.err
+            return json.loads(captured.out) if code == 0 else captured.err
+
+        return _config
+
+    def test_with_nothing_set_it_shows_the_defaults(self, config):
+        shown = config()
+
+        assert {pool["pool"]: pool["max_jobs"] for pool in shown["pools"]} == {
+            "lxd": 1,
+            "cloud": 0,
+            "wsl": 1,
+        }
+        assert shown["behave"] == {}
+
+    def test_max_jobs_can_be_set_and_unset(self, config):
+        config("set", "max_jobs.cloud", "2")
+        raised = config()
+        config("unset", "max_jobs.cloud")
+        restored = config()
+
+        assert {p["pool"]: p["max_jobs"] for p in raised["pools"]}[
+            "cloud"
+        ] == 2
+        assert {p["pool"]: p["max_jobs"] for p in restored["pools"]}[
+            "cloud"
+        ] == 0
+
+    def test_a_secret_read_from_stdin_is_never_shown(self, config):
+        shown = config("set", "behave.contract_token", "-", stdin="secret\n")
+
+        assert shown["behave"] == {"contract_token": "<set>"}
+        assert "secret" not in json.dumps(config())
+
+    @pytest.mark.parametrize(
+        "key, value, message",
+        [
+            pytest.param("max_jobs.wsl", "2", "wsl max jobs", id="above-cap"),
+            pytest.param("max_jobs.moon", "1", "Unknown pool", id="pool"),
+            pytest.param("behave.releases", "jammy", "per job", id="owned"),
+            pytest.param("color", "blue", "Unknown config key", id="key"),
+        ],
+    )
+    def test_a_bad_setting_is_refused_by_name(
+        self, config, key, value, message
+    ):
+        error = config("set", key, value, expect=2)
+
+        assert message in error

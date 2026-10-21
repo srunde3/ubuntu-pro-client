@@ -5,10 +5,14 @@ from pathlib import Path
 from typing import Callable
 
 from behave_mcp import parser
-from behave_mcp.config import Settings
+from behave_mcp.domain.config import (
+    CheckoutConfig,
+    behave_option_error,
+    job_environment,
+    shown_options,
+)
 from behave_mcp.domain.jobs import (
     DEFAULT_INSTALL_FROM,
-    INSTALL_FROM_ENV_VAR,
     ScenarioCombos,
     UnitMatch,
     build_command,
@@ -35,11 +39,17 @@ from behave_mcp.domain.limits import (
     MAX_RESULTS_LIMIT,
 )
 from behave_mcp.domain.logs import digest_log, select_log_lines
-from behave_mcp.domain.pools import POOL_LIMIT_ENV_VARS, POOL_OF
+from behave_mcp.domain.pools import (
+    DEFAULT_MAX_JOBS,
+    POOL_OF,
+    Pool,
+    max_jobs_error,
+)
+from behave_mcp.domain.queue import QueuedJob, plan_launches, queue_position
 from behave_mcp.domain.report import summarize_report
 from behave_mcp.messages import (
     ArtifactsResponse,
-    CapacityExceededResponse,
+    ConfigResponse,
     DescribeFeatureResponse,
     ErrorsResponse,
     FindScenariosResponse,
@@ -48,8 +58,10 @@ from behave_mcp.messages import (
     JobExit,
     JobListing,
     JobRecord,
+    JobRequest,
     JobResult,
     JobState,
+    JobStatusResult,
     KillJobResponse,
     ListDimensionsResponse,
     ListFeaturesResponse,
@@ -57,23 +69,23 @@ from behave_mcp.messages import (
     LogRegionView,
     LogsResponse,
     LogSummaryView,
-    PoolCapacity,
+    PoolUsage,
+    QueuedResponse,
     ResultsResponse,
     RunningResponse,
     ScenarioMatch,
     StartScenarioResponse,
-    StartScenarioResult,
     StepView,
-    TimeoutResponse,
-    WaitForCompletionResult,
 )
 from behave_mcp.ports import (
+    ConfigStore,
     FeatureFileReader,
     JobLauncher,
     JobResultStore,
     JobResultStoreFactory,
     JobStartError,
     LanePool,
+    ReconcileLock,
     Workspace,
 )
 from behave_mcp.views import (
@@ -84,6 +96,9 @@ from behave_mcp.views import (
 )
 
 logger = logging.getLogger(__name__)
+
+# A job in these states has not ended.
+ACTIVE_STATES = (JobState.QUEUED, JobState.RUNNING)
 
 
 class BehaveServiceError(Exception):
@@ -97,7 +112,7 @@ class BehaveServiceError(Exception):
 
 
 class UnknownJobError(BehaveServiceError):
-    """Raised when no job with this id was ever launched."""
+    """Raised when no job with this id was ever queued."""
 
     def __init__(self, job_id: str) -> None:
         super().__init__(
@@ -117,22 +132,24 @@ class BehaveService:
         self,
         *,
         workspace: Workspace,
-        settings: Settings,
+        config: ConfigStore,
         feature_reader: FeatureFileReader,
         results: JobResultStoreFactory,
         lanes: LanePool,
         launcher: JobLauncher,
+        reconcile_lock: ReconcileLock,
         monotonic: Callable[[], float],
         sleep: Callable[[float], None],
         now_utc: Callable[[], str],
         new_job_id: Callable[[], str],
     ) -> None:
         self._workspace = workspace
-        self._settings = settings
+        self._config = config
         self._feature_reader = feature_reader
         self._results = results
         self._lanes = lanes
         self._launcher = launcher
+        self._reconcile_lock = reconcile_lock
         self._monotonic = monotonic
         self._sleep = sleep
         self._now_utc = now_utc
@@ -318,10 +335,11 @@ class BehaveService:
         machine_type: str,
         repo_root: str = "",
         install_from: str = DEFAULT_INSTALL_FROM,
-    ) -> StartScenarioResult:
-        """Start one job for one unit: a scenario on one release and
-        machine type. A selection that matches no unit, or more than one,
-        is refused before anything starts."""
+    ) -> StartScenarioResponse:
+        """Queue one job for one unit, a scenario on one release and
+        machine type, and start it at once if its pool has a free lane. A
+        selection that matches no unit, or more than one, is refused before
+        anything is queued."""
         try:
             resolved_repo_root = self._workspace.resolve_repo_root(
                 repo_root or None
@@ -338,7 +356,7 @@ class BehaveService:
                 f"Feature is not listed by list_features: {feature_file}"
             )
         machine_type_error = validate_machine_type(
-            machine_type, self._settings.pool_limits
+            machine_type, self._read_config().max_jobs
         )
         if machine_type_error:
             raise BehaveServiceError(machine_type_error)
@@ -354,27 +372,7 @@ class BehaveService:
         if install_from_error:
             raise BehaveServiceError(install_from_error)
 
-        repo = self._workspace.repo_state(resolved_repo_root)
-
         results = self._results.bind(self._jobs_dir())
-        pool = POOL_OF[machine_type]
-        limit = self._settings.pool_limits.get(pool, 0)
-        lease = self._lanes.take(pool, limit)
-        if lease is None:
-            return CapacityExceededResponse(
-                error=(
-                    f"No room in the {pool} pool. Wait for an active job "
-                    f"to complete, or raise {POOL_LIMIT_ENV_VARS[pool]}."
-                ),
-                full_pools=[
-                    PoolCapacity(
-                        pool=pool.value,
-                        limit=limit,
-                        running=self._lanes.busy(pool, limit),
-                    )
-                ],
-            )
-
         job_id = self._new_job_id()
         write_targets = results.write_targets(job_id)
         command = build_command(
@@ -384,42 +382,128 @@ class BehaveService:
             machine_type,
             write_targets.json_report,
         )
-        env = self._workspace.subprocess_env()
-        env[INSTALL_FROM_ENV_VAR] = install_from
-
-        artifacts = results.artifacts(job_id)
-        # Written before the job process exists, so a launch that dies part way
-        # reads as an interrupted job rather than as no job at all.
-        results.write_record(
-            job_id,
-            JobRecord(
-                job_id=job_id,
-                started_at=self._now_utc(),
-                feature_file=feature_file,
-                scenario_name=scenario_name,
-                release=release,
-                machine_type=machine_type,
-                install_from=install_from,
-                command=command,
-                repo=repo,
-                artifacts=artifacts,
-            ),
-        )
         try:
-            self._launcher.launch(
-                job_id, command, str(resolved_repo_root), env, lease
+            results.write_request(
+                job_id,
+                JobRequest(
+                    job_id=job_id,
+                    queued_at=self._now_utc(),
+                    feature_file=feature_file,
+                    scenario_name=scenario_name,
+                    release=release,
+                    machine_type=machine_type,
+                    install_from=install_from,
+                    command=command,
+                    repo_root=str(resolved_repo_root),
+                ),
             )
-        except JobStartError as exc:
-            raise BehaveServiceError(
-                f"Failed to start behave scenario: {exc}"
-            ) from exc
+        except OSError as exc:
+            raise BehaveServiceError(f"Could not queue the job: {exc}")
 
+        self.reconcile()
+        payload = self._status_payload(job_id)
+        if isinstance(payload, QueuedResponse):
+            message = (
+                f"Queued, position {payload.queue_position} in the "
+                f"{POOL_OF[machine_type]} pool. Call "
+                "wait_for_scenario_completion."
+            )
+        else:
+            message = "Started. Call wait_for_scenario_completion."
         return StartScenarioResponse(
             job_id=job_id,
-            message="Test started. Call wait_for_scenario_completion.",
-            artifacts=artifacts,
-            repo=repo,
+            state=payload.state,
+            queue_position=(
+                payload.queue_position
+                if isinstance(payload, QueuedResponse)
+                else None
+            ),
+            message=message,
+            artifacts=results.artifacts(job_id),
         )
+
+    def reconcile(self) -> None:
+        """Start queued jobs on free lanes, oldest first in each pool.
+
+        Any process may call this at any time: it holds the state
+        directory's reconcile lock, and everything it decides comes from
+        files, so the result is the same whoever calls it.
+        """
+        results = self._results.bind(self._jobs_dir())
+        with self._reconcile_lock.hold():
+            config = self._read_config()
+            busy = {pool: self._lanes.busy(pool) for pool in Pool}
+            for job_id in plan_launches(
+                self._queued(results), busy, config.max_jobs
+            ):
+                self._launch(job_id, results, config)
+
+    def _queued(self, results: JobResultStore) -> list[QueuedJob]:
+        queued = []
+        for job_id in results.list_job_ids():
+            flags = results.exists(job_id)
+            if flags.record or flags.exit:
+                continue
+            request = results.read_request(job_id)
+            if request is None or request.machine_type not in POOL_OF:
+                continue
+            queued.append(
+                QueuedJob(
+                    job_id=job_id,
+                    pool=POOL_OF[request.machine_type],
+                    queued_at=request.queued_at,
+                )
+            )
+        return queued
+
+    def _launch(
+        self, job_id: str, results: JobResultStore, config: CheckoutConfig
+    ) -> None:
+        request = results.read_request(job_id)
+        if request is None:
+            return
+        pool = POOL_OF[request.machine_type]
+        lease = self._lanes.take(pool, config.max_jobs.get(pool, 0))
+        if lease is None:
+            return
+        repo = self._workspace.repo_state(Path(request.repo_root))
+        env = job_environment(
+            self._workspace.subprocess_env(), config, request.install_from
+        )
+
+        def record() -> None:
+            results.write_record(
+                job_id,
+                JobRecord(
+                    job_id=job_id,
+                    started_at=self._now_utc(),
+                    feature_file=request.feature_file,
+                    scenario_name=request.scenario_name,
+                    release=request.release,
+                    machine_type=request.machine_type,
+                    install_from=request.install_from,
+                    command=request.command,
+                    repo=repo,
+                    config=shown_options(config.behave),
+                    artifacts=results.artifacts(job_id),
+                ),
+            )
+
+        try:
+            self._launcher.launch(
+                job_id, request.command, request.repo_root, env, lease, record
+            )
+        except JobStartError as exc:
+            # Nobody is waiting on a reconcile to raise to: the job ends
+            # with the reason, rather than being retried forever.
+            results.write_exit(
+                job_id,
+                JobExit(
+                    finished_at=self._now_utc(),
+                    ok=False,
+                    error=f"Could not start: {exc}",
+                ),
+            )
 
     def _check_unit(
         self,
@@ -464,13 +548,29 @@ class BehaveService:
         raise BehaveServiceError(refusals[match])
 
     def kill_job(self, job_id: str) -> KillJobResponse:
-        """Stop a running job, from any process.
+        """Stop a queued or running job, from any process.
 
-        The job process passes the kill to tox and waits for it, so the job
-        ends and records its exit as killed: it is interrupted. A campaign's
-        next tick then records the unit, rather than waiting on it forever.
+        A queued job is recorded as killed before it starts. A running
+        job's process passes the kill to tox and waits for it, so the job
+        ends and records its exit as killed. Either way it is interrupted.
         """
         results = self._known(job_id)
+        if self._state(job_id, results) == JobState.QUEUED:
+            with self._reconcile_lock.hold():
+                if self._state(job_id, results) == JobState.QUEUED:
+                    results.write_exit(
+                        job_id,
+                        JobExit(
+                            finished_at=self._now_utc(),
+                            killed=True,
+                            error="killed before it started",
+                        ),
+                    )
+                    return KillJobResponse(
+                        job_id=job_id,
+                        killed=True,
+                        message="Killed before it started.",
+                    )
         state = self._state(job_id, results)
         if state == JobState.FINISHED:
             message = "Job had already finished."
@@ -484,9 +584,7 @@ class BehaveService:
             message = "Job's process could not be reached."
         return KillJobResponse(job_id=job_id, killed=False, message=message)
 
-    def job_status(
-        self, job_id: str
-    ) -> RunningResponse | FinishedResponse | InterruptedResponse:
+    def job_status(self, job_id: str) -> JobStatusResult:
         """Return a job's current state without waiting.
 
         ``wait_for_completion`` requires a positive timeout, so this is what
@@ -500,7 +598,9 @@ class BehaveService:
         job_id: str,
         max_wait_seconds: int = DEFAULT_WAIT_TIMEOUT_SECONDS,
         poll_interval_seconds: float = (DEFAULT_WAIT_POLL_INTERVAL_SECONDS),
-    ) -> WaitForCompletionResult:
+    ) -> JobStatusResult:
+        """Wait for a job to end. A job still queued or running when the
+        wait runs out is returned as it stands, with ``timed_out`` set."""
         if max_wait_seconds <= 0:
             raise BehaveServiceError("max_wait_seconds must be greater than 0")
         if poll_interval_seconds <= 0:
@@ -513,18 +613,12 @@ class BehaveService:
         while True:
             payload = self._status_payload(job_id)
 
-            if not isinstance(payload, RunningResponse):
+            if not isinstance(payload, (QueuedResponse, RunningResponse)):
                 return payload
 
             if self._monotonic() >= deadline:
-                return TimeoutResponse(
-                    job_id=job_id,
-                    max_wait_seconds=max_wait_seconds,
-                    poll_interval_seconds=poll_interval_seconds,
-                    last_status=JobState.RUNNING,
-                    recent_output=payload.recent_output,
-                    artifacts=payload.artifacts,
-                )
+                payload.timed_out = True
+                return payload
 
             self._sleep(poll_interval_seconds)
 
@@ -626,7 +720,12 @@ class BehaveService:
         return ArtifactsResponse(
             job_id=job_id,
             artifacts=results.artifacts(job_id),
-            record=results.read_record(job_id),
+            request=results.read_request(job_id),
+            record=(
+                results.read_record(job_id)
+                if results.exists(job_id).record
+                else None
+            ),
             exit=results.read_exit(job_id),
             exists=results.exists(job_id),
         )
@@ -646,13 +745,14 @@ class BehaveService:
             self._job_listing(job_id, results)
             for job_id in results.list_job_ids()
         ]
-        summaries.sort(key=lambda summary: summary.started_at or "")
-        running = [s for s in summaries if s.status == JobState.RUNNING]
-        others = [s for s in summaries if s.status != JobState.RUNNING]
-        trimmed = running + others[-limit:]
+        summaries.sort(key=lambda summary: summary.queued_at)
+        active = [s for s in summaries if s.state in ACTIVE_STATES]
+        others = [s for s in summaries if s.state not in ACTIVE_STATES]
+        trimmed = active + others[-limit:]
 
         return ListScenarioJobsResponse(
             jobs=trimmed,
+            pools=self.pool_usage(),
             total_ended=len(others),
             truncated=len(others) > limit,
             limit_clamped=limit_clamped,
@@ -665,17 +765,17 @@ class BehaveService:
         scenario_name: str = "",
         release: str = "",
         machine_type: str = "",
-        status: str = "",
+        state: str = "",
         limit: int = DEFAULT_RESULTS_LIMIT,
     ) -> ResultsResponse:
-        status_filter: JobState | None = None
-        if status:
+        state_filter: JobState | None = None
+        if state:
             try:
-                status_filter = JobState(status)
+                state_filter = JobState(state)
             except ValueError:
                 allowed = ", ".join(s.value for s in JobState)
                 raise BehaveServiceError(
-                    f"Invalid status filter: {status}. "
+                    f"Invalid state filter: {state}. "
                     f"Allowed values: {allowed}"
                 ) from None
 
@@ -696,8 +796,9 @@ class BehaveService:
 
         matched: list[tuple[str, JobListing]] = []
         for job_id in results.list_job_ids():
-            if not job_matches_result_filters(
-                results.read_record(job_id),
+            request = results.read_request(job_id)
+            if request is None or not job_matches_result_filters(
+                request,
                 job_id=job_id,
                 job_ids=job_ids_filter,
                 feature_file=normalized_feature_file,
@@ -707,11 +808,11 @@ class BehaveService:
             ):
                 continue
             summary = self._job_listing(job_id, results)
-            if status_filter is not None and summary.status != status_filter:
+            if state_filter is not None and summary.state != state_filter:
                 continue
             matched.append((job_id, summary))
 
-        matched.sort(key=lambda item: item[1].started_at or "", reverse=True)
+        matched.sort(key=lambda item: item[1].queued_at, reverse=True)
         return ResultsResponse(
             results=[
                 self._job_result(job_id, summary, results)
@@ -726,13 +827,13 @@ class BehaveService:
         self, job_id: str, summary: JobListing, results: JobResultStore
     ) -> JobResult:
         report = None
-        if summary.status == JobState.FINISHED:
+        if summary.state == JobState.FINISHED:
             report_data = results.read_report(job_id)
             if report_data is not None:
                 report = summarize_report(report_data)
         return JobResult(
             job_id=job_id,
-            status=summary.status.value,
+            state=summary.state,
             ok=summary.ok,
             feature_file=summary.feature_file,
             scenario_name=summary.scenario_name,
@@ -743,38 +844,44 @@ class BehaveService:
         )
 
     def _job_listing(self, job_id: str, results: JobResultStore) -> JobListing:
+        request = results.read_request(job_id) or JobRequest()
         record = results.read_record(job_id)
         exit = results.read_exit(job_id)
-        status = self._state(job_id, results, exit)
+        state = self._state(job_id, results, exit)
         return JobListing(
             job_id=job_id,
-            status=status,
+            state=state,
             reason=(
-                interruption(exit) if status == JobState.INTERRUPTED else None
+                interruption(exit) if state == JobState.INTERRUPTED else None
             ),
             ok=(
                 exit.ok
                 if exit is not None
-                else (None if status == JobState.RUNNING else False)
+                else (False if state == JobState.INTERRUPTED else None)
             ),
             returncode=exit.returncode if exit is not None else None,
-            feature_file=record.feature_file,
-            scenario_name=record.scenario_name,
-            release=record.release,
-            machine_type=record.machine_type,
+            feature_file=request.feature_file,
+            scenario_name=request.scenario_name,
+            release=request.release,
+            machine_type=request.machine_type,
+            queued_at=request.queued_at,
             started_at=record.started_at,
             finished_at=exit.finished_at if exit is not None else None,
             artifacts=results.artifacts(job_id),
         )
 
-    def _status_payload(
-        self, job_id: str
-    ) -> RunningResponse | FinishedResponse | InterruptedResponse:
+    def _status_payload(self, job_id: str) -> JobStatusResult:
         results = self._known(job_id)
         exit = results.read_exit(job_id)
         state = self._state(job_id, results, exit)
         artifacts = results.artifacts(job_id)
 
+        if state == JobState.QUEUED:
+            return QueuedResponse(
+                job_id=job_id,
+                queue_position=queue_position(job_id, self._queued(results)),
+                artifacts=artifacts,
+            )
         if state == JobState.RUNNING:
             return RunningResponse(
                 job_id=job_id,
@@ -784,7 +891,7 @@ class BehaveService:
                 artifacts=artifacts,
             )
 
-        record = results.read_record(job_id)
+        request = results.read_request(job_id) or JobRequest()
         if state == JobState.INTERRUPTED or exit is None:
             return InterruptedResponse(
                 job_id=job_id,
@@ -793,10 +900,10 @@ class BehaveService:
                 recent_output=results.log_tail(
                     job_id, DEFAULT_RUNNING_TAIL_LINES
                 ),
-                feature_file=record.feature_file,
-                scenario_name=record.scenario_name,
-                release=record.release,
-                machine_type=record.machine_type,
+                feature_file=request.feature_file,
+                scenario_name=request.scenario_name,
+                release=request.release,
+                machine_type=request.machine_type,
             )
 
         report_data = results.read_report(job_id)
@@ -807,6 +914,7 @@ class BehaveService:
             ok=exit.ok,
             job_id=job_id,
             returncode=exit.returncode,
+            error=exit.error,
             artifacts=artifacts,
             summary=None if report is None else report.summary,
             failures=[] if report is None else report.failures,
@@ -815,16 +923,16 @@ class BehaveService:
                 if report is None
                 else None
             ),
-            feature_file=record.feature_file,
-            scenario_name=record.scenario_name,
-            release=record.release,
-            machine_type=record.machine_type,
+            feature_file=request.feature_file,
+            scenario_name=request.scenario_name,
+            release=request.release,
+            machine_type=request.machine_type,
         )
 
     def _known(self, job_id: str) -> JobResultStore:
-        """The store holding ``job_id``, which must have been launched."""
+        """The store holding ``job_id``, which must have been queued."""
         results = self._results.bind(self._jobs_dir())
-        if not results.exists(job_id).record:
+        if not results.exists(job_id).request:
             raise UnknownJobError(job_id)
         return results
 
@@ -836,10 +944,90 @@ class BehaveService:
     ) -> JobState:
         if exit is None:
             exit = results.read_exit(job_id)
+        launched = results.exists(job_id).record
         return job_state(
             exit=exit,
-            lock_held=exit is None and self._launcher.is_running(job_id),
+            launched=launched,
+            lock_held=(
+                exit is None and launched and self._launcher.is_running(job_id)
+            ),
         )
+
+    def _read_config(self) -> CheckoutConfig:
+        try:
+            return self._config.read()
+        except ValueError as exc:
+            raise BehaveServiceError(str(exc)) from exc
+
+    def read_config(self) -> CheckoutConfig:
+        """The checkout's config, secrets included: for front-ends to
+        show, never to return whole."""
+        return self._read_config()
+
+    def pool_usage(self) -> list[PoolUsage]:
+        max_jobs = self._read_config().max_jobs
+        return [
+            PoolUsage(
+                pool=pool.value,
+                max_jobs=max_jobs.get(pool, 0),
+                busy=self._lanes.busy(pool),
+            )
+            for pool in Pool
+        ]
+
+    def config_view(self) -> ConfigResponse:
+        return ConfigResponse(
+            pools=self.pool_usage(),
+            behave=shown_options(self._read_config().behave),
+        )
+
+    def set_config(self, key: str, value: str | None) -> ConfigResponse:
+        """Set ``key`` to ``value``, or unset it when ``value`` is None.
+
+        Keys are ``max_jobs.<pool>`` and ``behave.<option>``. Unsetting
+        max jobs returns the pool to its default. The change applies to
+        every job that starts after it.
+        """
+        section, _, name = key.partition(".")
+        config = self._read_config()
+        if section == "max_jobs":
+            try:
+                pool = Pool(name)
+            except ValueError:
+                raise BehaveServiceError(
+                    f"Unknown pool in {key}. Pools: "
+                    + ", ".join(p.value for p in Pool)
+                ) from None
+            max_jobs = dict(config.max_jobs)
+            if value is None:
+                max_jobs[pool] = DEFAULT_MAX_JOBS[pool]
+            else:
+                try:
+                    count: object = int(value)
+                except ValueError:
+                    count = value
+                error = max_jobs_error(pool, count)
+                if error:
+                    raise BehaveServiceError(error)
+                max_jobs[pool] = int(value)
+            config = CheckoutConfig(max_jobs=max_jobs, behave=config.behave)
+        elif section == "behave":
+            error = behave_option_error(name)
+            if error:
+                raise BehaveServiceError(error)
+            behave = dict(config.behave)
+            if value is None:
+                behave.pop(name, None)
+            else:
+                behave[name] = value
+            config = CheckoutConfig(max_jobs=config.max_jobs, behave=behave)
+        else:
+            raise BehaveServiceError(
+                f"Unknown config key {key!r}: use max_jobs.<pool> or "
+                "behave.<option>."
+            )
+        self._config.write(config)
+        return self.config_view()
 
     def _jobs_dir(self) -> Path:
         try:

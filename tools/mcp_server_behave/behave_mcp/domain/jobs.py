@@ -5,8 +5,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Collection, Iterable, Mapping
 
-from behave_mcp.domain.pools import POOL_LIMIT_ENV_VARS, POOL_OF, Pool
-from behave_mcp.messages import Interruption, JobExit, JobRecord, JobState
+from behave_mcp.domain.pools import POOL_OF, Pool
+from behave_mcp.messages import Interruption, JobExit, JobRequest, JobState
 
 # features/environment.py reads this exact name (UAClientBehaveConfig's
 # UACLIENT_BEHAVE_ prefix + install_from) to pick where the behave
@@ -37,7 +37,7 @@ DEFAULT_INSTALL_FROM = (
 
 
 def validate_machine_type(
-    machine_type: str, pool_limits: Mapping[Pool, int]
+    machine_type: str, max_jobs: Mapping[Pool, int]
 ) -> str | None:
     if machine_type not in POOL_OF:
         allowed = ",".join(sorted(POOL_OF))
@@ -46,10 +46,10 @@ def validate_machine_type(
             f"Allowed values: {allowed}"
         )
     pool = POOL_OF[machine_type]
-    if not pool_limits.get(pool):
+    if not max_jobs.get(pool):
         return (
-            f"{pool} machine types are disabled on this server. Set "
-            f"{POOL_LIMIT_ENV_VARS[pool]} to a positive integer to allow "
+            f"{pool} machine types are disabled for this checkout. Run "
+            f"behave-campaign config set max_jobs.{pool} N to allow "
             f"{machine_type}."
         )
     return None
@@ -104,16 +104,22 @@ def validate_install_from(install_from: str) -> str | None:
     return None
 
 
-def job_state(*, exit: JobExit | None, lock_held: bool) -> JobState:
-    """A job's state from its exit and its lock.
+def job_state(
+    *, exit: JobExit | None, launched: bool, lock_held: bool
+) -> JobState:
+    """A job's state from its exit, its launch record and its lock.
 
     The job process holds the job lock for its whole life and writes the
     exit before it lets go, so an exit decides: a killed job is
-    interrupted, any other has finished. Without one, a held lock means the
-    job process is alive, and a free one means it died.
+    interrupted, any other has finished. Without one, a job never launched
+    is queued; a launched one is running while its lock is held, and its
+    process died if the lock is free. The launch takes the lock before it
+    writes the launch record, so a launch in progress never reads as dead.
     """
     if exit is not None:
         return JobState.INTERRUPTED if exit.killed else JobState.FINISHED
+    if not launched:
+        return JobState.QUEUED
     if lock_held:
         return JobState.RUNNING
     return JobState.INTERRUPTED
@@ -153,7 +159,7 @@ def build_command(
 
 
 def job_matches_result_filters(
-    record: JobRecord,
+    record: JobRequest,
     *,
     job_id: str,
     job_ids: set[str] | None,
@@ -162,9 +168,9 @@ def job_matches_result_filters(
     release: str | None,
     machine_type: str | None,
 ) -> bool:
-    """Return whether a job's record satisfies ``get_scenario_results``
+    """Return whether a job's request satisfies ``get_scenario_results``
     filters. Only ``job_ids`` inspects ``job_id`` directly; the rest read
-    fields already present in that job's record.
+    fields of what the job was asked to run.
     """
     if job_ids is not None and job_id not in job_ids:
         return False

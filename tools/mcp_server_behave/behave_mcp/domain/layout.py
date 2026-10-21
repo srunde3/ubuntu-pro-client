@@ -17,7 +17,12 @@ DEFAULT_STATE_DIR_NAME = ".mcp_server_behave"
 JOBS_SUBDIR = "jobs"
 CAMPAIGNS_SUBDIR = "campaigns"
 LANES_SUBDIR = "lanes"
+# The service's config for this checkout.
+CONFIG_NAME = "config.json"
+# Held while reconcile runs, by whichever process runs it.
+RECONCILE_LOCK_NAME = "reconcile.lock"
 # The files in one job's directory, ``jobs/<job_id>/``.
+JOB_REQUEST_NAME = "request.json"
 JOB_RECORD_NAME = "job.json"
 JOB_EXIT_NAME = "exit.json"
 JOB_LOCK_NAME = "job.lock"
@@ -25,6 +30,7 @@ JOB_LOCK_NAME = "job.lock"
 JOB_KILL_NAME = "kill"
 STDOUT_LOG_NAME = "stdout.log"
 JSON_REPORT_NAME = "report.json"
+# The files that are a job's evidence; its request is repeated in its record.
 JOB_FILE_NAMES = (
     JOB_RECORD_NAME,
     JOB_EXIT_NAME,
@@ -85,11 +91,13 @@ def export_file(state: Path, campaign_id: str) -> Path:
 class JobPaths(NamedTuple):
     """The directory one job owns, and the files in it.
 
-    ``record`` is written once at launch and ``exit`` once at exit;
-    behave writes ``stdout_log`` and ``json_report`` as it runs.
+    ``request`` is written once when the job is queued, ``record`` once at
+    launch and ``exit`` once at exit; behave writes ``stdout_log`` and
+    ``json_report`` as it runs.
     """
 
     job_dir: Path
+    request: Path
     record: Path
     exit: Path
     stdout_log: Path
@@ -102,6 +110,7 @@ def job_paths(jobs: Path, job_id: str) -> JobPaths:
     job_dir = jobs / job_id
     return JobPaths(
         job_dir=job_dir,
+        request=job_dir / JOB_REQUEST_NAME,
         record=job_dir / JOB_RECORD_NAME,
         exit=job_dir / JOB_EXIT_NAME,
         stdout_log=job_dir / STDOUT_LOG_NAME,
@@ -109,6 +118,14 @@ def job_paths(jobs: Path, job_id: str) -> JobPaths:
         lock=job_dir / JOB_LOCK_NAME,
         kill=job_dir / JOB_KILL_NAME,
     )
+
+
+def config_file(state: Path) -> Path:
+    return state / CONFIG_NAME
+
+
+def reconcile_lock(state: Path) -> Path:
+    return state / RECONCILE_LOCK_NAME
 
 
 def lanes_dir(state: Path) -> Path:

@@ -19,8 +19,7 @@ from pathlib import Path
 
 import pytest
 
-from behave_mcp.config import load_settings
-from behave_mcp.server import create_service
+from behave_mcp.wiring import create_service
 
 FEATURE = "features/_version.feature"
 SCENARIO = "Attached show version in a ubuntu machine"
@@ -31,12 +30,11 @@ SAMPLE_INTERVAL_SECONDS = 0.5
 # Run in a separate interpreter: what a restarted server or the CLI would do.
 OTHER_PROCESS = """
 import json, os, sys
-from behave_mcp.config import load_settings
-from behave_mcp.server import create_service
+from behave_mcp.wiring import create_service
 
-service = create_service(load_settings(os.environ))
+service = create_service()
 job_id = sys.argv[1]
-before = service.job_status(job_id).status
+before = service.job_status(job_id).state.value
 killed = service.kill_job(job_id).killed
 print(json.dumps({"before": before, "killed": killed}))
 """
@@ -50,12 +48,12 @@ def test_another_process_sees_a_running_job_and_kills_it(
     repo_root = Path(__file__).resolve().parents[4]
     monkeypatch.setenv("UBUNTU_PRO_CLIENT_REPO", str(repo_root))
     monkeypatch.setenv("MCP_STATE_DIR", str(tmp_path / "state"))
-    service = create_service(load_settings(os.environ))
+    service = create_service()
 
     started = service.start_scenario(
         FEATURE, SCENARIO, release="jammy", machine_type="lxd-container"
     )
-    assert started.status == "started"
+    assert started.state == "running"
 
     other = subprocess.run(
         [sys.executable, "-c", OTHER_PROCESS, started.job_id],
@@ -67,7 +65,7 @@ def test_another_process_sees_a_running_job_and_kills_it(
     seen = json.loads(other.stdout)
 
     deadline = time.monotonic() + JOB_TIMEOUT_SECONDS
-    while service.job_status(started.job_id).status == "running":
+    while service.job_status(started.job_id).state == "running":
         assert time.monotonic() < deadline, "the killed job did not stop"
         time.sleep(SAMPLE_INTERVAL_SECONDS)
 
@@ -77,7 +75,37 @@ def test_another_process_sees_a_running_job_and_kills_it(
     assert ended.exit.killed is True
     assert ended.exit.ok is False
     interrupted = service.job_status(started.job_id)
-    assert (interrupted.status, interrupted.reason) == (
+    assert (interrupted.state, interrupted.reason) == (
         "interrupted",
         "killed",
     )
+
+
+@pytest.mark.e2e
+@pytest.mark.long_running
+def test_two_jobs_on_one_lane_run_back_to_back_with_nobody_calling(
+    monkeypatch, tmp_path
+):
+    repo_root = Path(__file__).resolve().parents[4]
+    monkeypatch.setenv("UBUNTU_PRO_CLIENT_REPO", str(repo_root))
+    monkeypatch.setenv("MCP_STATE_DIR", str(tmp_path / "state"))
+    service = create_service()
+
+    first = service.start_scenario(
+        FEATURE, SCENARIO, release="jammy", machine_type="lxd-container"
+    )
+    second = service.start_scenario(
+        FEATURE, SCENARIO, release="noble", machine_type="lxd-container"
+    )
+    assert (first.state, second.state) == ("running", "queued")
+
+    # Only reads from here on, which never reconcile: the first job's own
+    # process must start the second when it ends.
+    deadline = time.monotonic() + 2 * JOB_TIMEOUT_SECONDS
+    while service.job_status(second.job_id).state != "finished":
+        assert time.monotonic() < deadline, "the queued job never ran"
+        time.sleep(SAMPLE_INTERVAL_SECONDS)
+
+    first_record = service.get_artifacts(first.job_id)
+    second_record = service.get_artifacts(second.job_id)
+    assert first_record.exit.finished_at <= second_record.record.started_at

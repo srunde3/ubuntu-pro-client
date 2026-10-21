@@ -177,21 +177,31 @@ EXITS = {
     "killed": JobExit(returncode=-15, killed=True),
 }
 
-# A job's state for every exit and "its process holds the job lock". The job
-# process writes the exit before letting go of the lock, so an exit decides
-# even while the lock is still held.
+# A job's state for every exit, "it has a launch record" and "its process
+# holds the job lock". The job process writes the exit before letting go of
+# the lock, so an exit decides even while the lock is still held; the launch
+# takes the lock before it writes the record, so a held lock without a record
+# is a launch in progress, still queued.
 JOB_STATE = {
-    ("no-exit", True): JobState.RUNNING,
-    ("no-exit", False): JobState.INTERRUPTED,
-    ("exited", True): JobState.FINISHED,
-    ("exited", False): JobState.FINISHED,
-    ("killed", True): JobState.INTERRUPTED,
-    ("killed", False): JobState.INTERRUPTED,
+    ("no-exit", False, False): JobState.QUEUED,
+    ("no-exit", False, True): JobState.QUEUED,
+    ("no-exit", True, True): JobState.RUNNING,
+    ("no-exit", True, False): JobState.INTERRUPTED,
+    ("exited", False, False): JobState.FINISHED,
+    ("exited", False, True): JobState.FINISHED,
+    ("exited", True, True): JobState.FINISHED,
+    ("exited", True, False): JobState.FINISHED,
+    ("killed", False, False): JobState.INTERRUPTED,
+    ("killed", False, True): JobState.INTERRUPTED,
+    ("killed", True, True): JobState.INTERRUPTED,
+    ("killed", True, False): JobState.INTERRUPTED,
 }
 
 
 def test_every_combination_has_an_expected_state():
-    assert set(JOB_STATE) == set(itertools.product(EXITS, (True, False)))
+    assert set(JOB_STATE) == set(
+        itertools.product(EXITS, (False, True), (False, True))
+    )
 
 
 def test_every_state_is_reached():
@@ -199,12 +209,14 @@ def test_every_state_is_reached():
 
 
 @pytest.mark.parametrize(
-    "exit, lock_held, expected",
-    [(e, h, want) for (e, h), want in JOB_STATE.items()],
+    "exit, launched, lock_held, expected",
+    [(e, la, h, want) for (e, la, h), want in JOB_STATE.items()],
     ids=str,
 )
-def test_job_state(exit, lock_held, expected):
-    assert job_state(exit=EXITS[exit], lock_held=lock_held) == expected
+def test_job_state(exit, launched, lock_held, expected):
+    state = job_state(exit=EXITS[exit], launched=launched, lock_held=lock_held)
+
+    assert state == expected
 
 
 # Why an interrupted job has no result: a kill leaves an exit saying so, and
@@ -341,7 +353,7 @@ def test_a_machine_type_in_a_disabled_pool_names_the_setting():
     message = validate_machine_type("aws.generic", limits)
 
     assert message is not None
-    assert "MCP_MAX_CLOUD_JOBS" in message
+    assert "max_jobs.cloud" in message
 
 
 def test_a_machine_type_in_an_enabled_pool_is_allowed():

@@ -9,19 +9,26 @@ import subprocess
 import sys
 import tempfile
 from collections import deque
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Callable, TypeVar
+from typing import Any, Callable, Iterator, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
 from behave_mcp import parser
 from behave_mcp.domain import layout
+from behave_mcp.domain.config import (
+    CheckoutConfig,
+    config_document,
+    parse_config,
+)
 from behave_mcp.domain.pools import Pool
 from behave_mcp.messages import (
     Artifacts,
     ExistsFlags,
     JobExit,
     JobRecord,
+    JobRequest,
     RepoState,
 )
 from behave_mcp.ports import JobStartError, Lease, WriteTargets
@@ -76,37 +83,45 @@ class FileLease:
 
 
 class FileLanePool:
-    """Lanes as lock files, ``lanes/<pool>/<n>.lock`` for n below a limit.
+    """Lanes as lock files, ``lanes/<pool>/<n>.lock`` for n below max jobs.
 
     The kernel arbitrates, so every process on one state directory shares
-    the same lanes without talking to the others.
+    the same lanes without talking to the others. Busy counts every held
+    lane file, so a lane numbered above a lowered max jobs still counts.
     """
 
     def __init__(self, lanes_dir: Callable[[], Path]) -> None:
         self._lanes_dir = lanes_dir
 
-    def take(self, pool: Pool, limit: int) -> FileLease | None:
-        for lane in range(limit):
+    def take(self, pool: Pool, max_jobs: int) -> FileLease | None:
+        if self.busy(pool) >= max_jobs:
+            return None
+        for lane in range(max_jobs):
             fd = _try_lock(self._path(pool, lane))
             if fd is not None:
                 return FileLease(fd)
         return None
 
-    def busy(self, pool: Pool, limit: int) -> int:
-        return sum(
-            1 for lane in range(limit) if _is_locked(self._path(pool, lane))
-        )
+    def busy(self, pool: Pool) -> int:
+        pool_dir = self._lanes_dir() / pool.value
+        if not pool_dir.is_dir():
+            return 0
+        return sum(1 for lane in pool_dir.glob("*.lock") if _is_locked(lane))
 
     def _path(self, pool: Pool, lane: int) -> Path:
         return layout.lane_path(self._lanes_dir(), pool.value, lane)
 
 
-def _job_process_command(job_dir: Path, command: list[str]) -> list[str]:
+def _job_process_command(
+    job_dir: Path, lane_fd: int | None, command: list[str]
+) -> list[str]:
+    lane = [] if lane_fd is None else ["--lane-fd", str(lane_fd)]
     return [
         sys.executable,
         "-m",
         "behave_mcp.job_process",
         str(job_dir),
+        *lane,
         "--",
         *command,
     ]
@@ -133,6 +148,7 @@ class JobProcessLauncher:
         cwd: str,
         env: dict[str, str],
         lease: Lease,
+        record: Callable[[], None],
     ) -> None:
         paths = layout.job_paths(self._jobs_dir(), job_id)
         job_fd: int | None = None
@@ -140,11 +156,12 @@ class JobProcessLauncher:
             job_fd = _try_lock(paths.lock)
             if job_fd is None:
                 raise JobStartError("job {} is already locked".format(job_id))
+            record()
             lane_fd = lease.fd if isinstance(lease, FileLease) else None
             inherited = tuple(fd for fd in (lane_fd, job_fd) if fd is not None)
             try:
                 subprocess.Popen(
-                    _job_process_command(paths.job_dir, command),
+                    _job_process_command(paths.job_dir, lane_fd, command),
                     cwd=cwd,
                     env=env,
                     stdin=subprocess.DEVNULL,
@@ -282,11 +299,18 @@ class LocalJobResultStore:
         paths = self._paths(job_id)
         return Artifacts(
             job_dir=str(paths.job_dir),
+            request=str(paths.request),
             record=str(paths.record),
             exit=str(paths.exit),
             stdout_log=str(paths.stdout_log),
             json_report=str(paths.json_report),
         )
+
+    def read_request(self, job_id: str) -> JobRequest | None:
+        return _read_model(self._paths(job_id).request, JobRequest)
+
+    def write_request(self, job_id: str, request: JobRequest) -> None:
+        _write_atomic(self._paths(job_id).request, _json_text(request))
 
     def read_record(self, job_id: str) -> JobRecord:
         return (
@@ -348,6 +372,7 @@ class LocalJobResultStore:
     def exists(self, job_id: str) -> ExistsFlags:
         paths = self._paths(job_id)
         return ExistsFlags(
+            request=paths.request.exists(),
             record=paths.record.exists(),
             exit=paths.exit.exists(),
             stdout_log=paths.stdout_log.exists(),
@@ -355,19 +380,74 @@ class LocalJobResultStore:
         )
 
     def list_job_ids(self) -> list[str]:
-        """Every job with a launch record: ``jobs/*/job.json``."""
+        """Every job ever queued: ``jobs/*/request.json``."""
         if not self._jobs_dir.exists():
             return []
         return sorted(
             path.parent.name
             for path in self._jobs_dir.glob(
-                "*/{}".format(layout.JOB_RECORD_NAME)
+                "*/{}".format(layout.JOB_REQUEST_NAME)
             )
         )
 
 
+class FileReconcileLock:
+    """``reconcile.lock`` in the state directory, held with ``flock``."""
+
+    def __init__(self, state_dir: Callable[[], Path]) -> None:
+        self._state_dir = state_dir
+
+    @contextmanager
+    def hold(self) -> Iterator[None]:
+        path = layout.reconcile_lock(self._state_dir())
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            yield
+        finally:
+            os.close(fd)
+
+
+class FileConfigStore:
+    """``config.json`` in the state directory, readable only by its owner,
+    since it holds secrets."""
+
+    def __init__(self, state_dir: Callable[[], Path]) -> None:
+        self._state_dir = state_dir
+
+    def read(self) -> CheckoutConfig:
+        path = layout.config_file(self._state_dir())
+        if not path.exists():
+            return CheckoutConfig()
+        try:
+            document = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as error:
+            raise ValueError("{} is not JSON: {}".format(path, error))
+        if not isinstance(document, dict):
+            raise ValueError("{} must hold an object".format(path))
+        try:
+            return parse_config(document)
+        except ValueError as error:
+            raise ValueError("{}: {}".format(path, error))
+
+    def write(self, config: CheckoutConfig) -> None:
+        # The temporary file is created owner-only, and the rename keeps it.
+        _write_atomic(
+            layout.config_file(self._state_dir()),
+            json.dumps(config_document(config), indent=2) + "\n",
+        )
+
+
 class LocalWorkspace:
-    """Resolves repository paths and the subprocess environment at runtime."""
+    """Resolves repository paths and the subprocess environment at runtime.
+
+    ``state_dir``, when given, fixes the state directory: a job process
+    knows it from its own job directory, whatever its environment says.
+    """
+
+    def __init__(self, state_dir: Path | None = None) -> None:
+        self._state_dir = state_dir
 
     def resolve_repo_root(self, override: str | None) -> Path:
         if override:
@@ -402,6 +482,8 @@ class LocalWorkspace:
         ``$MCP_STATE_DIR``, else the server's own checkout's state
         directory. A per-call ``repo_root`` never moves it.
         """
+        if self._state_dir is not None:
+            return self._state_dir
         configured = os.environ.get(layout.STATE_DIR_ENV_VAR)
         if configured:
             return Path(configured).expanduser().resolve()

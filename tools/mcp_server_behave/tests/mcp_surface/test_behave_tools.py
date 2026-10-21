@@ -5,18 +5,13 @@ import pytest
 from mcp.shared.memory import create_connected_server_and_client_session
 
 import behave_mcp.server as server_module
-from behave_mcp.adapters import (
-    LocalFeatureFileReader,
-    LocalJobResultStoreFactory,
-    LocalWorkspace,
-)
+from behave_mcp.adapters import LocalWorkspace
 from behave_mcp.server import mcp
-from behave_mcp.service import BehaveService
 from tests.conftest import (
     UNIT_SCENARIO,
     FakeJobLauncher,
-    FakeLanePool,
     make_repo_with_feature,
+    make_service,
     result_error_text,
     result_json,
 )
@@ -55,6 +50,21 @@ async def test_mcp_lists_expected_tools():
     assert "kill_job" in tools
     assert tools["start_scenario"].description
     assert tools["create_campaign"].description
+
+
+@pytest.mark.asyncio
+async def test_every_tool_call_ends_with_a_reconcile(monkeypatch):
+    monkeypatch.setenv("UBUNTU_PRO_CLIENT_REPO", str(_REPO_ROOT))
+    reconciles = []
+    monkeypatch.setattr(
+        server_module._service, "reconcile", lambda: reconciles.append(1)
+    )
+
+    async with create_connected_server_and_client_session(mcp) as client:
+        # A tool that touches no job: the queue still moves.
+        await client.call_tool("list_dimensions", {})
+
+    assert reconciles == [1]
 
 
 @pytest.mark.asyncio
@@ -178,16 +188,11 @@ async def test_mcp_start_wait_and_log_flow(monkeypatch, tmp_path):
     monkeypatch.setattr(
         server_module,
         "_service",
-        BehaveService(
-            workspace=LocalWorkspace(),
-            settings=server_module._settings,
-            feature_reader=LocalFeatureFileReader(),
-            results=LocalJobResultStoreFactory(),
-            lanes=FakeLanePool(),
+        make_service(
+            LocalWorkspace(),
             launcher=launcher,
             monotonic=time.monotonic,
             sleep=time.sleep,
-            now_utc=lambda: "T0",
             new_job_id=lambda: "job-flow",
         ),
     )
@@ -203,8 +208,8 @@ async def test_mcp_start_wait_and_log_flow(monkeypatch, tmp_path):
             },
         )
         start_payload = result_json(start_result)
-        assert start_payload["ok"] is True
-        assert start_payload["status"] == "started"
+        # The fake job ends the moment it starts.
+        assert start_payload["state"] == "finished"
         assert "artifacts" in start_payload
         job_id = start_payload["job_id"]
 
@@ -217,7 +222,7 @@ async def test_mcp_start_wait_and_log_flow(monkeypatch, tmp_path):
             },
         )
         completed_payload = result_json(completed_result)
-        assert completed_payload["status"] == "finished"
+        assert completed_payload["state"] == "finished"
         assert completed_payload["ok"] is True
         assert completed_payload["summary"]["steps"]["passed"] == 1
         assert "artifacts" in completed_payload
@@ -249,7 +254,7 @@ async def test_mcp_start_wait_and_log_flow(monkeypatch, tmp_path):
         assert result["summary"]["steps"]["passed"] == 1
         assert result["failures"] == []
         # One shape for one job's outcome, however it is asked for.
-        for key in ("status", "ok", "summary", "failures", "release"):
+        for key in ("state", "ok", "summary", "failures", "release"):
             assert result[key] == completed_payload[key]
 
 
@@ -305,7 +310,7 @@ async def test_mcp_start_rejects_cloud_machine_types():
         )
 
     error_text = result_error_text(result)
-    assert "MCP_MAX_CLOUD_JOBS" in error_text
+    assert "max_jobs.cloud" in error_text
 
 
 def test_main_serves_streamable_http(monkeypatch):

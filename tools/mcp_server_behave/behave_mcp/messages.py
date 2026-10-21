@@ -72,6 +72,7 @@ class Artifacts(BaseModel):
     """On-disk paths for a job: its directory and the files in it."""
 
     job_dir: str
+    request: str
     record: str
     exit: str
     stdout_log: str
@@ -94,6 +95,8 @@ class RepoState(BaseModel):
 class JobState(str, Enum):
     """A behave job's state, read off its files and locks."""
 
+    # Waiting for a lane in its pool.
+    QUEUED = "queued"
     RUNNING = "running"
     # tox ran to its end; the exit says how it went.
     FINISHED = "finished"
@@ -119,8 +122,30 @@ class ScenarioStatus(str, Enum):
     UNKNOWN = "unknown"
 
 
+class JobRequest(BaseModel):
+    """What one behave job is to run. Written once, when it is queued.
+
+    The command is built and validated then, so the job launches exactly
+    what was asked for, whichever process launches it.
+    """
+
+    job_id: str = ""
+    queued_at: str = ""
+    feature_file: str = ""
+    scenario_name: str = ""
+    release: str = ""
+    machine_type: str = ""
+    install_from: str = ""
+    command: list[str] = []
+    repo_root: str = ""
+
+
 class JobRecord(BaseModel):
-    """What one behave job was asked to do. Written once, at launch."""
+    """What one behave job ran with. Written once, at launch.
+
+    ``config`` is every behave option in force, each secret shown only as
+    set.
+    """
 
     job_id: str = ""
     started_at: str | None = None
@@ -131,6 +156,7 @@ class JobRecord(BaseModel):
     install_from: str = ""
     command: list[str] = []
     repo: RepoState = RepoState()
+    config: dict[str, str] = {}
     artifacts: Artifacts | None = None
 
 
@@ -148,12 +174,20 @@ class JobExit(BaseModel):
     error: str = ""
 
 
-class PoolCapacity(BaseModel):
-    """A pool that had no room when a start was rejected."""
+class PoolUsage(BaseModel):
+    """How many of a pool's lanes are busy, out of its max jobs."""
 
     pool: str
-    limit: int
-    running: int
+    max_jobs: int
+    busy: int
+
+
+class ConfigResponse(BaseModel):
+    """The checkout's config: each pool's max jobs and busy lanes, and the
+    behave options every job runs with, secrets shown only as set."""
+
+    pools: list[PoolUsage] = []
+    behave: dict[str, str] = {}
 
 
 class Failure(BaseModel):
@@ -179,6 +213,7 @@ class ReportSummary(BaseModel):
 class ExistsFlags(BaseModel):
     """Which of a job's files exist."""
 
+    request: bool
     record: bool
     exit: bool
     stdout_log: bool
@@ -216,48 +251,47 @@ class FindScenariosResponse(BaseModel):
 
 
 class StartScenarioResponse(BaseModel):
-    status: Literal["started"] = "started"
-    ok: bool = True
+    """A job, queued and started at once when its pool had a free lane."""
+
     job_id: str = ""
+    state: JobState = JobState.QUEUED
+    queue_position: int | None = None
     message: str = ""
     artifacts: Artifacts | None = None
-    repo: RepoState | None = None
 
 
-class CapacityExceededResponse(BaseModel):
-    status: Literal["capacity_exceeded"] = "capacity_exceeded"
-    ok: bool = False
-    error: str = ""
-    full_pools: list[PoolCapacity] = []
+class QueuedResponse(BaseModel):
+    """A job waiting for a lane. ``queue_position`` 1 is next in its pool.
+    ``timed_out`` is set when a wait ended before the job did."""
 
-
-StartScenarioResult = Annotated[
-    Union[StartScenarioResponse, CapacityExceededResponse],
-    Field(discriminator="status"),
-]
+    state: Literal[JobState.QUEUED] = JobState.QUEUED
+    job_id: str = ""
+    queue_position: int | None = None
+    timed_out: bool = False
+    artifacts: Artifacts | None = None
 
 
 class RunningResponse(BaseModel):
-    """Internal: a job still in progress. Never returned at the MCP
-    boundary."""
+    """A job in progress. ``timed_out`` is set when a wait ended before the
+    job did."""
 
-    status: Literal["running"] = "running"
-    ok: bool = True
+    state: Literal[JobState.RUNNING] = JobState.RUNNING
     job_id: str = ""
     recent_output: str = ""
+    timed_out: bool = False
     artifacts: Artifacts | None = None
 
 
 class JobResult(BaseModel):
     """What came of one job: what ran, how it ended, and what failed.
 
-    ``ok`` reflects the behave return code, not call success. ``summary``
-    is behave's own counts (features, scenarios, steps by status) and is
-    None while the job runs or when no parseable report was produced.
+    ``ok`` reflects the behave return code. ``summary`` is behave's own
+    counts (features, scenarios, steps by status) and is None until the job
+    finishes, or when no parseable report was produced.
     """
 
     job_id: str = ""
-    status: str = JobState.RUNNING.value
+    state: JobState = JobState.RUNNING
     ok: bool | None = None
     feature_file: str = ""
     scenario_name: str = ""
@@ -271,9 +305,11 @@ class FinishedResponse(JobResult):
     """A job that ran to its end. ``recent_output`` is populated only when
     no parseable report was produced, and is None otherwise."""
 
-    status: Literal["finished"] = "finished"
+    state: Literal[JobState.FINISHED] = JobState.FINISHED
     ok: bool
     returncode: int | None
+    # Why tox never ran, when it could not be started.
+    error: str = ""
     artifacts: Artifacts
     recent_output: str | None = None
 
@@ -282,27 +318,18 @@ class InterruptedResponse(JobResult):
     """A job that ended without a result: it was killed, or its process
     died. Nothing it did counts."""
 
-    status: Literal["interrupted"] = "interrupted"
+    state: Literal[JobState.INTERRUPTED] = JobState.INTERRUPTED
     ok: bool = False
     reason: Interruption = Interruption.DIED
     artifacts: Artifacts
     recent_output: str = ""
 
 
-class TimeoutResponse(BaseModel):
-    status: Literal["timeout"] = "timeout"
-    ok: bool = False
-    job_id: str = ""
-    max_wait_seconds: int = 0
-    poll_interval_seconds: float = 0.0
-    last_status: JobState = JobState.RUNNING
-    recent_output: str = ""
-    artifacts: Artifacts | None = None
-
-
-WaitForCompletionResult = Annotated[
-    Union[FinishedResponse, InterruptedResponse, TimeoutResponse],
-    Field(discriminator="status"),
+JobStatusResult = Annotated[
+    Union[
+        QueuedResponse, RunningResponse, FinishedResponse, InterruptedResponse
+    ],
+    Field(discriminator="state"),
 ]
 
 
@@ -379,6 +406,7 @@ class ErrorsResponse(BaseModel):
 class ArtifactsResponse(BaseModel):
     job_id: str = ""
     artifacts: Artifacts | None = None
+    request: JobRequest | None = None
     record: JobRecord | None = None
     exit: JobExit | None = None
     exists: ExistsFlags | None = None
@@ -388,7 +416,7 @@ class JobListing(BaseModel):
     """One row in a job listing."""
 
     job_id: str = ""
-    status: JobState = JobState.RUNNING
+    state: JobState = JobState.RUNNING
     reason: Interruption | None = None
     ok: bool | None = None
     returncode: int | None = None
@@ -396,6 +424,7 @@ class JobListing(BaseModel):
     scenario_name: str = ""
     release: str = ""
     machine_type: str = ""
+    queued_at: str = ""
     started_at: str | None = None
     finished_at: str | None = None
     artifacts: Artifacts | None = None
@@ -403,6 +432,7 @@ class JobListing(BaseModel):
 
 class ListScenarioJobsResponse(BaseModel):
     jobs: list[JobListing] = []
+    pools: list[PoolUsage] = []
     total_ended: int = 0
     truncated: bool = False
     limit_clamped: bool = False

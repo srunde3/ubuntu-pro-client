@@ -12,7 +12,7 @@ description: Architecture and design rules for tools/mcp_server_behave, the beha
 
 ## Dependency direction
 
-`behave_campaign` may import `behave_mcp.parser`, `behave_mcp.domain.pools` and `behave_mcp.domain.layout`. Nothing in `behave_mcp` imports `behave_campaign`, except the tool handlers in `behave_mcp/server.py`. Keep it that way, so the module graph stays acyclic and `behave_campaign` can be extracted.
+`behave_campaign` may import `behave_mcp.parser`, `behave_mcp.domain.pools` and `behave_mcp.domain.layout`, and its `cli.py` may also import `behave_mcp.wiring`, because every front-end configures the checkout and reconciles its jobs. Nothing in `behave_mcp` imports `behave_campaign`, except the tool handlers in `behave_mcp/server.py`. Keep it that way, so the module graph stays acyclic and `behave_campaign` can be extracted.
 
 `uv run lint-imports` enforces these rules and the layer table below, using the contracts under `[tool.importlinter]` in `pyproject.toml`. If a change breaks a contract, first move the code to the layer it belongs in. Change a contract only when the architecture itself changes, in the same commit, with the reason in the commit message.
 
@@ -22,15 +22,16 @@ Both packages use ports and adapters. A layer with more than one concern is a pa
 
 | Layer | `behave_mcp` | `behave_campaign` | Rule |
 | --- | --- | --- | --- |
-| Domain | `domain/`: `jobs`, `report`, `logs`, `limits`, `pools`, `layout` | `domain/`: `records`, `state`, `schedule`, `classify`, `events`, `signals`, `discovery`, `bundle` | Pure rules. No file, process or network I/O, except `discovery` reading feature files through the parser. |
+| Domain | `domain/`: `jobs`, `queue`, `config`, `report`, `logs`, `limits`, `pools`, `layout` | `domain/`: `records`, `state`, `schedule`, `classify`, `events`, `signals`, `discovery`, `bundle` | Pure rules. No file, process or network I/O, except `discovery` reading feature files through the parser. |
 | Parser | `parser.py` | none | Feature files to structured data. It becomes its own package later. |
 | Views | `views.py` | `views/`: `responses`, `export` | Pure projections of domain and parser types into DTOs and export files. A view decides nothing. |
 | Ports | `ports.py` | `ports.py` | `Protocol` interfaces the services depend on. |
 | Adapters | `adapters.py` | `adapters.py`, `repo.py` | Implement the ports with the filesystem, `subprocess`, `fcntl` and git. |
 | Services | `service.py` (`BehaveService`) | `service.py` (`CampaignService`), `runner.py` (`CampaignRunner`) | Orchestrate domain and ports. Most behaviour changes belong here. |
 | DTOs | `messages.py` | `messages.py` | Pydantic models returned to front-ends. |
+| Wiring | `wiring.py` | none | The production adapters assembled into a `BehaveService`, once, for every front-end and the job process. |
 | Front-ends | `server.py`, `job_process.py` | `cli.py` | Entry points. The handlers in `server.py` and `cli.py` parse arguments, call one service method and serialise the result; `job_process.py` is the process each job runs under. |
-| Config | `config.py` | none | Env vars parsed once into `Settings`. |
+| Config | `config.py` | none | The server's own env vars (address, poll timeout) parsed once into `Settings`. The checkout's config is not here: it is `domain/config.py`, stored in `config.json`. |
 
 Small collaborators are passed as plain callables, not ports: the clock (`now_utc`, `now`, `monotonic`), `sleep`, `new_job_id` and the git read (`repo_state`). Tests replace them with lambdas.
 
@@ -44,7 +45,8 @@ Small collaborators are passed as plain callables, not ports: the clock (`now_ut
 | What a tool or command does | the service method |
 | A new MCP tool | a handler in `server.py` registered with the local `@tool`, plus the README and the agent skills |
 | A new CLI command | a handler in `cli.py` over a `CampaignService` method |
-| A new env var | `config.py` (`Settings` and its parser) and the README's environment section |
+| A new setting for jobs | `domain/config.py`, set with `behave-campaign config`, and the README's configuration section. Never an env var: a job must not depend on who starts it |
+| A new server env var | `config.py` (`Settings` and its parser) and the README's environment section |
 | A new path under the state directory | `domain/layout.py`, which names paths and reads no env vars. The caller resolves `MCP_STATE_DIR` and passes it in. |
 
 Register MCP tools with the local `@tool` decorator in `server.py`, never with `@mcp.tool`. It returns one compact JSON text block and publishes no output schema, which keeps results and the tool list small.
@@ -55,7 +57,10 @@ Everything the server writes lives under its own checkout's `.mcp_server_behave/
 
 | Path | Holds | Written by |
 | --- | --- | --- |
-| `jobs/<job_id>/job.json` | the launch record (`JobRecord`), written once | `BehaveService` |
+| `config.json` | the checkout's config (`CheckoutConfig`): max jobs, behave options; owner-only | `behave-campaign config` |
+| `reconcile.lock` | held while a process reconciles | whoever reconciles |
+| `jobs/<job_id>/request.json` | what to run (`JobRequest`), written once when queued | `BehaveService.start_scenario` |
+| `jobs/<job_id>/job.json` | the launch record (`JobRecord`), written once while holding `job.lock` | `BehaveService.reconcile` |
 | `jobs/<job_id>/exit.json` | the exit (`JobExit`), written once by rename | the job process |
 | `jobs/<job_id>/job.lock` | held by the job process while the job lives; holds its PID | the job process |
 | `jobs/<job_id>/kill` | left by a kill, for a job process still starting up | `kill_job` |
@@ -71,7 +76,8 @@ Only a campaign's intent is written, and events are never stored: `domain/feed.p
 
 ## Process model
 
-- One long-lived server process, serving MCP over streamable HTTP at `http://MCP_HOST:MCP_PORT/mcp`. FastMCP runs tool calls on worker threads.
+- A server process serves MCP over streamable HTTP at `http://MCP_HOST:MCP_PORT/mcp`. FastMCP runs tool calls on worker threads. Several servers and CLIs may share a state directory.
+- Nothing long-lived drives jobs. `BehaveService.reconcile` starts queued jobs on free lanes, under `reconcile.lock`, from files alone. It runs after every tool call (in the `@tool` decorator), every 5 s in the server, after every CLI command, and in a job's own process after it records its exit and lets go of its lane.
 - `server.py` holds the long-lived objects: one `BehaveService`, one `CampaignRunner` and one `JsonlCampaignStore`, shared so a reader waiting for events is woken by the runner's appends. `CampaignService` is built per call. Nothing about a job is held in memory.
 - One daemon ticker thread calls `CampaignRunner.tick` every 2 s for the one campaign that is scheduling: running, finishing or pausing. It stops, and the run lock is released, once that campaign is paused or complete. The runner's guard serialises ticks and the `run`, `pause` and `retry_units` commands.
 - Each behave job runs under `behave_mcp/job_process.py`, in its own session. The job process holds the job's lane lock (`lanes/<pool>/<n>.lock`) and `jobs/<id>/job.lock` for its whole life, runs `tox -e behave` as a child with a parent-death signal and stdin from `/dev/null`, and writes `exit.json` when tox exits. A job's state is read off those files and locks, from any process: a killed job is interrupted, never failed. `kill_job` sends SIGTERM to the job process, which passes it to tox's process group.
@@ -111,7 +117,7 @@ The test tree mirrors the source tree, so a failing file names the module that b
 
 A test file holds the tests of one module. Helpers and constants it needs are defined in it, so the file reads on its own.
 
-Each directory is a Python package, so test files with the same name can coexist. Every fake lives in `tests/conftest.py`, one per port, so tests across tiers share it. The `behave-mcp-unit-tests`, `behave-mcp-integration-tests` and `behave-mcp-e2e-tests` skills describe what each tier tests.
+Each directory is a Python package, so test files with the same name can coexist. Every fake lives in `tests/conftest.py`, one per port, so tests across tiers share it; `make_service` builds a `BehaveService` over them, so a new port is added in one place. An autouse fixture points `MCP_STATE_DIR` at the test's own directory, because every front-end reconciles. The `behave-mcp-unit-tests`, `behave-mcp-integration-tests` and `behave-mcp-e2e-tests` skills describe what each tier tests.
 
 ## Checks
 

@@ -64,7 +64,7 @@ class TestOverdueLanes:
         assert found == []
 
     def test_a_finished_lane_is_never_overdue(self):
-        finished = lane(result={"status": "finished"})
+        finished = lane(result={"state": "finished"})
 
         found = overdue_lanes(
             [finished], at=HOUR_LATER, overdue_seconds=ONE_HOUR, reported=()

@@ -353,7 +353,7 @@ class TestTick:
         runner.run(CAMPAIGN)
         runner.tick(CAMPAIGN)
         lanes.results["job1"] = {
-            "status": "finished",
+            "state": "finished",
             "ok": True,
             "job_id": "job1",
             "summary": {
@@ -465,7 +465,7 @@ class TestTick:
         runner.run(CAMPAIGN)
         runner.tick(CAMPAIGN)
         lanes.results["job1"] = {
-            "status": "interrupted",
+            "state": "interrupted",
             "ok": False,
             "job_id": "job1",
         }
@@ -858,7 +858,7 @@ class TestEvents:
         runner.run(CAMPAIGN)
         runner.tick(CAMPAIGN)
         lanes.results["job1"] = {
-            "status": "finished",
+            "state": "finished",
             "ok": False,
             "job_id": "job1",
             "summary": {
@@ -890,7 +890,7 @@ class TestEvents:
         runner.run(CAMPAIGN)
         runner.tick(CAMPAIGN)
         lanes.results["job1"] = {
-            "status": "finished",
+            "state": "finished",
             "ok": True,
             "job_id": "job1",
             "summary": {
