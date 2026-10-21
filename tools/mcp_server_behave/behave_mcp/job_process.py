@@ -38,7 +38,7 @@ PR_SET_PDEATHSIG = 1
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
 
 def _die_with(parent: int) -> None:

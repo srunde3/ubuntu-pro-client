@@ -461,7 +461,7 @@ def test_start_scenario_rejects_invalid_install_from(tmp_path):
         )
 
 
-def test_start_scenario_includes_repo_state_in_response_and_record(tmp_path):
+def test_start_scenario_includes_the_repo_in_response_and_record(tmp_path):
     repo_root = make_repo_with_feature(tmp_path, "features/cli/attach.feature")
     launcher = FakeJobLauncher()
     service = _make_service(
@@ -482,7 +482,8 @@ def test_start_scenario_includes_repo_state_in_response_and_record(tmp_path):
         machine_type="lxd-container",
     ).model_dump(mode="json")
 
-    assert result["repo_state"] == {
+    assert result["repo"] == {
+        "root": str(repo_root),
         "commit": "deadbeef",
         "branch": "main",
         "dirty": False,
@@ -490,8 +491,8 @@ def test_start_scenario_includes_repo_state_in_response_and_record(tmp_path):
 
     store = LocalJobResultStoreFactory().bind(tmp_path)
     record = store.read_record(result["job_id"])
-    assert record.repo_state == RepoState(
-        commit="deadbeef", branch="main", dirty=False
+    assert record.repo == RepoState(
+        root=str(repo_root), commit="deadbeef", branch="main", dirty=False
     )
 
 
@@ -522,7 +523,7 @@ def test_a_repo_root_override_runs_there_but_files_stay_with_the_server(
     record = json.loads(
         (job_file(server_jobs, result["job_id"], "job.json")).read_text()
     )
-    assert record["repo_root"] == str(other_checkout)
+    assert record["repo"]["root"] == str(other_checkout)
 
 
 def test_start_scenario_does_not_reference_combo_formatter(tmp_path):

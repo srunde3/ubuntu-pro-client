@@ -34,7 +34,7 @@ from behave_campaign.domain.events import (
 )
 from behave_campaign.domain.feed import derive_feed
 from behave_campaign.domain.records import (
-    DEFAULT_INSTALL_SOURCE,
+    DEFAULT_INSTALL_FROM,
     CampaignError,
     CampaignHeader,
     CampaignState,
@@ -45,7 +45,7 @@ from behave_campaign.domain.records import (
     UnitStatus,
     resolve_lanes,
     validate_campaign_id,
-    validate_install_source,
+    validate_install_from,
 )
 from behave_campaign.domain.state import (
     GROUPINGS,
@@ -133,7 +133,7 @@ class CampaignService:
         machine_types: Sequence[str] = (),
         feature_files: Sequence[str] = (),
         scenarios: Sequence[str] = (),
-        install_from: str = DEFAULT_INSTALL_SOURCE,
+        install_from: str = DEFAULT_INSTALL_FROM,
         lanes: Mapping[Pool, int] | None = None,
     ) -> CreateCampaignResponse:
         """Plan a campaign and store it. Starts nothing.
@@ -144,7 +144,7 @@ class CampaignService:
         runner later.
         """
         validate_campaign_id(campaign_id)
-        validate_install_source(install_from)
+        validate_install_from(install_from)
 
         filters = Filters(
             feature=tuple(feature_files),

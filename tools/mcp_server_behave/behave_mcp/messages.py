@@ -79,12 +79,13 @@ class Artifacts(BaseModel):
 
 
 class RepoState(BaseModel):
-    """Git state of repo_root when a job started, for test correlation.
+    """The checkout a job ran in, and its git state when the job started.
 
-    ``commit``/``branch`` are None when repo_root isn't a git checkout (or
+    ``commit``/``branch`` are None when ``root`` isn't a git checkout (or
     git isn't available); ``dirty`` is None whenever ``commit`` is None.
     """
 
+    root: str = ""
     commit: str | None = None
     branch: str | None = None
     dirty: bool | None = None
@@ -129,8 +130,7 @@ class JobRecord(BaseModel):
     machine_type: str = ""
     install_from: str = ""
     command: list[str] = []
-    repo_root: str = ""
-    repo_state: RepoState | None = None
+    repo: RepoState = RepoState()
     artifacts: Artifacts | None = None
 
 
@@ -221,7 +221,7 @@ class StartScenarioResponse(BaseModel):
     job_id: str = ""
     message: str = ""
     artifacts: Artifacts | None = None
-    repo_state: RepoState | None = None
+    repo: RepoState | None = None
 
 
 class CapacityExceededResponse(BaseModel):
@@ -384,7 +384,7 @@ class ArtifactsResponse(BaseModel):
     exists: ExistsFlags | None = None
 
 
-class JobSummary(BaseModel):
+class JobListing(BaseModel):
     """One row in a job listing."""
 
     job_id: str = ""
@@ -402,7 +402,7 @@ class JobSummary(BaseModel):
 
 
 class ListScenarioJobsResponse(BaseModel):
-    jobs: list[JobSummary] = []
+    jobs: list[JobListing] = []
     total_ended: int = 0
     truncated: bool = False
     limit_clamped: bool = False

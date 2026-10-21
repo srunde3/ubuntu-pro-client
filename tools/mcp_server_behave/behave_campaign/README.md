@@ -449,5 +449,3 @@ uv run mypy behave_campaign
 
 - Consider stronger DB than JSONL with various record types
 - Find common data models with the MCP; avoid duplicate serde if we can.
-  `repo.py` and `behave_mcp.adapters.LocalWorkspace.repo_state` read the same
-  git state through different types.

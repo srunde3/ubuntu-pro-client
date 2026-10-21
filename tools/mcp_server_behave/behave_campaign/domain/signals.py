@@ -25,15 +25,17 @@ REPEATED_FAILURE_RELEASES = 3
 REPEATED_SKIP_UNITS = 5
 
 
-_TIMESTAMP_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
+def _parse(timestamp: str) -> datetime:
+    """An ISO 8601 UTC time, with ``Z`` and any precision."""
+    return datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
 
 
 def elapsed_seconds(since: str, now: str) -> float | None:
-    """Seconds between two campaign timestamps, or None if unreadable."""
+    """Seconds between two timestamps, or None if unreadable."""
     try:
-        start = datetime.strptime(since, _TIMESTAMP_FORMAT)
-        end = datetime.strptime(now, _TIMESTAMP_FORMAT)
-    except (ValueError, TypeError):
+        start = _parse(since)
+        end = _parse(now)
+    except (ValueError, TypeError, AttributeError):
         return None
     return (end - start).total_seconds()
 

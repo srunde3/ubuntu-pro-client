@@ -36,8 +36,12 @@ def test_write_record_byte_shape(tmp_path):
         '  "job_id": "jobshape",\n'
         '  "machine_type": "",\n'
         '  "release": "",\n'
-        '  "repo_root": "",\n'
-        '  "repo_state": null,\n'
+        '  "repo": {\n'
+        '    "branch": null,\n'
+        '    "commit": null,\n'
+        '    "dirty": null,\n'
+        '    "root": ""\n'
+        "  },\n"
         '  "scenario_name": "",\n'
         '  "started_at": null\n'
         "}\n"

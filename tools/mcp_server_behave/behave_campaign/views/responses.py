@@ -24,10 +24,10 @@ from behave_campaign.messages import (
     AttemptView,
     CampaignHeader,
     CampaignListing,
-    CampaignRepo,
     CampaignScope,
     CampaignSummary,
     ProblemUnit,
+    RepoState,
     ScenarioProblems,
     ScopeSize,
     StateCounts,
@@ -74,7 +74,7 @@ def campaign_header(
         install_from=header.install_from,
         lanes=lanes_as_dict(header.lanes),
         total_units=len(reduce_units(records)),
-        repo=CampaignRepo(**header.repo.as_dict()),
+        repo=RepoState(**header.repo.as_dict()),
         scope=CampaignScope(**header.filters.scope_as_dict()),
     )
 

@@ -90,6 +90,14 @@ class TestElapsedSeconds:
             == 90
         )
 
+    def test_it_reads_the_microseconds_every_writer_records(self):
+        assert (
+            elapsed_seconds(
+                "2026-09-12T12:00:00.250000Z", "2026-09-12T12:00:01.000000Z"
+            )
+            == 0.75
+        )
+
     @pytest.mark.parametrize(
         "since,now",
         [("nonsense", OPENED_AT), (OPENED_AT, "nonsense"), (None, OPENED_AT)],

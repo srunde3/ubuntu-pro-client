@@ -145,7 +145,7 @@ STATES = tuple(state.value for state in UnitState)
 CAMPAIGN_STATES = tuple(state.value for state in CampaignState)
 
 
-INSTALL_SOURCES = (
+INSTALL_FROM_VALUES = (
     "local",
     "archive",
     "daily",
@@ -155,7 +155,7 @@ INSTALL_SOURCES = (
 )
 
 
-DEFAULT_INSTALL_SOURCE = INSTALL_SOURCES[0]
+DEFAULT_INSTALL_FROM = INSTALL_FROM_VALUES[0]
 
 
 UNIT_FIELDS = ("feature", "scenario", "release", "machine_type")
@@ -450,7 +450,7 @@ class CampaignHeader:
     # The install source every job runs with, and how many lanes a runner
     # may fill in each pool. Each attempt still records the source its own
     # job actually used, which is what a verification rests on.
-    install_from: str = DEFAULT_INSTALL_SOURCE
+    install_from: str = DEFAULT_INSTALL_FROM
     lanes: Mapping[Pool, int] = field(default_factory=dict)
 
 
@@ -558,11 +558,11 @@ def validate_campaign_id(value: str) -> str:
     return value
 
 
-def validate_install_source(value: str) -> str:
-    if value not in INSTALL_SOURCES:
+def validate_install_from(value: str) -> str:
+    if value not in INSTALL_FROM_VALUES:
         raise CampaignError(
             "install source must be one of: {}".format(
-                ", ".join(INSTALL_SOURCES)
+                ", ".join(INSTALL_FROM_VALUES)
             )
         )
     return value
@@ -573,7 +573,7 @@ def _parse_started(body: dict[str, Any]) -> AttemptStarted:
     return AttemptStarted(
         unit=_unit_from(body, "started"),
         job_id=text_field(body, "job_id", "started"),
-        install_from=validate_install_source(
+        install_from=validate_install_from(
             text_field(body, "install_from", "started")
         ),
         at=text_field(body, "at", "started"),
@@ -680,7 +680,7 @@ def _parse_campaign(body: dict[str, Any]) -> CampaignHeader:
             )
         values[name] = tuple(scope[name])
 
-    install_from = validate_install_source(
+    install_from = validate_install_from(
         text_field(body, "install_from", "campaign")
     )
 

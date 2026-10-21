@@ -7,7 +7,7 @@ from typing import Any, Mapping, Sequence
 
 from behave_campaign.domain.classify import classify_result
 from behave_campaign.domain.records import (
-    DEFAULT_INSTALL_SOURCE,
+    DEFAULT_INSTALL_FROM,
     AttemptFinished,
     AttemptInterrupted,
     CampaignState,
@@ -61,7 +61,7 @@ class Lane:
     unit: Unit
     job_id: str
     result: Any = None
-    install_from: str = DEFAULT_INSTALL_SOURCE
+    install_from: str = DEFAULT_INSTALL_FROM
     # When the lane opened, from the running attempt that recorded it.
     opened_at: str = ""
 

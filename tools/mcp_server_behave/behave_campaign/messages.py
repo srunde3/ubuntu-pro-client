@@ -59,7 +59,7 @@ class StateCounts(BaseModel):
     error: int = 0
 
 
-class CampaignRepo(BaseModel):
+class RepoState(BaseModel):
     """Checkout a campaign was built from.
 
     ``commit``/``branch`` are None when the root isn't a git checkout;
@@ -89,7 +89,7 @@ class CampaignHeader(BaseModel):
     install_from: str = ""
     lanes: dict[str, int] = {}
     total_units: int = 0
-    repo: CampaignRepo = CampaignRepo()
+    repo: RepoState = RepoState()
     scope: CampaignScope = CampaignScope()
 
 

@@ -46,10 +46,10 @@ from behave_mcp.messages import (
     FinishedResponse,
     InterruptedResponse,
     JobExit,
+    JobListing,
     JobRecord,
     JobResult,
     JobState,
-    JobSummary,
     KillJobResponse,
     ListDimensionsResponse,
     ListFeaturesResponse,
@@ -354,7 +354,7 @@ class BehaveService:
         if install_from_error:
             raise BehaveServiceError(install_from_error)
 
-        repo_state = self._workspace.repo_state(resolved_repo_root)
+        repo = self._workspace.repo_state(resolved_repo_root)
 
         results = self._results.bind(self._jobs_dir())
         pool = POOL_OF[machine_type]
@@ -401,8 +401,7 @@ class BehaveService:
                 machine_type=machine_type,
                 install_from=install_from,
                 command=command,
-                repo_root=str(resolved_repo_root),
-                repo_state=repo_state,
+                repo=repo,
                 artifacts=artifacts,
             ),
         )
@@ -419,7 +418,7 @@ class BehaveService:
             job_id=job_id,
             message="Test started. Call wait_for_scenario_completion.",
             artifacts=artifacts,
-            repo_state=repo_state,
+            repo=repo,
         )
 
     def _check_unit(
@@ -644,7 +643,7 @@ class BehaveService:
         results = self._results.bind(self._jobs_dir())
 
         summaries = [
-            self._job_summary(job_id, results)
+            self._job_listing(job_id, results)
             for job_id in results.list_job_ids()
         ]
         summaries.sort(key=lambda summary: summary.started_at or "")
@@ -695,7 +694,7 @@ class BehaveService:
 
         results = self._results.bind(self._jobs_dir())
 
-        matched: list[tuple[str, JobSummary]] = []
+        matched: list[tuple[str, JobListing]] = []
         for job_id in results.list_job_ids():
             if not job_matches_result_filters(
                 results.read_record(job_id),
@@ -707,7 +706,7 @@ class BehaveService:
                 machine_type=machine_type or None,
             ):
                 continue
-            summary = self._job_summary(job_id, results)
+            summary = self._job_listing(job_id, results)
             if status_filter is not None and summary.status != status_filter:
                 continue
             matched.append((job_id, summary))
@@ -724,7 +723,7 @@ class BehaveService:
         )
 
     def _job_result(
-        self, job_id: str, summary: JobSummary, results: JobResultStore
+        self, job_id: str, summary: JobListing, results: JobResultStore
     ) -> JobResult:
         report = None
         if summary.status == JobState.FINISHED:
@@ -743,11 +742,11 @@ class BehaveService:
             failures=[] if report is None else report.failures,
         )
 
-    def _job_summary(self, job_id: str, results: JobResultStore) -> JobSummary:
+    def _job_listing(self, job_id: str, results: JobResultStore) -> JobListing:
         record = results.read_record(job_id)
         exit = results.read_exit(job_id)
         status = self._state(job_id, results, exit)
-        return JobSummary(
+        return JobListing(
             job_id=job_id,
             status=status,
             reason=(

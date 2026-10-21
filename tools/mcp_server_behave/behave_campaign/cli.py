@@ -21,8 +21,8 @@ from pydantic import BaseModel
 
 from behave_campaign.domain.events import EVENT_FAMILIES, EVENT_PRESETS
 from behave_campaign.domain.records import (
-    DEFAULT_INSTALL_SOURCE,
-    INSTALL_SOURCES,
+    DEFAULT_INSTALL_FROM,
+    INSTALL_FROM_VALUES,
     STATES,
     CampaignState,
     Filters,
@@ -346,12 +346,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     create.add_argument(
         "--install-from",
-        default=DEFAULT_INSTALL_SOURCE,
-        choices=INSTALL_SOURCES,
+        default=DEFAULT_INSTALL_FROM,
+        choices=INSTALL_FROM_VALUES,
         dest="install_from",
         help=(
             "install source every job in this campaign should use "
-            "(default: {})".format(DEFAULT_INSTALL_SOURCE)
+            "(default: {})".format(DEFAULT_INSTALL_FROM)
         ),
     )
     for pool in Pool:

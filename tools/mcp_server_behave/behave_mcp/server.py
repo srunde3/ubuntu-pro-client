@@ -200,7 +200,7 @@ CampaignIdArg = Annotated[
 
 
 def _utc_timestamp() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
 
 def create_service(settings: Settings) -> BehaveService:

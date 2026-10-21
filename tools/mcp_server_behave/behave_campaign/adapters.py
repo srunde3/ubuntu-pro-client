@@ -51,7 +51,7 @@ def system_now() -> str:
     Both front-ends take their clock from here so a campaign file has one
     timestamp format no matter which of them created it.
     """
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
 
 def _encode_lines(records: Sequence[Record]) -> str:

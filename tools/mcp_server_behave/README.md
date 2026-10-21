@@ -23,7 +23,7 @@ The server exposes these MCP tools:
   - A selection that matches no unit is rejected, and so is one that matches more than one: two scenarios with the same name that both cover the combo, which behave would run together.
   - The job runs in its own session with no stdin, so `kill_job` stops it and everything it started.
   - Optional `install_from` controls where `ubuntu-pro-client` is installed from before the scenario runs (sets `UACLIENT_BEHAVE_INSTALL_FROM` for the behave subprocess). Allowed values: `local` (default), `archive`, `daily`, `staging`, `stable`, `proposed`.
-  - Returns `repo_state`: `repo_root`'s git `commit`, `branch`, and `dirty` flag at launch time (all `null` when `repo_root` isn't a git checkout), so results can be correlated back to the exact code tested. Also persisted on the job record.
+  - Returns `repo`: the checkout's `root`, and its git `commit`, `branch` and `dirty` flag at launch time (the last three `null` when it isn't a git checkout), so results can be correlated back to the exact code tested. Also persisted on the job record.
 - `list_scenario_jobs` -- lists active jobs plus a bounded window of recently ended ones (finished or interrupted).
   - No known `job_id` or access to system processes required.
   - Reads every job off disk, so a job started by another server, by the CLI, or before a restart is listed and its state is current.

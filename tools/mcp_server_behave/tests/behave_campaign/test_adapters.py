@@ -397,18 +397,16 @@ class TestFileCampaignRunLock:
 
 
 class TestSystemNow:
-    def test_it_is_a_second_precision_utc_stamp(self):
+    def test_it_is_a_microsecond_utc_stamp(self):
         from datetime import datetime
 
         from behave_campaign.adapters import system_now
 
         stamp = system_now()
 
-        # One shape for campaign records, whoever wrote them: no fractional
-        # seconds and a literal Z rather than an offset.
-        assert stamp.endswith("Z")
-        assert "." not in stamp
-        assert datetime.strptime(stamp, "%Y-%m-%dT%H:%M:%SZ")
+        # One shape for every timestamp this tool writes: microseconds and a
+        # literal Z rather than an offset.
+        assert datetime.strptime(stamp, "%Y-%m-%dT%H:%M:%S.%fZ")
 
 
 class TestJobDirFiles:

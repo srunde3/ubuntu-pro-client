@@ -178,7 +178,7 @@ class Workspace(Protocol):
     def repo_state(self, repo_root: Path) -> RepoState:
         """Return repo_root's git commit/branch/dirty state, best-effort.
 
-        Returns an all-None RepoState when repo_root isn't a git checkout
+        Returns only the root when repo_root isn't a git checkout
         or git isn't available -- never raises.
         """
         ...

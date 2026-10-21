@@ -230,7 +230,7 @@ class FakeWorkspace:
         return dict(self._env)
 
     def repo_state(self, repo_root: Path) -> RepoState:
-        return self._repo_state
+        return self._repo_state.model_copy(update={"root": str(repo_root)})
 
 
 def result_json(result):

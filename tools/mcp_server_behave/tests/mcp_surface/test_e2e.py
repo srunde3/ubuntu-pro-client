@@ -41,11 +41,11 @@ async def test_mcp_e2e_long_running_attach_flow(monkeypatch):
         job_id = start_payload["job_id"]
 
         # repo_root here should be a real Pro client git checkout.
-        repo_state = start_payload["repo_state"]
-        assert repo_state["commit"]
-        assert len(repo_state["commit"]) == 40
-        assert repo_state["branch"]
-        assert isinstance(repo_state["dirty"], bool)
+        repo = start_payload["repo"]
+        assert repo["commit"]
+        assert len(repo["commit"]) == 40
+        assert repo["branch"]
+        assert isinstance(repo["dirty"], bool)
 
         jobs_while_running = await client.call_tool("list_scenario_jobs", {})
         running_jobs = {
@@ -107,7 +107,7 @@ async def test_mcp_e2e_long_running_attach_flow(monkeypatch):
         assert artifacts_payload["exists"]["record"] is True
         assert artifacts_payload["exists"]["status"] is True
         assert artifacts_payload["exit"]["ok"] == completed_payload["ok"]
-        assert artifacts_payload["record"]["repo_state"] == repo_state
+        assert artifacts_payload["record"]["repo"] == repo
         assert finished_jobs[job_id]["ok"] == completed_payload["ok"]
 
         results = result_json(

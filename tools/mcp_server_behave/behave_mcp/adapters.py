@@ -424,10 +424,11 @@ class LocalWorkspace:
     def repo_state(self, repo_root: Path) -> RepoState:
         commit = self._git(repo_root, "rev-parse", "HEAD")
         if commit is None:
-            return RepoState()
+            return RepoState(root=str(repo_root))
         branch = self._git(repo_root, "rev-parse", "--abbrev-ref", "HEAD")
         status = self._git(repo_root, "status", "--porcelain")
         return RepoState(
+            root=str(repo_root),
             commit=commit,
             branch=branch,
             dirty=bool(status) if status is not None else None,
