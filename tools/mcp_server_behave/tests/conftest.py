@@ -146,12 +146,12 @@ class FakeWorkspace:
             )
         return self._repo_root
 
-    def resolve_log_dir(self, repo_root: Path) -> Path:
+    def resolve_log_dir(self) -> Path:
         if self._log_dir is None:
             raise ValueError("FakeWorkspace has no log_dir configured")
         return self._log_dir
 
-    def resolve_campaign_dir(self, repo_root: Path) -> Path:
+    def resolve_campaign_dir(self) -> Path:
         if self._campaign_dir is None:
             raise ValueError("FakeWorkspace has no campaign_dir configured")
         return self._campaign_dir

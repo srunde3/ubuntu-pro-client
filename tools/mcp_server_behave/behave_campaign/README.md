@@ -194,8 +194,9 @@ reason, and goes on rather than stopping the campaign.
 
 The server exposes campaigns through these tools. They read and write the
 same files the CLI does, under the directory named by
-`MCP_STATE_DIR` (default `<repo_root>/.mcp_server_behave`), in its
-`campaigns/` subdirectory.
+`MCP_STATE_DIR` (default `.mcp_server_behave` in the server's checkout), in
+its `campaigns/` subdirectory. Only `create_campaign` takes a `repo_root`: the
+checkout whose feature files define the scope and whose jobs run.
 
 - `create_campaign` -- plan a campaign and store it, starting nothing.
   Returns the unit count so scope can be confirmed first. `lanes` takes

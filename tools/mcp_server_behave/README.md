@@ -44,8 +44,10 @@ The server exposes these MCP tools:
 
 Release and substrate values are derived by parsing each feature's Gherkin `Examples` tables with the `behave` library, so the catalog always reflects the current feature files (no hardcoded release/substrate lists).
 
-Everything the server writes lives under one directory in the checkout,
-`.mcp_server_behave`, with a subdirectory per kind of artifact:
+Everything the server writes lives under one directory in the server's own
+checkout, `.mcp_server_behave`, with a subdirectory per kind of artifact. A
+call that names another checkout with `repo_root` runs there, but its files
+still land here, so one server keeps one set of jobs and campaigns:
 
 ```
 .mcp_server_behave/
@@ -239,23 +241,24 @@ Other startup variables:
 - `MCP_HOST`: host to bind. Defaults to `127.0.0.1`.
 - `MCP_PORT`: port to bind. Defaults to `8000`.
 
-Every tool also accepts a `repo_root` parameter:
+The catalog tools (`list_features`, `describe_feature`, `list_dimensions`,
+`find_scenarios`), `start_scenario` and `create_campaign` accept a `repo_root`
+parameter:
 
-- `repo_root`: the repository to run behave against. If a call omits it, the server falls back to `UBUNTU_PRO_CLIENT_REPO`, then to the checkout it runs from.
+- `repo_root`: the checkout to read feature files from and run behave in. If a call omits it, the server falls back to `UBUNTU_PRO_CLIENT_REPO`, then to the checkout it runs from. It never moves where the server writes.
 
-Campaign files are written under:
+Tools that look up a job or a campaign by id take no `repo_root`: every job
+and campaign lives in the server's state directory.
 
 - `MCP_CAMPAIGN_POLL_TIMEOUT`: longest wait `await_campaign_events` may be
   asked for, in seconds. Defaults to `60`, and must be between 1 and 120 --
   the real ceiling is the MCP client's own request timeout, which varies per
   host. A call asking for longer is rejected rather than quietly shortened.
 
-One more variable is read per call rather than at startup, because it follows
-`repo_root`:
-
 - `MCP_STATE_DIR`: where the server writes everything -- job artifacts under
   `jobs/`, campaign records under `campaigns/`. Defaults to
-  `<repo_root>/.mcp_server_behave`.
+  `.mcp_server_behave` in the server's checkout (`UBUNTU_PRO_CLIENT_REPO`, or
+  the checkout it runs from).
 
 ## Safety constraints
 

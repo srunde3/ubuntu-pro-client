@@ -103,8 +103,7 @@ class UnknownJobError(BehaveServiceError):
     def __init__(self, job_id: str) -> None:
         super().__init__(
             f"Unknown job_id: {job_id}. Call list_scenario_jobs to see "
-            "known jobs, or pass repo_root if this job predates a server "
-            "restart."
+            "known jobs."
         )
 
 
@@ -358,7 +357,7 @@ class BehaveService:
 
         repo_state = self._workspace.repo_state(resolved_repo_root)
 
-        log_dir = self._workspace.resolve_log_dir(resolved_repo_root)
+        log_dir = self._log_dir()
         results = self._results.bind(log_dir)
         job_id = self._new_job_id()
         write_targets = results.write_targets(job_id)
@@ -518,7 +517,7 @@ class BehaveService:
         }
         raise BehaveServiceError(refusals[match])
 
-    def kill_job(self, job_id: str, repo_root: str = "") -> KillJobResponse:
+    def kill_job(self, job_id: str) -> KillJobResponse:
         """Terminate a running job.
 
         For a lane that has hung: the campaign's next tick sees the job
@@ -529,7 +528,7 @@ class BehaveService:
         job = self._registry.get(job_id)
         if job is None:
             try:
-                job = self._recover_job(job_id, repo_root or None)
+                job = self._recover_job(job_id)
             except ValueError as exc:
                 raise BehaveServiceError(str(exc)) from exc
             if job is None:
@@ -557,23 +556,20 @@ class BehaveService:
             job_id=job_id, killed=True, message="Termination signalled."
         )
 
-    def job_status(
-        self, job_id: str, repo_root: str = ""
-    ) -> RunningResponse | CompletedResponse:
+    def job_status(self, job_id: str) -> RunningResponse | CompletedResponse:
         """Return a job's current state without waiting.
 
         ``wait_for_completion`` requires a positive timeout, so this is what
         a caller polls when it must not block -- a scheduler filling lanes,
         for instance.
         """
-        return self._status_payload(job_id, repo_root or None)
+        return self._status_payload(job_id)
 
     def wait_for_completion(
         self,
         job_id: str,
         max_wait_seconds: int = DEFAULT_WAIT_TIMEOUT_SECONDS,
         poll_interval_seconds: float = (DEFAULT_WAIT_POLL_INTERVAL_SECONDS),
-        repo_root: str = "",
     ) -> WaitForCompletionResult:
         if max_wait_seconds <= 0:
             raise BehaveServiceError("max_wait_seconds must be greater than 0")
@@ -585,7 +581,7 @@ class BehaveService:
         deadline = self._monotonic() + max_wait_seconds
 
         while True:
-            payload = self._status_payload(job_id, repo_root or None)
+            payload = self._status_payload(job_id)
 
             if isinstance(payload, CompletedResponse):
                 return payload
@@ -606,7 +602,6 @@ class BehaveService:
         self,
         job_id: str,
         lines: int = DEFAULT_LOG_LINES,
-        repo_root: str = "",
         *,
         pattern: str = "",
         context: int = DEFAULT_LOG_CONTEXT,
@@ -629,7 +624,7 @@ class BehaveService:
         job = self._registry.get(job_id)
         if job is None:
             try:
-                job = self._recover_job(job_id, repo_root or None)
+                job = self._recover_job(job_id)
             except ValueError as exc:
                 raise BehaveServiceError(str(exc)) from exc
             if job is None:
@@ -664,11 +659,11 @@ class BehaveService:
             log_path=results.artifacts(job_id).stdout_log,
         )
 
-    def get_errors(self, job_id: str, repo_root: str = "") -> ErrorsResponse:
+    def get_errors(self, job_id: str) -> ErrorsResponse:
         job = self._registry.get(job_id)
         if job is None:
             try:
-                job = self._recover_job(job_id, repo_root or None)
+                job = self._recover_job(job_id)
             except ValueError as exc:
                 raise BehaveServiceError(str(exc)) from exc
             if job is None:
@@ -714,13 +709,11 @@ class BehaveService:
             log_path=results.artifacts(job_id).stdout_log,
         )
 
-    def get_artifacts(
-        self, job_id: str, repo_root: str = ""
-    ) -> ArtifactsResponse:
+    def get_artifacts(self, job_id: str) -> ArtifactsResponse:
         job = self._registry.get(job_id)
         if job is None:
             try:
-                job = self._recover_job(job_id, repo_root or None)
+                job = self._recover_job(job_id)
             except ValueError as exc:
                 raise BehaveServiceError(str(exc)) from exc
             if job is None:
@@ -735,24 +728,15 @@ class BehaveService:
         )
 
     def list_jobs(
-        self,
-        repo_root: str = "",
-        limit: int = DEFAULT_JOB_LIST_LIMIT,
+        self, limit: int = DEFAULT_JOB_LIST_LIMIT
     ) -> ListScenarioJobsResponse:
-        try:
-            resolved_repo_root = self._workspace.resolve_repo_root(
-                repo_root or None
-            )
-        except ValueError as exc:
-            raise BehaveServiceError(str(exc)) from exc
-
         if limit <= 0:
             raise BehaveServiceError(
                 f"limit must be a positive integer, got {limit}"
             )
         limit_clamped = limit > MAX_JOB_LIST_LIMIT
         limit = min(limit, MAX_JOB_LIST_LIMIT)
-        log_dir = self._workspace.resolve_log_dir(resolved_repo_root)
+        log_dir = self._log_dir()
         results = self._results.bind(log_dir)
 
         in_memory_jobs = {job.job_id: job for job in self._registry.snapshot()}
@@ -764,7 +748,7 @@ class BehaveService:
             job = in_memory_jobs.get(job_id)
             recovered = job is None
             if job is None:
-                job = self._recover_job(job_id, repo_root or None)
+                job = self._recover_job(job_id)
                 if job is None:
                     continue
             summary = self._job_summary(job_id, job)
@@ -790,7 +774,6 @@ class BehaveService:
         )
 
         return ListScenarioJobsResponse(
-            repo_root=str(resolved_repo_root),
             jobs=trimmed,
             total_completed=len(others),
             truncated=len(others) > limit,
@@ -806,7 +789,6 @@ class BehaveService:
         machine_type: str = "",
         status: str = "",
         limit: int = DEFAULT_RESULTS_LIMIT,
-        repo_root: str = "",
     ) -> ResultsResponse:
         status_filter: RunStatus | None = None
         if status:
@@ -818,13 +800,6 @@ class BehaveService:
                     f"Invalid status filter: {status}. "
                     f"Allowed values: {allowed}"
                 ) from None
-
-        try:
-            resolved_repo_root = self._workspace.resolve_repo_root(
-                repo_root or None
-            )
-        except ValueError as exc:
-            raise BehaveServiceError(str(exc)) from exc
 
         normalized_feature_file = (
             parser.normalize_feature_file_arg(feature_file)
@@ -839,7 +814,7 @@ class BehaveService:
         limit_clamped = limit > MAX_RESULTS_LIMIT
         limit = min(limit, MAX_RESULTS_LIMIT)
 
-        log_dir = self._workspace.resolve_log_dir(resolved_repo_root)
+        log_dir = self._log_dir()
         results = self._results.bind(log_dir)
         in_memory_jobs = {job.job_id: job for job in self._registry.snapshot()}
         disk_job_ids = set(results.list_job_ids())
@@ -848,7 +823,7 @@ class BehaveService:
         for job_id in sorted(set(in_memory_jobs) | disk_job_ids):
             job = in_memory_jobs.get(job_id)
             if job is None:
-                job = self._recover_job(job_id, repo_root or None)
+                job = self._recover_job(job_id)
                 if job is None:
                     continue
             if not job_matches_result_filters(
@@ -868,7 +843,6 @@ class BehaveService:
 
         matched.sort(key=lambda item: item[1].started_at or "", reverse=True)
         return ResultsResponse(
-            repo_root=str(resolved_repo_root),
             results=[
                 self._job_result(job_id, summary, job)
                 for job_id, summary, job in matched[:limit]
@@ -951,13 +925,13 @@ class BehaveService:
         )
 
     def _status_payload(
-        self, job_id: str, repo_root_override: str | None
+        self, job_id: str
     ) -> RunningResponse | CompletedResponse:
         job = self._registry.get(job_id)
         recovered = job is None
         if job is None:
             try:
-                job = self._recover_job(job_id, repo_root_override)
+                job = self._recover_job(job_id)
             except ValueError as exc:
                 raise BehaveServiceError(str(exc)) from exc
             if job is None:
@@ -1072,13 +1046,14 @@ class BehaveService:
         )
         return record
 
-    def _recover_job(
-        self, job_id: str, repo_root_override: str | None
-    ) -> Job | None:
-        resolved_repo_root = self._workspace.resolve_repo_root(
-            repo_root_override
-        )
-        log_dir = self._workspace.resolve_log_dir(resolved_repo_root)
+    def _log_dir(self) -> Path:
+        try:
+            return self._workspace.resolve_log_dir()
+        except ValueError as exc:
+            raise BehaveServiceError(str(exc)) from exc
+
+    def _recover_job(self, job_id: str) -> Job | None:
+        log_dir = self._log_dir()
         results = self._results.bind(log_dir)
         exists = results.exists(job_id)
         if not (exists.stdout_log or exists.json_report or exists.metadata):

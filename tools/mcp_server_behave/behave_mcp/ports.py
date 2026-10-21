@@ -213,12 +213,16 @@ class Workspace(Protocol):
         """Resolve the repository root, raising ValueError if invalid."""
         ...
 
-    def resolve_log_dir(self, repo_root: Path) -> Path:
-        """Resolve and create the directory for job artifacts."""
+    def resolve_log_dir(self) -> Path:
+        """Resolve and create the server's directory for job artifacts.
+
+        It is under the server's own state directory, whatever checkout a
+        call names: one server keeps one set of jobs.
+        """
         ...
 
-    def resolve_campaign_dir(self, repo_root: Path) -> Path:
-        """Resolve and create the directory holding campaign files."""
+    def resolve_campaign_dir(self) -> Path:
+        """Resolve and create the server's directory for campaign files."""
         ...
 
     def subprocess_env(self) -> dict[str, str]:

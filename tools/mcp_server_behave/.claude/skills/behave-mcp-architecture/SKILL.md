@@ -51,7 +51,7 @@ Register MCP tools with the local `@tool` decorator in `server.py`, never with `
 
 ## State on disk
 
-Everything the server writes lives under `<repo_root>/.mcp_server_behave/`, or under `$MCP_STATE_DIR` when it is set:
+Everything the server writes lives under its own checkout's `.mcp_server_behave/`, or under `$MCP_STATE_DIR` when it is set. A per-call `repo_root` chooses where behave runs and which feature files are read, never where files are written:
 
 | Path | Holds | Written by |
 | --- | --- | --- |

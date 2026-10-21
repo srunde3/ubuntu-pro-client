@@ -374,7 +374,6 @@ class JobSummary(BaseModel):
 
 
 class ListScenarioJobsResponse(BaseModel):
-    repo_root: str = ""
     jobs: list[JobSummary] = []
     total_completed: int = 0
     truncated: bool = False
@@ -384,7 +383,6 @@ class ListScenarioJobsResponse(BaseModel):
 class ResultsResponse(BaseModel):
     """One result per matching job, most recently started first."""
 
-    repo_root: str = ""
     results: list[JobResult] = []
     total: int = 0
     truncated: bool = False

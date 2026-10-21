@@ -484,11 +484,17 @@ def test_start_scenario_includes_repo_state_in_response_and_record(tmp_path):
     )
 
 
-def test_start_scenario_uses_repo_root_override(tmp_path):
-    repo_root = make_repo_with_feature(tmp_path, "features/cli/sample.feature")
+def test_a_repo_root_override_runs_there_but_files_stay_with_the_server(
+    tmp_path,
+):
+    other_checkout = make_repo_with_feature(
+        tmp_path, "features/cli/sample.feature", name="worktree"
+    )
+    server_jobs = tmp_path / "server-state" / "jobs"
+    server_jobs.mkdir(parents=True)
     launcher = FakeLauncher()
     service = _make_service(
-        FakeWorkspace(repo_root=None, log_dir=tmp_path), launcher=launcher
+        FakeWorkspace(repo_root=None, log_dir=server_jobs), launcher=launcher
     )
 
     result = service.start_scenario(
@@ -496,11 +502,16 @@ def test_start_scenario_uses_repo_root_override(tmp_path):
         scenario_name=UNIT_SCENARIO,
         release="jammy",
         machine_type="lxd-container",
-        repo_root=str(repo_root),
+        repo_root=str(other_checkout),
     ).model_dump(mode="json")
 
     assert result["ok"] is True
-    assert launcher.calls[0]["cwd"] == str(repo_root)
+    assert launcher.calls[0]["cwd"] == str(other_checkout)
+    assert launcher.calls[0]["stdout_log_path"].parent == server_jobs
+    record = json.loads(
+        (server_jobs / f"{result['job_id']}_meta.json").read_text()
+    )
+    assert record["repo_root"] == str(other_checkout)
 
 
 def test_start_scenario_does_not_reference_combo_formatter(tmp_path):
@@ -1006,15 +1017,6 @@ def test_get_logs_rejects_non_positive_lines(tmp_path):
         service.get_logs("whatever", lines=0)
 
 
-def test_get_logs_rejects_invalid_repo_root():
-    service = _make_service(
-        FakeWorkspace(repo_root_error="Invalid repo_root: bad")
-    )
-
-    with pytest.raises(BehaveServiceError, match="Invalid repo_root"):
-        service.get_logs("missing-job", repo_root="/bad")
-
-
 def test_get_logs_unknown_job_id_is_actionable(tmp_path):
     service = _make_service(
         FakeWorkspace(repo_root=tmp_path, log_dir=tmp_path)
@@ -1054,15 +1056,6 @@ def test_get_artifacts_returns_paths_and_metadata(tmp_path):
     assert result["exists"]["json_report"] is True
     assert result["exists"]["metadata"] is True
     assert result["metadata"]["status"] == "started"
-
-
-def test_get_artifacts_rejects_invalid_repo_root():
-    service = _make_service(
-        FakeWorkspace(repo_root_error="Invalid repo_root: bad")
-    )
-
-    with pytest.raises(BehaveServiceError, match="Invalid repo_root"):
-        service.get_artifacts("missing-job", repo_root="/bad")
 
 
 def test_get_artifacts_unknown_job_id_is_actionable(tmp_path):
@@ -1326,18 +1319,6 @@ def test_list_jobs_rejects_non_positive_limit(tmp_path):
 
     with pytest.raises(BehaveServiceError, match="limit must be a positive"):
         service.list_jobs(limit=0)
-
-
-def test_list_jobs_rejects_invalid_repo_root():
-    service = _make_service(
-        FakeWorkspace(repo_root_error="Invalid repo_root: bad")
-    )
-
-    with pytest.raises(BehaveServiceError, match="Invalid repo_root"):
-        service.list_jobs(repo_root="/bad")
-
-
-# ---- summarize_scenario_results ----
 
 
 def test_get_results_reports_one_result_per_job(tmp_path):

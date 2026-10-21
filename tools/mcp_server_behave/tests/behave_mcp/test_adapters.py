@@ -192,31 +192,29 @@ def test_resolve_repo_root_raises_clear_error_when_undetectable(monkeypatch):
         workspace.resolve_repo_root(None)
 
 
-def test_artifacts_default_to_one_directory_in_the_checkout(
+def test_state_defaults_to_one_directory_in_the_servers_checkout(
     tmp_path, monkeypatch
 ):
+    repo = make_repo_with_feature(tmp_path)
     monkeypatch.delenv("MCP_STATE_DIR", raising=False)
+    monkeypatch.setenv("UBUNTU_PRO_CLIENT_REPO", str(repo))
     workspace = LocalWorkspace()
-    repo = tmp_path / "repo"
-    repo.mkdir()
 
-    state = repo / ".mcp_server_behave"
+    state = repo.resolve() / ".mcp_server_behave"
 
-    assert workspace.resolve_state_dir(repo) == state
-    assert workspace.resolve_log_dir(repo) == state / "jobs"
-    assert workspace.resolve_campaign_dir(repo) == state / "campaigns"
+    assert workspace.resolve_state_dir() == state
+    assert workspace.resolve_log_dir() == state / "jobs"
+    assert workspace.resolve_campaign_dir() == state / "campaigns"
 
 
 def test_each_kind_of_artifact_gets_its_own_subdirectory(
     tmp_path, monkeypatch
 ):
-    monkeypatch.delenv("MCP_STATE_DIR", raising=False)
+    monkeypatch.setenv("MCP_STATE_DIR", str(tmp_path / "state"))
     workspace = LocalWorkspace()
-    repo = tmp_path / "repo"
-    repo.mkdir()
 
-    jobs = workspace.resolve_log_dir(repo)
-    campaigns = workspace.resolve_campaign_dir(repo)
+    jobs = workspace.resolve_log_dir()
+    campaigns = workspace.resolve_campaign_dir()
 
     # Created on demand, and distinct, so job output cannot land among
     # campaign records.
@@ -230,13 +228,11 @@ def test_the_state_directory_can_be_moved_wholesale(tmp_path, monkeypatch):
     monkeypatch.setenv("MCP_STATE_DIR", str(custom))
     workspace = LocalWorkspace()
 
-    # One variable relocates every kind of artifact together.
-    assert workspace.resolve_state_dir(tmp_path) == custom.resolve()
-    assert workspace.resolve_log_dir(tmp_path) == custom.resolve() / "jobs"
-    assert (
-        workspace.resolve_campaign_dir(tmp_path)
-        == custom.resolve() / "campaigns"
-    )
+    # One variable relocates every kind of artifact together, and needs no
+    # checkout to resolve.
+    assert workspace.resolve_state_dir() == custom.resolve()
+    assert workspace.resolve_log_dir() == custom.resolve() / "jobs"
+    assert workspace.resolve_campaign_dir() == custom.resolve() / "campaigns"
 
 
 def test_subprocess_env_forwards_all(monkeypatch):

@@ -232,10 +232,8 @@ _events: JsonlEventLog | None = None
 _runner_guard = threading.Lock()
 
 
-def _campaign_dir(repo_root: str) -> Path:
-    return _workspace.resolve_campaign_dir(
-        _workspace.resolve_repo_root(repo_root or None)
-    )
+def _campaign_dir() -> Path:
+    return _workspace.resolve_campaign_dir()
 
 
 def campaign_events(campaign_dir: Path) -> JsonlEventLog:
@@ -251,15 +249,14 @@ def campaign_events(campaign_dir: Path) -> JsonlEventLog:
         return _events
 
 
-def campaign_runner(repo_root: str) -> CampaignRunner:
-    """Return the one runner, bound to this call's campaign directory.
+def campaign_runner() -> CampaignRunner:
+    """Return the one runner, bound to the server's campaign directory.
 
     Unlike the service, the runner outlives a single call: it holds the run
-    lock and the ticker for whichever campaign is active. It is created once,
-    against the campaign directory the server started with.
+    lock and the ticker for whichever campaign is active.
     """
     global _runner
-    campaign_dir = _campaign_dir(repo_root)
+    campaign_dir = _campaign_dir()
     # Resolved before the guard, which is not reentrant, and so that the
     # runner shares the one log rather than quietly making a second.
     events = campaign_events(campaign_dir)
@@ -275,15 +272,12 @@ def campaign_runner(repo_root: str) -> CampaignRunner:
         return _runner
 
 
-def campaign_service(repo_root: str) -> CampaignService:
-    """Build a CampaignService bound to this call's campaign directory.
+def campaign_service() -> CampaignService:
+    """Build a CampaignService over the server's campaign directory.
 
-    The directory follows repo_root, which varies per call, so the service
-    is assembled per call the same way job result stores are bound per job.
-    It holds no state of its own.
+    It holds no state of its own, so it is assembled per call.
     """
-    resolved = _workspace.resolve_repo_root(repo_root or None)
-    campaign_dir = _workspace.resolve_campaign_dir(resolved)
+    campaign_dir = _campaign_dir()
     return CampaignService(
         store=JsonlCampaignStore(campaign_dir),
         features=ParserFeatureReader(),
@@ -456,7 +450,6 @@ def start_scenario(
     )
 )
 def list_scenario_jobs(
-    repo_root: RepoRoot = "",
     limit: Annotated[
         int,
         Field(
@@ -468,7 +461,7 @@ def list_scenario_jobs(
         ),
     ] = DEFAULT_JOB_LIST_LIMIT,
 ) -> ListScenarioJobsResponse:
-    return _service.list_jobs(repo_root, limit)
+    return _service.list_jobs(limit)
 
 
 @tool(
@@ -518,7 +511,6 @@ def get_scenario_results(
             )
         ),
     ] = DEFAULT_RESULTS_LIMIT,
-    repo_root: RepoRoot = "",
 ) -> ResultsResponse:
     return _service.get_results(
         job_ids=job_ids,
@@ -528,7 +520,6 @@ def get_scenario_results(
         machine_type=machine_type,
         status=status,
         limit=limit,
-        repo_root=repo_root,
     )
 
 
@@ -551,13 +542,11 @@ def wait_for_scenario_completion(
     poll_interval_seconds: Annotated[
         float, Field(description="Delay between internal status checks.")
     ] = DEFAULT_WAIT_POLL_INTERVAL_SECONDS,
-    repo_root: RepoRoot = "",
 ) -> WaitForCompletionResult:
     return _service.wait_for_completion(
         job_id,
         max_wait_seconds,
         poll_interval_seconds,
-        repo_root,
     )
 
 
@@ -574,10 +563,8 @@ def wait_for_scenario_completion(
         "run: read tail, or get_scenario_logs with a pattern."
     )
 )
-def get_scenario_errors(
-    job_id: JobId, repo_root: RepoRoot = ""
-) -> ErrorsResponse:
-    return _service.get_errors(job_id, repo_root)
+def get_scenario_errors(job_id: JobId) -> ErrorsResponse:
+    return _service.get_errors(job_id)
 
 
 @tool(
@@ -628,12 +615,10 @@ def get_scenario_logs(
             )
         ),
     ] = DEFAULT_LOG_LINES,
-    repo_root: RepoRoot = "",
 ) -> LogsResponse:
     return _service.get_logs(
         job_id,
         lines,
-        repo_root,
         pattern=pattern,
         context=context,
         start=start,
@@ -647,10 +632,8 @@ def get_scenario_logs(
         "start_scenario or list_scenario_jobs."
     )
 )
-def get_scenario_artifacts(
-    job_id: JobId, repo_root: RepoRoot = ""
-) -> ArtifactsResponse:
-    return _service.get_artifacts(job_id, repo_root)
+def get_scenario_artifacts(job_id: JobId) -> ArtifactsResponse:
+    return _service.get_artifacts(job_id)
 
 
 @tool(
@@ -704,7 +687,7 @@ def create_campaign(
     lanes: CampaignLanes = CampaignLanes(),
     repo_root: RepoRoot = "",
 ) -> CreateCampaignResponse:
-    return campaign_service(repo_root).create_campaign(
+    return campaign_service().create_campaign(
         campaign_id=campaign_id,
         repo_root=_workspace.resolve_repo_root(repo_root or None),
         releases=releases,
@@ -723,8 +706,8 @@ def create_campaign(
         "outstanding across campaigns."
     )
 )
-def list_campaigns(repo_root: RepoRoot = "") -> ListCampaignsResponse:
-    return campaign_service(repo_root).list_campaigns()
+def list_campaigns() -> ListCampaignsResponse:
+    return campaign_service().list_campaigns()
 
 
 @tool(
@@ -780,9 +763,8 @@ def campaign_status(
             ),
         ),
     ] = DEFAULT_PROBLEMS_LIMIT,
-    repo_root: RepoRoot = "",
 ) -> CampaignStatusResponse:
-    return campaign_service(repo_root).campaign_status(
+    return campaign_service().campaign_status(
         campaign_id=campaign_id,
         filters=Filters(
             feature=(feature,) if feature else (),
@@ -833,9 +815,8 @@ def unit_history(
             description="Most units to list.",
         ),
     ] = DEFAULT_HISTORY_LIMIT,
-    repo_root: RepoRoot = "",
 ) -> UnitHistoryResponse:
-    return campaign_service(repo_root).unit_history(
+    return campaign_service().unit_history(
         campaign_id=campaign_id,
         filters=Filters(
             feature=(feature,) if feature else (),
@@ -880,9 +861,8 @@ def control_campaign(
             description="With pause: kill the jobs in flight.",
         ),
     ] = False,
-    repo_root: RepoRoot = "",
 ) -> CampaignControlResponse:
-    runner = campaign_runner(repo_root)
+    runner = campaign_runner()
     if action == ControlAction.RUN:
         if kill:
             raise ValueError("kill applies only to pause")
@@ -956,7 +936,6 @@ def await_campaign_events(
             ),
         ),
     ] = MAX_EVENT_ERROR_CHARS,
-    repo_root: RepoRoot = "",
 ) -> AwaitEventsResponse:
     if timeout_seconds > _settings.campaign_poll_timeout:
         raise ValueError(
@@ -965,7 +944,7 @@ def await_campaign_events(
                 timeout_seconds, _settings.campaign_poll_timeout
             )
         )
-    return campaign_service(repo_root).await_events(
+    return campaign_service().await_events(
         campaign_id=campaign_id,
         since_seq=since_seq,
         kinds=kinds,
@@ -1014,9 +993,8 @@ def retry_units(
             ),
         ),
     ] = "",
-    repo_root: RepoRoot = "",
 ) -> RetryUnitsResponse:
-    return campaign_runner(repo_root).retry_units(
+    return campaign_runner().retry_units(
         campaign_id,
         filters=Filters(
             feature=(feature,) if feature else (),
@@ -1038,8 +1016,8 @@ def retry_units(
         "server restart, since no handle on it survives."
     )
 )
-def kill_job(job_id: JobId, repo_root: RepoRoot = "") -> KillJobResponse:
-    return _service.kill_job(job_id, repo_root)
+def kill_job(job_id: JobId) -> KillJobResponse:
+    return _service.kill_job(job_id)
 
 
 def main() -> None:

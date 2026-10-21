@@ -333,26 +333,25 @@ class LocalWorkspace:
                 return candidate.resolve()
         return None
 
-    def resolve_state_dir(self, repo_root: Path) -> Path:
+    def resolve_state_dir(self) -> Path:
         """Where everything this server writes goes.
 
-        Read per call rather than once at startup, because repo_root varies
-        per call and the state directory follows it.
+        ``$MCP_STATE_DIR``, else the server's own checkout's state
+        directory. A per-call ``repo_root`` never moves it.
         """
         configured = os.environ.get(layout.STATE_DIR_ENV_VAR)
-        return layout.state_dir(
-            repo_root,
-            Path(configured).expanduser().resolve() if configured else None,
-        )
+        if configured:
+            return Path(configured).expanduser().resolve()
+        return layout.state_dir(self.resolve_repo_root(None), None)
 
-    def resolve_log_dir(self, repo_root: Path) -> Path:
-        return self._subdir(repo_root, layout.JOBS_SUBDIR)
+    def resolve_log_dir(self) -> Path:
+        return self._subdir(layout.JOBS_SUBDIR)
 
-    def resolve_campaign_dir(self, repo_root: Path) -> Path:
-        return self._subdir(repo_root, layout.CAMPAIGNS_SUBDIR)
+    def resolve_campaign_dir(self) -> Path:
+        return self._subdir(layout.CAMPAIGNS_SUBDIR)
 
-    def _subdir(self, repo_root: Path, name: str) -> Path:
-        path = self.resolve_state_dir(repo_root) / name
+    def _subdir(self, name: str) -> Path:
+        path = self.resolve_state_dir() / name
         path.mkdir(parents=True, exist_ok=True)
         return path
 
