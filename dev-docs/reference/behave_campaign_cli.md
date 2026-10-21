@@ -19,8 +19,8 @@ unknown value, a missing campaign, or an unreadable file prints a message to
 stderr and exits `2`. JSON shapes match the `behave` MCP server's campaign
 tools.
 
-`--campaign-id` resolves to `<repo-root>/.mcp_server_behave/campaigns/ID.jsonl`,
-or `$MCP_STATE_DIR/campaigns/ID.jsonl` when `MCP_STATE_DIR` is set -- the same
+`--campaign-id` resolves to `<repo-root>/.mcp_server_behave/campaigns/ID/`,
+or `$MCP_STATE_DIR/campaigns/ID/` when `MCP_STATE_DIR` is set -- the same
 file the `behave` MCP server uses for that id. `--repo-root` defaults to
 `$UBUNTU_PRO_CLIENT_REPO`.
 
@@ -52,14 +52,15 @@ uv run behave-campaign dimensions --repo-root ../..
 ## create
 
 Create a campaign from the feature files. Units are built from the
-combinations each scenario supports, narrowed by the filters. A campaign file
-can be created only once.
+combinations each scenario supports, narrowed by the filters. A campaign can
+be created only once.
 
 Required arguments:
 
 * One of:
   * `--campaign-id ID`: The campaign, by the name the server uses.
-  * `--campaign FILE`: A campaign file anywhere; its id is the file's name.
+  * `--campaign DIR`: A campaign directory anywhere; its id is the
+    directory's name.
 * `--repo-root DIR`: An `ubuntu-pro-client` checkout holding `features/`,
   whose state holds the campaign. Defaults to `$UBUNTU_PRO_CLIENT_REPO`.
 
@@ -86,8 +87,8 @@ uv run behave-campaign create --campaign-id 1234567 --repo-root ../.. \
   --install-from proposed --lxd-lanes 4
 ```
 
-Errors: an unknown release, machine type, or feature; a campaign file that
-already exists; no unit matching the filters; lanes for a pool no unit in
+Errors: an unknown release, machine type, or feature; a campaign that already
+exists; no unit matching the filters; lanes for a pool no unit in
 scope draws on; fewer than one lane for a pool, or more than one for `wsl`.
 
 ## status
@@ -99,7 +100,8 @@ Required arguments:
 
 * One of:
   * `--campaign-id ID`: The campaign, by the name the server uses.
-  * `--campaign FILE`: A campaign file anywhere; its id is the file's name.
+  * `--campaign DIR`: A campaign directory anywhere; its id is the
+    directory's name.
 
 Optional arguments:
 
@@ -130,7 +132,8 @@ Required arguments:
 
 * One of:
   * `--campaign-id ID`: The campaign, by the name the server uses.
-  * `--campaign FILE`: A campaign file anywhere; its id is the file's name.
+  * `--campaign DIR`: A campaign directory anywhere; its id is the
+    directory's name.
 
 Optional arguments:
 
@@ -160,7 +163,8 @@ Required arguments:
 
 * One of:
   * `--campaign-id ID`: The campaign, by the name the server uses.
-  * `--campaign FILE`: A campaign file anywhere; its id is the file's name.
+  * `--campaign DIR`: A campaign directory anywhere; its id is the
+    directory's name.
 
 Optional arguments:
 
@@ -194,7 +198,8 @@ Required arguments:
 
 * One of:
   * `--campaign-id ID`: The campaign, by the name the server uses.
-  * `--campaign FILE`: A campaign file anywhere; its id is the file's name.
+  * `--campaign DIR`: A campaign directory anywhere; its id is the
+    directory's name.
 
 Optional arguments:
 
@@ -231,7 +236,8 @@ Required arguments:
 
 * One of:
   * `--campaign-id ID`: The campaign, by the name the server uses.
-  * `--campaign FILE`: A campaign file anywhere; its id is the file's name.
+  * `--campaign DIR`: A campaign directory anywhere; its id is the
+    directory's name.
 * `--repo-root DIR`: The checkout whose state holds the campaign and its job
   files. Defaults to `$UBUNTU_PRO_CLIENT_REPO`.
 
@@ -248,7 +254,8 @@ The bundle unpacks to one directory named after the campaign:
 | `campaign.json` | Scope, install source, lanes, state, counts |
 | `units.csv` | One row per unit: `feature, scenario, release, machine_type, state, job_id, finished_at` |
 | `jobs/<job_id>/` | `job.json`, `status.json`, `report.json`, `stdout.log` for every attempt, including superseded ones |
-| `audit/campaign.jsonl` | The campaign record as stored |
+| `audit/campaign.json` | The campaign's header and units, as stored |
+| `audit/events.jsonl` | The campaign's record log, as stored |
 
 Each unit appears once, in the state its attempts ended in; the summary never
 shows attempt counts. Repo state is left out of the review files, because
@@ -266,9 +273,15 @@ and marked `files missing` in the summary.
 
 ## Files
 
+Each campaign is one directory, `campaigns/<id>/`:
+
 | File                          | Written by            | Contents                                   |
 | ----------------------------- | --------------------- | ------------------------------------------ |
-| `<id>.jsonl`                  | `create`, the server  | The campaign record, append-only           |
-| `<id>.lock`                   | the server            | Advisory lock while the campaign schedules |
-| `../exports/<id>.tar.gz`      | `export`              | The evidence bundle, by default            |
+| `campaign.json`               | `create`, once        | The header and the units in scope          |
+| `events.jsonl`                | the server            | Every later record, append-only            |
+| `campaign.lock`               | the server            | Advisory lock while the campaign schedules |
+| `../../exports/<id>.tar.gz`   | `export`              | The evidence bundle, by default            |
+
+A crash mid-append can leave part of a line at the end of `events.jsonl`.
+Reading ignores it, and the next append cuts it off.
 

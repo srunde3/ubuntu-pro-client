@@ -669,7 +669,8 @@ class TestExportCampaign:
                 "stdout.log",
             ):
                 assert "jobs/{}/{}".format(job_id, name) in writer.entries
-        assert "audit/campaign.jsonl" in writer.entries
+        assert "audit/campaign.json" in writer.entries
+        assert "audit/events.jsonl" in writer.entries
         for name in ("SUMMARY.md", "campaign.json", "units.csv"):
             assert writer.entries[name].data
 

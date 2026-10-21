@@ -52,7 +52,7 @@ still land here, so one server keeps one set of jobs and campaigns:
 ```
 .mcp_server_behave/
   jobs/        one directory per behave job
-  campaigns/   one record and run lock per campaign
+  campaigns/   one directory per campaign: its record and run lock
 ```
 
 `MCP_STATE_DIR` moves the whole thing; there is no separate variable per kind.
@@ -98,8 +98,9 @@ Only one campaign schedules at a time, held by an advisory lock so a second
 server cannot schedule it too. A paused or complete campaign releases it. The
 CLI does not take the lock.
 
-Campaign files written before this state model are not read. Delete
-`.mcp_server_behave/campaigns` after upgrading.
+State written in an earlier layout -- flat job files, single-file campaigns,
+or campaigns from before this state model -- is not read. Delete
+`.mcp_server_behave` after upgrading.
 
 `await_campaign_events` is how a caller follows a running campaign: it blocks
 until something happens, returns every event after a cursor, and always

@@ -10,14 +10,18 @@ A **test unit** is one behave scenario for one release on one `machine_type`.
 
 ## Storage
 
-One append-only JSON Lines file per campaign, replayed in full to get the
-current state. It is the only thing stored: every event a watcher hears is
-derived from it. Nine record types:
+One directory per campaign, `campaigns/<id>/`. `campaign.json` holds the
+header and the units in scope, written once at creation; `events.jsonl` holds
+every later record, appended. The two are replayed in full to get the current
+state, and they are the only thing stored: every event a watcher hears is
+derived from them. A crash mid-append can leave part of a line at the end of
+`events.jsonl`; reading ignores it and the next append cuts it off. Nine
+record types:
 
 | type | written when | says |
 | --- | --- | --- |
-| `campaign` | once, first line | how the campaign was built: scope, checkout, install source, lanes |
-| `plan` | once per unit, at creation | this unit is in scope |
+| `campaign` | once, in `campaign.json` | how the campaign was built: scope, checkout, install source, lanes |
+| `plan` | once per unit, in `campaign.json` | this unit is in scope |
 | `started` | a lane opens | a job began for this unit, and what it installs from |
 | `finished` | that job ends | what it established: `passed`, `failed`, `skipped` or `error`; the first failing steps; and, for a result that could not be classified, the `problem` |
 | `interrupted` | a pause with kill stops the job | the job ended without an outcome, and why |
@@ -112,8 +116,8 @@ uv run behave-campaign events --campaign-id 1234567 --kinds actionable --follow
 # Bundle a complete campaign's evidence.
 uv run behave-campaign export --campaign-id 1234567
 
-# A campaign file anywhere else: its id is the file's name.
-uv run behave-campaign status --campaign /tmp/T.jsonl
+# A campaign directory anywhere else: its id is the directory's name.
+uv run behave-campaign status --campaign /tmp/1234567
 ```
 
 All commands print JSON to stdout; `units` and `history` also take
@@ -122,10 +126,10 @@ All commands print JSON to stdout; `units` and `history` also take
 allow several values.
 
 A campaign is named the way the server names it: `--campaign-id 1234567`
-is `<repo>/.mcp_server_behave/campaigns/1234567.jsonl` (or under
+is `<repo>/.mcp_server_behave/campaigns/1234567/` (or under
 `$MCP_STATE_DIR`), so the CLI and the MCP tools read the same record by the
-same name. `--campaign FILE` addresses a file anywhere instead; its id is
-always the file's name. `--repo-root` defaults to `$UBUNTU_PRO_CLIENT_REPO`.
+same name. `--campaign DIR` addresses a campaign directory anywhere instead;
+its id is always the directory's name. `--repo-root` defaults to `$UBUNTU_PRO_CLIENT_REPO`.
 
 `events` reads the events the campaign's records announce; it needs no
 server of its own. `--since-seq` and
@@ -401,9 +405,9 @@ The other modules:
   `CampaignStore`, `FeatureReader`, `LaneRunner`, `Ticker`,
   `CampaignRunLock`, `JobFiles`, `BundleWriter`.
 - `adapters.py`: concrete implementations. Two stores satisfy
-  `CampaignStore`: the MCP names a campaign by id inside a campaign
-  directory, and the CLI can also be pointed at a file. Both share one
-  serialisation path, so there is one on-disk format.
+  `CampaignStore`: the MCP names a campaign by id under the campaigns
+  directory, and the CLI can also be pointed at one campaign's directory.
+  Both share one serialisation path, so there is one on-disk format.
   `behave_mcp.domain.layout` names the directory convention.
 - `repo.py`: reads the checkout state a campaign was built from.
 - `service.py`: `CampaignService`, driven by both the MCP tool wrappers and
@@ -419,7 +423,7 @@ The other modules:
   the service, print the response as JSON. Behaviour belongs in
   `service.py`, so the CLI and the MCP tools cannot drift apart.
 
-The run lock is an advisory `flock` on `<campaign_id>.lock`, held for as long
+The run lock is an advisory `flock` on the campaign's `campaign.lock`, held for as long
 as a campaign is scheduling, so a second server cannot schedule it
 too. The CLI does not take it. The kernel drops it if the holder dies.
 

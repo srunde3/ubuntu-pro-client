@@ -32,9 +32,9 @@ from behave_mcp.domain import layout
 from behave_mcp.domain.pools import Pool
 
 from .adapters import (
+    CampaignDirStore,
     JobDirFiles,
     ParserFeatureReader,
-    SingleFileCampaignStore,
     TarBundleWriter,
     system_now,
 )
@@ -50,9 +50,9 @@ from .service import CampaignService
 Output = BaseModel | Iterator[BaseModel]
 
 
-def _service(campaign_file: Path) -> CampaignService:
+def _service(campaign_dir: Path) -> CampaignService:
     return CampaignService(
-        store=SingleFileCampaignStore(campaign_file),
+        store=CampaignDirStore(campaign_dir),
         features=ParserFeatureReader(),
         now=system_now,
         repo_state=repo_state,
@@ -82,20 +82,22 @@ def _state_dir(args: argparse.Namespace) -> Path:
     )
 
 
-def _campaign_file(args: argparse.Namespace) -> Path:
-    """The campaign's file: given outright, or the server's file for an id.
+def _campaign_dir(args: argparse.Namespace) -> Path:
+    """The campaign's directory: given outright, or the server's for an id.
 
-    The id names the file the way the server names it, so a human and the
-    server read the same record by the same name.
+    The id names the directory the way the server names it, so a human and
+    the server read the same record by the same name.
     """
-    if args.campaign_file is not None:
-        return args.campaign_file
-    return layout.campaign_file(_state_dir(args), args.campaign_id)
+    if args.campaign_dir is not None:
+        return args.campaign_dir
+    return layout.campaign_paths(
+        layout.campaigns_dir(_state_dir(args)), args.campaign_id
+    ).campaign_dir
 
 
 def _campaign_id(args: argparse.Namespace) -> str:
-    """The campaign's id: always its file's stem."""
-    return _campaign_file(args).stem
+    """The campaign's id: always its directory's name."""
+    return _campaign_dir(args).name
 
 
 def _filters(args: argparse.Namespace) -> Filters:
@@ -115,7 +117,7 @@ def _command_dimensions(args: argparse.Namespace) -> BaseModel:
 
 
 def _command_create(args: argparse.Namespace) -> BaseModel:
-    return _service(_campaign_file(args)).create_campaign(
+    return _service(_campaign_dir(args)).create_campaign(
         campaign_id=_campaign_id(args),
         repo_root=_repo_root(args),
         releases=args.release or (),
@@ -132,7 +134,7 @@ def _command_create(args: argparse.Namespace) -> BaseModel:
 
 
 def _command_status(args: argparse.Namespace) -> BaseModel:
-    return _service(_campaign_file(args)).campaign_status(
+    return _service(_campaign_dir(args)).campaign_status(
         campaign_id=_campaign_id(args),
         filters=_filters(args),
         group_by=args.group_by,
@@ -141,7 +143,7 @@ def _command_status(args: argparse.Namespace) -> BaseModel:
 
 
 def _command_units(args: argparse.Namespace) -> BaseModel:
-    return _service(_campaign_file(args)).list_units(
+    return _service(_campaign_dir(args)).list_units(
         campaign_id=_campaign_id(args),
         filters=_filters(args),
         limit=args.limit,
@@ -149,7 +151,7 @@ def _command_units(args: argparse.Namespace) -> BaseModel:
 
 
 def _command_history(args: argparse.Namespace) -> BaseModel:
-    return _service(_campaign_file(args)).unit_history(
+    return _service(_campaign_dir(args)).unit_history(
         campaign_id=_campaign_id(args),
         filters=_filters(args),
         limit=args.limit,
@@ -160,7 +162,7 @@ def _command_export(args: argparse.Namespace) -> BaseModel:
     state = _state_dir(args)
     campaign_id = _campaign_id(args)
     output = args.output or layout.export_file(state, campaign_id)
-    return _service(_campaign_file(args)).export_campaign(
+    return _service(_campaign_dir(args)).export_campaign(
         campaign_id=campaign_id,
         output=Path(output).expanduser().resolve(),
         jobs=JobDirFiles(layout.jobs_dir(state)),
@@ -171,7 +173,7 @@ def _command_export(args: argparse.Namespace) -> BaseModel:
 def _read_events(
     args: argparse.Namespace, since_seq: int
 ) -> AwaitEventsResponse:
-    return _service(_campaign_file(args)).await_events(
+    return _service(_campaign_dir(args)).await_events(
         campaign_id=_campaign_id(args),
         since_seq=since_seq,
         kinds=args.kinds or (),
@@ -295,19 +297,17 @@ def _add_campaign(parser: argparse.ArgumentParser) -> None:
         metavar="ID",
         help=(
             "the campaign, by the name the server uses: "
-            "<repo-root>/{}/{}/ID{}".format(
-                layout.DEFAULT_STATE_DIR_NAME,
-                layout.CAMPAIGNS_SUBDIR,
-                layout.CAMPAIGN_SUFFIX,
+            "<repo-root>/{}/{}/ID/".format(
+                layout.DEFAULT_STATE_DIR_NAME, layout.CAMPAIGNS_SUBDIR
             )
         ),
     )
     which.add_argument(
         "--campaign",
         type=Path,
-        dest="campaign_file",
-        metavar="FILE",
-        help="a campaign file anywhere; its id is the file's name",
+        dest="campaign_dir",
+        metavar="DIR",
+        help="a campaign directory anywhere; its id is the directory's name",
     )
     _add_repo_root(parser)
 

@@ -24,10 +24,8 @@ JOBS_DIR = "jobs"
 AUDIT_DIR = "audit"
 
 
-AUDIT_CAMPAIGN_NAME = "campaign.jsonl"
-
-
-AUDIT_EVENTS_NAME = "events.jsonl"
+# The campaign's own files, copied under ``audit/`` as stored.
+AUDIT_FILES = (layout.CAMPAIGN_RECORD_NAME, layout.CAMPAIGN_LOG_NAME)
 
 
 # The files one job leaves behind. Each keeps its name in the bundle.

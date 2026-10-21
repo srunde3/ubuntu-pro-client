@@ -3,7 +3,7 @@ import tarfile
 
 import pytest
 
-from behave_campaign.adapters import SingleFileCampaignStore
+from behave_campaign.adapters import CampaignDirStore
 from behave_campaign.cli import main
 from behave_campaign.domain.records import (
     AttemptFinished,
@@ -58,8 +58,8 @@ def attempt(unit, outcome, job_id):
 
 def record(campaign_file, attempts):
     """Write attempts as a runner does: intent run, then each try."""
-    SingleFileCampaignStore(campaign_file).append(
-        campaign_file.stem,
+    CampaignDirStore(campaign_file).append(
+        campaign_file.name,
         [
             IntentRecord(Intent.RUN, Cause.RUN, AT),
             *(item for tried in attempts for item in tried),
@@ -78,7 +78,7 @@ def unit_of(reported):
 
 @pytest.fixture
 def campaign_file(tmp_path):
-    return tmp_path / "records.jsonl"
+    return tmp_path / "records"
 
 
 @pytest.fixture
@@ -281,8 +281,8 @@ class TestAddressing:
             ["status", "--campaign-id", "1234567", "--repo-root", str(repo)]
         )
 
-        expected = repo / ".mcp_server_behave" / "campaigns" / "1234567.jsonl"
-        assert expected.is_file()
+        expected = repo / ".mcp_server_behave" / "campaigns" / "1234567"
+        assert (expected / "campaign.json").is_file()
         assert created["campaign"]["campaign_id"] == "1234567"
         assert status["campaign"]["campaign_id"] == "1234567"
 
@@ -320,10 +320,10 @@ class TestAddressing:
         assert exit.value.code == 2
         assert "not allowed with" in capsys.readouterr().err
 
-    def test_a_file_names_its_own_id(self, planned, run, campaign_file):
+    def test_a_directory_names_its_own_id(self, planned, run, campaign_file):
         result = run(["status"])
 
-        assert result["campaign"]["campaign_id"] == campaign_file.stem
+        assert result["campaign"]["campaign_id"] == campaign_file.name
 
     def test_missing_repo_root_is_a_clear_error(self, monkeypatch, capsys):
         monkeypatch.delenv("UBUNTU_PRO_CLIENT_REPO", raising=False)
@@ -333,10 +333,12 @@ class TestAddressing:
         assert code == 2
         assert "UBUNTU_PRO_CLIENT_REPO" in capsys.readouterr().err
 
-    def test_campaign_header_is_the_first_record(self, planned, campaign_file):
-        first = json.loads(campaign_file.read_text().splitlines()[0])
+    def test_the_header_is_in_the_campaign_record(
+        self, planned, campaign_file
+    ):
+        record = json.loads((campaign_file / "campaign.json").read_text())
 
-        assert first["type"] == "campaign"
+        assert record["campaign"]["type"] == "campaign"
 
     def test_status_reports_the_campaign(self, planned, run):
         result = run(["status"])
@@ -530,7 +532,7 @@ class TestExport:
                 path = state / "jobs" / job_id / name
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text("[]" if name == "report.json" else "x")
-        record(state / "campaigns" / "1234567.jsonl", attempts)
+        record(state / "campaigns" / "1234567", attempts)
         return state
 
     def export(self, run, repo, *extra):
@@ -556,7 +558,8 @@ class TestExport:
             names = archive.getnames()
         assert "1234567/SUMMARY.md" in names
         assert "1234567/jobs/j1/stdout.log" in names
-        assert "1234567/audit/campaign.jsonl" in names
+        assert "1234567/audit/campaign.json" in names
+        assert "1234567/audit/events.jsonl" in names
 
     def test_an_existing_output_is_refused(
         self, finished, run, repo, tmp_path

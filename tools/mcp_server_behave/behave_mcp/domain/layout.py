@@ -28,7 +28,10 @@ JOB_FILE_NAMES = (
     JSON_REPORT_NAME,
 )
 EXPORTS_SUBDIR = "exports"
-CAMPAIGN_SUFFIX = ".jsonl"
+# The files in one campaign's directory, ``campaigns/<campaign_id>/``.
+CAMPAIGN_RECORD_NAME = "campaign.json"
+CAMPAIGN_LOG_NAME = "events.jsonl"
+CAMPAIGN_LOCK_NAME = "campaign.lock"
 
 
 def state_dir(repo_root: Path, configured: Path | None) -> Path:
@@ -39,12 +42,31 @@ def state_dir(repo_root: Path, configured: Path | None) -> Path:
     return repo_root / DEFAULT_STATE_DIR_NAME
 
 
-def campaign_dir(state: Path) -> Path:
+def campaigns_dir(state: Path) -> Path:
     return state / CAMPAIGNS_SUBDIR
 
 
-def campaign_file(state: Path, campaign_id: str) -> Path:
-    return campaign_dir(state) / (campaign_id + CAMPAIGN_SUFFIX)
+class CampaignPaths(NamedTuple):
+    """The directory one campaign owns, and the files in it.
+
+    ``record`` holds the header and plan, written once at creation;
+    ``log`` is every later record, appended; ``lock`` is the run lock.
+    """
+
+    campaign_dir: Path
+    record: Path
+    log: Path
+    lock: Path
+
+
+def campaign_paths(campaigns: Path, campaign_id: str) -> CampaignPaths:
+    campaign_dir = campaigns / campaign_id
+    return CampaignPaths(
+        campaign_dir=campaign_dir,
+        record=campaign_dir / CAMPAIGN_RECORD_NAME,
+        log=campaign_dir / CAMPAIGN_LOG_NAME,
+        lock=campaign_dir / CAMPAIGN_LOCK_NAME,
+    )
 
 
 def jobs_dir(state: Path) -> Path:

@@ -32,6 +32,7 @@ from behave_campaign.domain.records import (
     Unit,
     encode_record,
     parse_record,
+    parse_unit,
 )
 from behave_campaign.ports import (
     CampaignExistsError,
@@ -41,9 +42,6 @@ from behave_campaign.ports import (
 )
 from behave_mcp.domain import layout
 from behave_mcp.domain.pools import Pool
-
-CAMPAIGN_SUFFIX = layout.CAMPAIGN_SUFFIX
-LOCK_SUFFIX = ".lock"
 
 
 def system_now() -> str:
@@ -65,53 +63,107 @@ def _encode_lines(records: Sequence[Record]) -> str:
     )
 
 
-def _append_locked(stream: IO[str], payload: str) -> None:
-    """Append under an exclusive file lock, then force it to disk."""
-    fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
+def _write_atomic(path: Path, text: str) -> None:
+    """Write ``text`` to ``path`` whole or not at all, by temp and rename."""
+    fd, temporary = tempfile.mkstemp(
+        dir=path.parent, prefix=".{}.".format(path.name)
+    )
     try:
-        stream.write(payload)
-        stream.flush()
-        os.fsync(stream.fileno())
-    finally:
-        fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+        with os.fdopen(fd, "w") as stream:
+            stream.write(text)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    except BaseException:
+        Path(temporary).unlink(missing_ok=True)
+        raise
 
 
-def _create_file(path: Path, records: Sequence[Record], label: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
+def _create_campaign(
+    paths: layout.CampaignPaths,
+    header: CampaignHeader,
+    plans: Sequence[PlanRecord],
+    label: str,
+) -> None:
+    paths.campaign_dir.parent.mkdir(parents=True, exist_ok=True)
     try:
-        # "x" makes the existence check and the create one step, so two
-        # callers racing on the same campaign cannot both believe they won.
-        with path.open("x") as stream:
-            _append_locked(stream, _encode_lines(records))
+        # Making the directory is the existence check and the claim in one
+        # step, so two callers racing on one id cannot both believe they won.
+        paths.campaign_dir.mkdir()
     except FileExistsError:
         raise CampaignExistsError(
             "{} already holds a campaign; create a new one instead".format(
                 label
             )
         ) from None
+    document = {
+        "campaign": encode_record(header),
+        "units": [plan.unit.as_dict() for plan in plans],
+    }
+    _write_atomic(
+        paths.record, json.dumps(document, sort_keys=True, indent=2) + "\n"
+    )
 
 
-def _append_file(path: Path, records: Sequence[Record]) -> None:
+def _append_log(
+    paths: layout.CampaignPaths, records: Sequence[Record]
+) -> None:
+    """Append records under an exclusive lock, then force them to disk.
+
+    A torn last line -- an append a crash cut short -- is cut off first, so
+    the log stays whole lines however a writer died.
+    """
     if not records:
         return
-    with path.open("a") as stream:
-        _append_locked(stream, _encode_lines(records))
+    with paths.log.open("a+b") as stream:
+        fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
+        try:
+            size = stream.seek(0, os.SEEK_END)
+            if size:
+                stream.seek(size - 1)
+                if stream.read(1) != b"\n":
+                    stream.seek(0)
+                    stream.truncate(stream.read().rfind(b"\n") + 1)
+            stream.write(_encode_lines(records).encode())
+            stream.flush()
+            os.fsync(stream.fileno())
+        finally:
+            fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
 
 
-def _replay_file(path: Path) -> list[Record]:
-    records: list[Record] = []
-    with path.open("r") as stream:
-        for number, line in enumerate(stream, 1):
-            if not line.strip():
-                continue
-            try:
-                records.append(parse_record(json.loads(line)))
-            except ValueError as error:
-                raise CampaignError(
-                    "invalid campaign record in {} on line {}: {}".format(
-                        path.name, number, error
-                    )
-                ) from error
+def _replay_campaign(paths: layout.CampaignPaths) -> list[Record]:
+    try:
+        document = json.loads(paths.record.read_text())
+        header = parse_record(document["campaign"])
+        units = [parse_unit(raw) for raw in document["units"]]
+    except (ValueError, KeyError, TypeError) as error:
+        raise CampaignError(
+            "invalid campaign record in {}: {}".format(paths.record, error)
+        ) from error
+    if not isinstance(header, CampaignHeader):
+        raise CampaignError(
+            "{} does not start with a campaign header".format(paths.record)
+        )
+    records: list[Record] = [
+        header,
+        *(PlanRecord(unit=unit, at=header.at) for unit in units),
+    ]
+    if not paths.log.is_file():
+        return records
+    text = paths.log.read_text()
+    lines = text.split("\n")
+    # Whatever follows the last newline is a torn append, never a record.
+    for number, line in enumerate(lines[:-1], 1):
+        if not line.strip():
+            continue
+        try:
+            records.append(parse_record(json.loads(line)))
+        except ValueError as error:
+            raise CampaignError(
+                "invalid campaign record in {} on line {}: {}".format(
+                    paths.log, number, error
+                )
+            ) from error
     return records
 
 
@@ -144,7 +196,8 @@ class _Changes:
 
 
 class JsonlCampaignStore:
-    """Stores each campaign as ``<campaign_id>.jsonl`` under one directory."""
+    """Stores each campaign in its own directory under one root, laid out
+    by ``layout.campaign_paths``."""
 
     def __init__(self, root: Path) -> None:
         self._root = root
@@ -155,7 +208,7 @@ class JsonlCampaignStore:
         return self._root
 
     def path_for(self, campaign_id: str) -> Path:
-        return self._root / (campaign_id + CAMPAIGN_SUFFIX)
+        return self._paths(campaign_id).campaign_dir
 
     def create(
         self,
@@ -163,19 +216,20 @@ class JsonlCampaignStore:
         header: CampaignHeader,
         plans: Sequence[PlanRecord],
     ) -> None:
-        _create_file(
-            self.path_for(campaign_id),
-            [header, *plans],
+        _create_campaign(
+            self._paths(campaign_id),
+            header,
+            plans,
             "campaign {!r}".format(campaign_id),
         )
 
     def append(self, campaign_id: str, records: Sequence[Record]) -> None:
-        _append_file(self._existing_path(campaign_id), records)
+        _append_log(self._existing(campaign_id), records)
         if records:
             self._changes.appended()
 
     def replay(self, campaign_id: str) -> list[Record]:
-        return _replay_file(self._existing_path(campaign_id))
+        return _replay_campaign(self._existing(campaign_id))
 
     def wait(self, campaign_id: str, seen: int, timeout: float) -> None:
         self._changes.wait(
@@ -183,47 +237,53 @@ class JsonlCampaignStore:
         )
 
     def exists(self, campaign_id: str) -> bool:
-        return self.path_for(campaign_id).is_file()
+        return self._paths(campaign_id).record.is_file()
 
     def list_ids(self) -> list[str]:
         if not self._root.is_dir():
             return []
         return sorted(
-            path.name[: -len(CAMPAIGN_SUFFIX)]
-            for path in self._root.glob("*" + CAMPAIGN_SUFFIX)
-            if path.is_file()
+            path.parent.name
+            for path in self._root.glob(
+                "*/{}".format(layout.CAMPAIGN_RECORD_NAME)
+            )
         )
 
-    def _existing_path(self, campaign_id: str) -> Path:
-        path = self.path_for(campaign_id)
-        if not path.is_file():
+    def _paths(self, campaign_id: str) -> layout.CampaignPaths:
+        return layout.campaign_paths(self._root, campaign_id)
+
+    def _existing(self, campaign_id: str) -> layout.CampaignPaths:
+        paths = self._paths(campaign_id)
+        if not paths.record.is_file():
             raise CampaignNotFoundError(
                 "no campaign {!r} under {}".format(campaign_id, self._root)
             )
-        return path
+        return paths
 
 
-class SingleFileCampaignStore:
-    """Stores one campaign at an exact path, whatever it is named.
+class CampaignDirStore:
+    """Stores one campaign in a directory given outright.
 
-    The CLI is pointed at a file rather than at a campaign directory, so the
-    file name is taken as given instead of being derived from an id.
+    The CLI may be pointed at a campaign directory anywhere; its id is the
+    directory's name.
     """
 
-    def __init__(self, path: Path) -> None:
-        self._path = path
+    def __init__(self, campaign_dir: Path) -> None:
+        self._paths = layout.campaign_paths(
+            campaign_dir.parent, campaign_dir.name
+        )
         self._changes = _Changes()
 
     @property
     def root(self) -> Path:
-        return self._path.parent
+        return self._paths.campaign_dir.parent
 
     @property
     def campaign_id(self) -> str:
-        return self._path.stem
+        return self._paths.campaign_dir.name
 
     def path_for(self, campaign_id: str) -> Path:
-        return self._path
+        return self._paths.campaign_dir
 
     def create(
         self,
@@ -231,33 +291,33 @@ class SingleFileCampaignStore:
         header: CampaignHeader,
         plans: Sequence[PlanRecord],
     ) -> None:
-        _create_file(self._path, [header, *plans], "this file")
+        _create_campaign(self._paths, header, plans, "this directory")
 
     def append(self, campaign_id: str, records: Sequence[Record]) -> None:
-        _append_file(self._existing_path(), records)
+        _append_log(self._existing(), records)
         if records:
             self._changes.appended()
 
     def replay(self, campaign_id: str) -> list[Record]:
-        return _replay_file(self._existing_path())
+        return _replay_campaign(self._existing())
 
     def wait(self, campaign_id: str, seen: int, timeout: float) -> None:
         self._changes.wait(
             lambda: len(self.replay(campaign_id)), seen, timeout
         )
 
-    def _existing_path(self) -> Path:
-        if not self._path.is_file():
-            raise CampaignNotFoundError(
-                "no campaign file at {}".format(self._path)
-            )
-        return self._path
-
     def exists(self, campaign_id: str) -> bool:
-        return self._path.is_file()
+        return self._paths.record.is_file()
 
     def list_ids(self) -> list[str]:
-        return [self.campaign_id] if self._path.is_file() else []
+        return [self.campaign_id] if self._paths.record.is_file() else []
+
+    def _existing(self) -> layout.CampaignPaths:
+        if not self._paths.record.is_file():
+            raise CampaignNotFoundError(
+                "no campaign in {}".format(self._paths.campaign_dir)
+            )
+        return self._paths
 
 
 class ParserFeatureReader:
@@ -308,7 +368,7 @@ class ServiceLaneRunner:
 
 
 class FileCampaignRunLock:
-    """Advisory ``flock`` on ``<campaign_id>.lock`` in the campaign dir.
+    """Advisory ``flock`` on the campaign directory's ``campaign.lock``.
 
     The kernel drops the lock when the holding process dies, so a crashed
     server leaves nothing to clean up by hand.
@@ -319,12 +379,12 @@ class FileCampaignRunLock:
         self._held: dict[str, IO[str]] = {}
 
     def path_for(self, campaign_id: str) -> Path:
-        return self._root / (campaign_id + LOCK_SUFFIX)
+        return layout.campaign_paths(self._root, campaign_id).lock
 
     def acquire(self, campaign_id: str) -> None:
         if campaign_id in self._held:
             return
-        self._root.mkdir(parents=True, exist_ok=True)
+        self.path_for(campaign_id).parent.mkdir(parents=True, exist_ok=True)
         stream = self.path_for(campaign_id).open("w")
         try:
             fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)

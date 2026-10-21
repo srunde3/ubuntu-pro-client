@@ -8,11 +8,11 @@ import pytest
 
 from behave_campaign import adapters as adapters_module
 from behave_campaign.adapters import (
+    CampaignDirStore,
     FileCampaignRunLock,
     JobDirFiles,
     JsonlCampaignStore,
     ServiceLaneRunner,
-    SingleFileCampaignStore,
     TarBundleWriter,
 )
 from behave_campaign.domain.bundle import BundleEntry
@@ -100,65 +100,119 @@ def plans(*units):
     return [PlanRecord(unit=unit, at=AT) for unit in units]
 
 
+CAMPAIGN = "1234567"
+
+
+def stored(tmp_path, campaign_id=CAMPAIGN):
+    """The campaign's files, as the store lays them out."""
+    campaign_dir = tmp_path / campaign_id
+    return (
+        campaign_dir / "campaign.json",
+        campaign_dir / "events.jsonl",
+    )
+
+
+def write_record(tmp_path, campaign_header, units=()):
+    """A campaign.json written by hand, for malformed-input tests."""
+    record, _ = stored(tmp_path)
+    record.parent.mkdir(parents=True)
+    record.write_text(
+        json.dumps({"campaign": campaign_header, "units": list(units)})
+    )
+
+
 class TestJsonlCampaignStore:
     def test_create_then_replay_round_trips(self, tmp_path):
         store = JsonlCampaignStore(tmp_path)
-        store.create("1234567", header(), plans(UNIT_A, UNIT_B))
+        store.create(CAMPAIGN, header(), plans(UNIT_A, UNIT_B))
 
-        records = store.replay("1234567")
+        records = store.replay(CAMPAIGN)
 
         assert records[0] == header()
         assert records[1:] == plans(UNIT_A, UNIT_B)
 
-    def test_create_writes_one_record_per_line(self, tmp_path):
+    def test_create_writes_the_header_and_units_once(self, tmp_path):
         store = JsonlCampaignStore(tmp_path)
-        store.create("1234567", header(), plans(UNIT_A, UNIT_B))
+        store.create(CAMPAIGN, header(), plans(UNIT_A, UNIT_B))
 
-        lines = (tmp_path / "1234567.jsonl").read_text().splitlines()
+        record, log = stored(tmp_path)
+        document = json.loads(record.read_text())
 
-        assert len(lines) == 3
-        assert json.loads(lines[0])["type"] == "campaign"
-        assert json.loads(lines[1])["type"] == "plan"
+        assert document["campaign"]["type"] == "campaign"
+        assert document["units"] == [UNIT_A.as_dict(), UNIT_B.as_dict()]
+        assert not log.exists()
 
     def test_creating_the_same_campaign_twice_is_rejected(self, tmp_path):
         store = JsonlCampaignStore(tmp_path)
-        store.create("1234567", header(), plans(UNIT_A))
+        store.create(CAMPAIGN, header(), plans(UNIT_A))
 
         with pytest.raises(CampaignExistsError):
-            store.create("1234567", header(), plans(UNIT_B))
+            store.create(CAMPAIGN, header(), plans(UNIT_B))
 
     def test_creating_twice_leaves_the_first_campaign_intact(self, tmp_path):
         store = JsonlCampaignStore(tmp_path)
-        store.create("1234567", header(), plans(UNIT_A))
-        original = (tmp_path / "1234567.jsonl").read_text()
+        store.create(CAMPAIGN, header(), plans(UNIT_A))
+        record, _ = stored(tmp_path)
+        original = record.read_text()
 
         with pytest.raises(CampaignExistsError):
-            store.create("1234567", header(), plans(UNIT_B))
+            store.create(CAMPAIGN, header(), plans(UNIT_B))
 
-        assert (tmp_path / "1234567.jsonl").read_text() == original
+        assert record.read_text() == original
 
-    def test_append_adds_attempts_after_the_plan(self, tmp_path):
+    def test_append_adds_records_to_the_log(self, tmp_path):
         store = JsonlCampaignStore(tmp_path)
-        store.create("1234567", header(), plans(UNIT_A))
-        started = AttemptStarted(
-            unit=UNIT_A, job_id="job1", install_from="proposed", at=AT
-        )
+        store.create(CAMPAIGN, header(), plans(UNIT_A))
         finished = AttemptFinished(
             unit=UNIT_A, job_id="job1", outcome="passed", at=AT
         )
 
-        store.append("1234567", [started, finished])
+        store.append(CAMPAIGN, [started(UNIT_A, "job1"), finished])
 
-        assert store.replay("1234567")[-2:] == [started, finished]
+        _, log = stored(tmp_path)
+        assert len(log.read_text().splitlines()) == 2
+        assert store.replay(CAMPAIGN)[-2:] == [
+            started(UNIT_A, "job1"),
+            finished,
+        ]
 
-    def test_append_of_nothing_leaves_the_file_alone(self, tmp_path):
+    def test_append_of_nothing_writes_nothing(self, tmp_path):
         store = JsonlCampaignStore(tmp_path)
-        store.create("1234567", header(), plans(UNIT_A))
-        original = (tmp_path / "1234567.jsonl").read_text()
+        store.create(CAMPAIGN, header(), plans(UNIT_A))
 
-        store.append("1234567", [])
+        store.append(CAMPAIGN, [])
 
-        assert (tmp_path / "1234567.jsonl").read_text() == original
+        _, log = stored(tmp_path)
+        assert not log.exists()
+
+    def test_a_torn_last_line_is_ignored(self, tmp_path):
+        # A crash mid-append leaves part of a line and no newline.
+        store = JsonlCampaignStore(tmp_path)
+        store.create(CAMPAIGN, header(), plans(UNIT_A))
+        store.append(CAMPAIGN, [started(UNIT_A, "job1")])
+        _, log = stored(tmp_path)
+        with log.open("a") as stream:
+            stream.write('{"type": "fini')
+
+        records = store.replay(CAMPAIGN)
+
+        assert records[-1] == started(UNIT_A, "job1")
+
+    def test_the_next_append_cuts_off_a_torn_line(self, tmp_path):
+        store = JsonlCampaignStore(tmp_path)
+        store.create(CAMPAIGN, header(), plans(UNIT_A))
+        store.append(CAMPAIGN, [started(UNIT_A, "job1")])
+        _, log = stored(tmp_path)
+        with log.open("a") as stream:
+            stream.write('{"type": "fini')
+
+        store.append(CAMPAIGN, [started(UNIT_A, "job2")])
+
+        assert store.replay(CAMPAIGN)[-2:] == [
+            started(UNIT_A, "job1"),
+            started(UNIT_A, "job2"),
+        ]
+        assert "fini" not in log.read_text()
 
     def test_replay_of_unknown_campaign_is_rejected(self, tmp_path):
         with pytest.raises(CampaignNotFoundError):
@@ -170,75 +224,87 @@ class TestJsonlCampaignStore:
 
     def test_a_corrupt_line_names_the_file_and_line(self, tmp_path):
         store = JsonlCampaignStore(tmp_path)
-        store.create("1234567", header(), plans(UNIT_A))
-        with (tmp_path / "1234567.jsonl").open("a") as stream:
+        store.create(CAMPAIGN, header(), plans(UNIT_A))
+        store.append(CAMPAIGN, [started(UNIT_A, "job1")])
+        _, log = stored(tmp_path)
+        with log.open("a") as stream:
             stream.write('{"type": "plan"}\n')
 
         with pytest.raises(CampaignError) as error:
-            store.replay("1234567")
+            store.replay(CAMPAIGN)
 
-        assert "1234567.jsonl" in str(error.value)
-        assert "line 3" in str(error.value)
+        assert "events.jsonl" in str(error.value)
+        assert "line 2" in str(error.value)
 
-    def test_list_ids_is_sorted_and_skips_lock_files(self, tmp_path):
+    def test_list_ids_is_sorted_and_needs_a_record(self, tmp_path):
         store = JsonlCampaignStore(tmp_path)
         store.create("222", header(), plans(UNIT_A))
         store.create("111", header(), plans(UNIT_A))
-        (tmp_path / "111.lock").write_text("")
+        (tmp_path / "half-made").mkdir()
 
         assert store.list_ids() == ["111", "222"]
 
     def test_list_ids_on_a_missing_directory_is_empty(self, tmp_path):
         assert JsonlCampaignStore(tmp_path / "absent").list_ids() == []
 
-    def test_exists_reflects_the_file(self, tmp_path):
+    def test_exists_reflects_the_record(self, tmp_path):
         store = JsonlCampaignStore(tmp_path)
 
-        assert not store.exists("1234567")
-        store.create("1234567", header(), plans(UNIT_A))
-        assert store.exists("1234567")
+        assert not store.exists(CAMPAIGN)
+        store.create(CAMPAIGN, header(), plans(UNIT_A))
+        assert store.exists(CAMPAIGN)
+
+    def test_path_for_is_the_campaign_directory(self, tmp_path):
+        store = JsonlCampaignStore(tmp_path)
+
+        assert store.path_for(CAMPAIGN) == tmp_path / CAMPAIGN
 
     def test_a_header_missing_install_from_is_rejected(self, tmp_path):
-        path = tmp_path / "1234567.jsonl"
-        path.write_text(json.dumps(_stored_header(drop="install_from")) + "\n")
+        write_record(tmp_path, _stored_header(drop="install_from"))
 
         with pytest.raises(CampaignError) as error:
-            JsonlCampaignStore(tmp_path).replay("1234567")
+            JsonlCampaignStore(tmp_path).replay(CAMPAIGN)
 
         assert "install_from" in str(error.value)
 
     def test_a_header_missing_lanes_is_rejected(self, tmp_path):
-        path = tmp_path / "1234567.jsonl"
-        path.write_text(json.dumps(_stored_header(drop="lanes")) + "\n")
+        write_record(tmp_path, _stored_header(drop="lanes"))
 
         with pytest.raises(CampaignError) as error:
-            JsonlCampaignStore(tmp_path).replay("1234567")
+            JsonlCampaignStore(tmp_path).replay(CAMPAIGN)
 
         assert "lanes" in str(error.value)
+
+    def test_an_unreadable_record_names_its_file(self, tmp_path):
+        record, _ = stored(tmp_path)
+        record.parent.mkdir(parents=True)
+        record.write_text("not json")
+
+        with pytest.raises(CampaignError, match="campaign.json"):
+            JsonlCampaignStore(tmp_path).replay(CAMPAIGN)
 
     def test_the_header_round_trips_both_fields(self, tmp_path):
         store = JsonlCampaignStore(tmp_path)
         store.create(
-            "1234567",
+            CAMPAIGN,
             header(install_from="proposed", lanes={Pool.LXD: 8, Pool.WSL: 1}),
             plans(UNIT_A),
         )
 
-        replayed = store.replay("1234567")[0]
+        replayed = store.replay(CAMPAIGN)[0]
 
         assert replayed.install_from == "proposed"
         assert replayed.lanes == {Pool.LXD: 8, Pool.WSL: 1}
 
     def test_the_header_always_states_them_on_disk(self, tmp_path):
         store = JsonlCampaignStore(tmp_path)
-        store.create("1234567", header(), plans(UNIT_A))
+        store.create(CAMPAIGN, header(), plans(UNIT_A))
 
-        stored = json.loads(
-            (tmp_path / "1234567.jsonl").read_text().splitlines()[0]
-        )
+        record, _ = stored(tmp_path)
+        campaign = json.loads(record.read_text())["campaign"]
 
-        assert stored["install_from"] == "local"
-        assert stored["lanes"] == {"lxd": 1}
+        assert campaign["install_from"] == "local"
+        assert campaign["lanes"] == {"lxd": 1}
 
     @pytest.mark.parametrize(
         "lanes, message",
@@ -251,44 +317,41 @@ class TestJsonlCampaignStore:
         ],
     )
     def test_bad_lanes_on_disk_are_rejected(self, tmp_path, lanes, message):
-        path = tmp_path / "1234567.jsonl"
-        path.write_text(json.dumps(_stored_header(lanes=lanes)) + "\n")
+        write_record(tmp_path, _stored_header(lanes=lanes))
 
         with pytest.raises(CampaignError, match=message):
-            JsonlCampaignStore(tmp_path).replay("1234567")
+            JsonlCampaignStore(tmp_path).replay(CAMPAIGN)
 
 
-class TestSingleFileCampaignStore:
-    def test_it_writes_to_the_exact_path_it_was_given(self, tmp_path):
-        # The CLI is pointed at a file, so a name that is not "<id>.jsonl"
-        # must still be the file that gets written.
-        path = tmp_path / "records.txt"
-        store = SingleFileCampaignStore(path)
+class TestCampaignDirStore:
+    def test_it_writes_to_the_directory_it_was_given(self, tmp_path):
+        campaign_dir = tmp_path / "anywhere"
+        store = CampaignDirStore(campaign_dir)
 
         store.create("ignored", header(), plans(UNIT_A))
 
-        assert path.is_file()
-        assert not (tmp_path / "ignored.jsonl").exists()
+        assert (campaign_dir / "campaign.json").is_file()
+        assert not (tmp_path / "ignored").exists()
 
-    def test_a_missing_file_is_not_a_campaign(self, tmp_path):
-        store = SingleFileCampaignStore(tmp_path / "absent.jsonl")
+    def test_a_missing_directory_is_not_a_campaign(self, tmp_path):
+        store = CampaignDirStore(tmp_path / "absent")
 
-        with pytest.raises(CampaignNotFoundError, match="absent.jsonl"):
+        with pytest.raises(CampaignNotFoundError, match="absent"):
             store.replay("")
-        with pytest.raises(CampaignNotFoundError, match="absent.jsonl"):
+        with pytest.raises(CampaignNotFoundError, match="absent"):
             store.append("", [])
 
-    def test_campaign_id_comes_from_the_file_stem(self, tmp_path):
-        store = SingleFileCampaignStore(tmp_path / "1234567.jsonl")
+    def test_campaign_id_comes_from_the_directory_name(self, tmp_path):
+        store = CampaignDirStore(tmp_path / CAMPAIGN)
 
-        assert store.campaign_id == "1234567"
+        assert store.campaign_id == CAMPAIGN
 
-    def test_list_ids_is_empty_until_the_file_exists(self, tmp_path):
-        store = SingleFileCampaignStore(tmp_path / "1234567.jsonl")
+    def test_list_ids_is_empty_until_the_campaign_exists(self, tmp_path):
+        store = CampaignDirStore(tmp_path / CAMPAIGN)
 
         assert store.list_ids() == []
         store.create("", header(), plans(UNIT_A))
-        assert store.list_ids() == ["1234567"]
+        assert store.list_ids() == [CAMPAIGN]
 
 
 class TestFileCampaignRunLock:

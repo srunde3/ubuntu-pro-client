@@ -16,8 +16,8 @@ from pathlib import Path
 from typing import Callable, Mapping, Sequence
 
 from behave_campaign.domain.bundle import (
-    AUDIT_CAMPAIGN_NAME,
     AUDIT_DIR,
+    AUDIT_FILES,
     CAMPAIGN_JSON_NAME,
     JOB_FILES,
     JOBS_DIR,
@@ -398,12 +398,15 @@ class CampaignService:
                     missing.append(bundled)
                     missing_jobs.add(job_id)
 
-        entries.append(
+        # The campaign's own files, as stored, for whoever audits it.
+        campaign_dir = self._store.path_for(campaign_id)
+        entries += [
             BundleEntry(
-                name="{}/{}".format(AUDIT_DIR, AUDIT_CAMPAIGN_NAME),
-                source=self._store.path_for(campaign_id),
+                name="{}/{}".format(AUDIT_DIR, name),
+                source=campaign_dir / name,
             )
-        )
+            for name in AUDIT_FILES
+        ]
 
         entries += [
             BundleEntry(
