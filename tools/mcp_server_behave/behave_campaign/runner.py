@@ -18,6 +18,7 @@ import threading
 from pathlib import Path
 from typing import Callable, Sequence
 
+from behave_campaign.domain.classify import KILLED
 from behave_campaign.domain.records import (
     PROBLEM_OUTCOMES,
     AttemptFinished,
@@ -67,8 +68,6 @@ from behave_mcp.domain.pools import Pool
 logger = logging.getLogger(__name__)
 
 DEFAULT_TICK_INTERVAL_SECONDS = 2.0
-# Why an attempt was interrupted: a pause with kill stopped its job.
-KILLED_REASON = "paused_with_kill"
 # States with nothing in flight and nothing to schedule: the ticker stops
 # and the run lock is released.
 IDLE_STATES = (CampaignState.PAUSED, CampaignState.COMPLETE)
@@ -391,7 +390,7 @@ class CampaignRunner:
                 unit=status.unit,
                 job_id=status.job_id or "",
                 at=at,
-                reason=KILLED_REASON,
+                reason=KILLED,
             )
             for status in statuses
         ]

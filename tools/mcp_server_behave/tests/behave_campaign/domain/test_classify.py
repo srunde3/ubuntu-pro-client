@@ -3,7 +3,8 @@
 import pytest
 
 from behave_campaign.domain.classify import (
-    WRAPPER_DIED,
+    DIED,
+    INTERRUPTIONS,
     classify_result,
     finished_from_mcp,
 )
@@ -27,7 +28,7 @@ def completed(
     if unknown:
         scenarios["unknown"] = unknown
     return {
-        "status": "completed",
+        "status": "finished",
         "ok": ok,
         "job_id": job_id,
         "summary": {"scenarios": scenarios, "features": {}},
@@ -50,7 +51,7 @@ CLASSIFY_CASES = [
         completed(passed=0, skipped=2), Outcome.SKIPPED, False, id="only-skips"
     ),
     pytest.param(
-        {"status": "completed", "ok": False, "job_id": "j", "summary": None},
+        {"status": "finished", "ok": False, "job_id": "j", "summary": None},
         Outcome.ERROR,
         False,
         id="no-report",
@@ -85,14 +86,28 @@ def test_classify_result(result, outcome, flagged):
     assert bool(classified.problem) is flagged
 
 
-def test_a_job_whose_wrapper_died_is_an_interrupted_attempt():
-    result = {"status": "interrupted", "ok": False, "job_id": "job1"}
+@pytest.mark.parametrize("reason", INTERRUPTIONS)
+def test_an_interrupted_job_is_an_interrupted_attempt(reason):
+    result = {
+        "status": "interrupted",
+        "reason": reason,
+        "ok": False,
+        "job_id": "job1",
+    }
 
     closed = classify_result(UNIT_A, result, AT)
 
     assert closed == AttemptInterrupted(
-        unit=UNIT_A, job_id="job1", at=AT, reason=WRAPPER_DIED
+        unit=UNIT_A, job_id="job1", at=AT, reason=reason
     )
+
+
+def test_an_interruption_with_no_known_reason_is_a_death():
+    result = {"status": "interrupted", "ok": False, "job_id": "job1"}
+
+    closed = classify_result(UNIT_A, result, AT)
+
+    assert closed.reason == DIED
 
 
 def test_a_classified_result_keeps_the_job_id_and_time():
@@ -114,7 +129,7 @@ def test_an_unclassifiable_result_keeps_the_job_id_and_says_why():
 class TestMcpResultAdapter:
     def completed(self, scenarios, **overrides):
         result = {
-            "status": "completed",
+            "status": "finished",
             "ok": True,
             "job_id": "job-1",
             "returncode": 0,
@@ -124,7 +139,7 @@ class TestMcpResultAdapter:
         result.update(overrides)
         return result
 
-    @pytest.mark.parametrize("status", ["started", "timeout"])
+    @pytest.mark.parametrize("status", ["running", "timeout"])
     def test_a_job_still_in_flight_has_no_outcome_to_record(self, status):
         # The scheduler owns an unfinished job: it wrote the start itself
         # and will write the finish. Recording one here would be inventing
@@ -134,7 +149,7 @@ class TestMcpResultAdapter:
                 UNIT_A, {"status": status, "ok": True, "job_id": "job-1"}
             )
 
-        assert "only a completed job" in str(error.value)
+        assert "only a finished job" in str(error.value)
 
     def test_clean_pass_is_passed(self):
         result = self.completed({"passed": 2})

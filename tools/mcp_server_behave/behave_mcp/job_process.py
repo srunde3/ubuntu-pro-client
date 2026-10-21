@@ -1,16 +1,16 @@
 """The process each behave job runs under.
 
-``python -m behave_mcp.wrapper <job dir> -- <command>``
+``python -m behave_mcp.job_process <job dir> -- <command>``
 
 The launcher hands this process the job's lane lock and its job lock, and
 then lets go of both, so they are held exactly as long as this process
 lives. It runs the command (tox) as a child in its own process group,
 writes the child's output to the job's ``stdout.log``, and when the child
-exits writes the job's ``status.json`` once, by rename, before exiting.
+exits writes the job's ``exit.json`` once, by rename, before exiting.
 
 Its own session keeps the server's death or signals from reaching it. The
 child gets a parent-death signal, so it cannot outlive this process. Taken
-together: a job lock that is free with no ``status.json`` means exactly
+together: a job lock that is free with no ``exit.json`` means exactly
 that the job died without finishing.
 
 SIGTERM is how a job is killed: it is passed to the child's process group,
@@ -52,7 +52,7 @@ def _die_with(parent: int) -> None:
         os._exit(1)
 
 
-class _Job:
+class JobProcess:
     def __init__(self, job_dir: Path) -> None:
         self._paths = layout.job_paths(job_dir.parent, job_dir.name)
         self._store = LocalJobResultStore(job_dir.parent)
@@ -60,7 +60,7 @@ class _Job:
         self._child: subprocess.Popen | None = None
         self.killed = False
 
-    def stop(self, signum: int, frame: FrameType | None) -> None:
+    def kill(self, signum: int, frame: FrameType | None) -> None:
         """Pass a kill on to the child's group, and keep waiting for it."""
         self.killed = True
         if self._child is not None:
@@ -94,7 +94,7 @@ class _Job:
                     preexec_fn=lambda: _die_with(parent),
                 )
                 if self.killed:
-                    self.stop(signal.SIGTERM, None)
+                    self.kill(signal.SIGTERM, None)
                 returncode = self._child.wait()
         except OSError as error:
             self._record(None, error=str(error))
@@ -105,7 +105,7 @@ class _Job:
         self._store.write_exit(
             self._job_id,
             JobExit(
-                completed_at=_now(),
+                finished_at=_now(),
                 returncode=returncode,
                 ok=returncode == 0 and not self.killed,
                 killed=self.killed,
@@ -116,11 +116,11 @@ class _Job:
 
 def main(argv: Sequence[str]) -> int:
     if len(argv) < 3 or argv[1] != "--":
-        print("usage: python -m behave_mcp.wrapper JOB_DIR -- COMMAND...")
+        print("usage: python -m behave_mcp.job_process JOB_DIR -- COMMAND...")
         return 2
-    job = _Job(Path(argv[0]))
-    signal.signal(signal.SIGTERM, job.stop)
-    signal.signal(signal.SIGINT, job.stop)
+    job = JobProcess(Path(argv[0]))
+    signal.signal(signal.SIGTERM, job.kill)
+    signal.signal(signal.SIGINT, job.kill)
     job.ready()
     job.run(argv[2:])
     return 0

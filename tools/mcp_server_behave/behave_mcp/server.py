@@ -42,10 +42,10 @@ from behave_campaign.runner import CampaignRunner
 from behave_campaign.service import CampaignService
 from behave_mcp.adapters import (
     FileLanePool,
+    JobProcessLauncher,
     LocalFeatureFileReader,
     LocalJobResultStoreFactory,
     LocalWorkspace,
-    LockedJobLauncher,
 )
 from behave_mcp.config import ConfigError, Settings, load_settings
 from behave_mcp.domain import layout
@@ -218,7 +218,7 @@ def create_service(settings: Settings) -> BehaveService:
         lanes=FileLanePool(
             lambda: layout.lanes_dir(workspace.resolve_state_dir())
         ),
-        launcher=LockedJobLauncher(workspace.resolve_log_dir),
+        launcher=JobProcessLauncher(workspace.resolve_jobs_dir),
         monotonic=time.monotonic,
         sleep=time.sleep,
         now_utc=_utc_timestamp,
@@ -438,14 +438,14 @@ def start_scenario(
 @tool(
     description=(
         "List behave jobs. Returns every currently active job plus a "
-        "bounded window of recently completed ones (most recent first, "
-        "capped at limit), read off disk, so jobs started by another "
-        "process or before a restart are listed too. total_completed is the "
-        "full completed-job count regardless of limit, and truncated is "
-        "set when older completed jobs were dropped to fit. limit must be "
-        "positive (rejected otherwise); values above the server max are "
-        "silently capped, with limit_clamped set to true when that "
-        "happens."
+        "bounded window of recently ended ones (finished or interrupted; "
+        "most recent first, capped at limit), read off disk, so jobs "
+        "started by another process or before a restart are listed too. "
+        "total_ended is the full ended-job count regardless of limit, and "
+        "truncated is set when older ended jobs were dropped to fit. "
+        "limit must be positive (rejected otherwise); values above the "
+        "server max are silently capped, with limit_clamped set to true "
+        "when that happens."
     )
 )
 def list_scenario_jobs(
@@ -453,7 +453,7 @@ def list_scenario_jobs(
         int,
         Field(
             description=(
-                "Max number of completed jobs to return (most recent "
+                "Max number of ended jobs to return (most recent "
                 "first). Must be positive; values above the server max "
                 "are silently capped."
             )
@@ -470,7 +470,7 @@ def list_scenario_jobs(
         "One result per job, most recently started first, the same shape "
         "wait_for_scenario_completion returns for one job. Filter by "
         "job_ids, feature_file, scenario_name (substring), release, "
-        "machine_type and status (running, completed, interrupted); limit "
+        "machine_type and status (running, finished, interrupted); limit "
         "caps the jobs listed, with total and truncated alongside. For "
         "the cause behind an empty error_message, get_scenario_errors."
     )
@@ -497,7 +497,7 @@ def get_scenario_results(
         str,
         Field(
             default="",
-            description="Only jobs with this status: running, completed "
+            description="Only jobs with this status: running, finished "
             "or interrupted.",
         ),
     ] = "",
@@ -526,10 +526,11 @@ def get_scenario_results(
     description=(
         "Wait for a running behave job to end by polling internally. "
         "job_id must come from start_scenario or list_scenario_jobs. "
-        "Returns a compact structured summary on completion; status "
-        "interrupted with recent output when the job's wrapper died "
-        "without recording an exit (a crash or a reboot); or a timeout "
-        "payload with recent output if the wait limit is reached."
+        "Returns a compact structured summary when it finishes; status "
+        "interrupted with recent output when it ended without a result, "
+        "with reason killed or died (its process died: a crash or a "
+        "reboot); or a timeout payload with recent output if the wait "
+        "limit is reached."
     )
 )
 def wait_for_scenario_completion(
@@ -1010,11 +1011,12 @@ def retry_units(
 
 @tool(
     description=(
-        "Terminate a running behave job, whichever process started it. Use "
-        "it for a job that has hung: tox is stopped and allowed to clean "
-        "up, and the job records its exit as killed; a campaign's next "
-        "tick then records the unit, rather than holding the lane open. "
-        "killed is false when there was nothing to stop."
+        "Kill a running behave job, whichever process started it. Use it "
+        "for a job that has hung: tox is stopped and allowed to clean up, "
+        "and the job ends interrupted with reason killed, never as a "
+        "failure; a campaign's next tick records its attempt as "
+        "interrupted, rather than holding the lane open. killed is false "
+        "when there was nothing to stop."
     )
 )
 def kill_job(job_id: JobId) -> KillJobResponse:

@@ -1,6 +1,6 @@
 """Command line interface over the campaign record.
 
-Every command is a wrapper: read arguments, call ``CampaignService``, print
+Every command is a handler: read arguments, call ``CampaignService``, print
 the response as JSON. Behaviour lives in the service, so the CLI and the MCP
 tools cannot drift apart. The only work done here is the work that is
 genuinely a command line's: parsing arguments and reading stdin.

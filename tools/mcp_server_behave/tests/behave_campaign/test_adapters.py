@@ -571,7 +571,7 @@ class TestServiceLaneRunner:
         (repo_root / "features" / "a.feature").write_text(FEATURE_A)
         (repo_root / "tox.ini").write_text("[tox]\n")
         service = BehaveService(
-            workspace=FakeWorkspace(repo_root=repo_root, log_dir=tmp_path),
+            workspace=FakeWorkspace(repo_root=repo_root, jobs_dir=tmp_path),
             settings=Settings(
                 pool_limits={Pool.LXD: 1, Pool.CLOUD: 0, Pool.WSL: 1},
                 campaign_poll_timeout=60,
@@ -597,7 +597,7 @@ class TestServiceLaneRunner:
         killed = lanes.kill(job_id)
 
         assert killed is True
-        assert launcher.signalled == [job_id]
+        assert launcher.killed == [job_id]
 
     def test_a_finished_job_is_not_signalled(self, tmp_path):
         launcher = FakeJobLauncher(tmp_path)
@@ -608,7 +608,7 @@ class TestServiceLaneRunner:
         killed = lanes.kill(job_id)
 
         assert killed is False
-        assert launcher.signalled == []
+        assert launcher.killed == []
 
     def test_a_running_job_has_no_result_yet(self, tmp_path):
         launcher = FakeJobLauncher(tmp_path)

@@ -73,7 +73,7 @@ class Artifacts(BaseModel):
 
     job_dir: str
     record: str
-    status: str
+    exit: str
     stdout_log: str
     json_report: str
 
@@ -90,13 +90,23 @@ class RepoState(BaseModel):
     dirty: bool | None = None
 
 
-class RunStatus(str, Enum):
+class JobState(str, Enum):
     """A behave job's state, read off its files and locks."""
 
     RUNNING = "running"
-    COMPLETED = "completed"
-    # The job ended without recording an exit: its wrapper died.
+    # tox ran to its end; the exit says how it went.
+    FINISHED = "finished"
+    # The job ended without a result: it was killed, or its process died.
     INTERRUPTED = "interrupted"
+
+
+class Interruption(str, Enum):
+    """Why an interrupted job has no result."""
+
+    KILLED = "killed"
+    # Its process died without writing an exit: a crash, a hard kill, a
+    # reboot.
+    DIED = "died"
 
 
 class ScenarioStatus(str, Enum):
@@ -125,13 +135,13 @@ class JobRecord(BaseModel):
 
 
 class JobExit(BaseModel):
-    """How one behave job ended. Written once, by the job's wrapper.
+    """How one behave job ended. Written once, by its job process.
 
     ``ok`` is true for a zero exit that nobody killed. ``error`` says why
     the job never ran, when tox could not be started at all.
     """
 
-    completed_at: str = ""
+    finished_at: str = ""
     returncode: int | None = None
     ok: bool = False
     killed: bool = False
@@ -170,7 +180,7 @@ class ExistsFlags(BaseModel):
     """Which of a job's files exist."""
 
     record: bool
-    status: bool
+    exit: bool
     stdout_log: bool
     json_report: bool
 
@@ -247,7 +257,7 @@ class JobResult(BaseModel):
     """
 
     job_id: str = ""
-    status: str = RunStatus.RUNNING.value
+    status: str = JobState.RUNNING.value
     ok: bool | None = None
     feature_file: str = ""
     scenario_name: str = ""
@@ -257,11 +267,11 @@ class JobResult(BaseModel):
     failures: list[Failure] = []
 
 
-class CompletedResponse(JobResult):
-    """A job that has finished. ``recent_output`` is populated only when no
-    parseable report was produced, and is None otherwise."""
+class FinishedResponse(JobResult):
+    """A job that ran to its end. ``recent_output`` is populated only when
+    no parseable report was produced, and is None otherwise."""
 
-    status: Literal["completed"] = "completed"
+    status: Literal["finished"] = "finished"
     ok: bool
     returncode: int | None
     artifacts: Artifacts
@@ -269,11 +279,12 @@ class CompletedResponse(JobResult):
 
 
 class InterruptedResponse(JobResult):
-    """A job whose wrapper died before recording an exit: a crash, a hard
-    kill or a reboot. Nothing it did counts."""
+    """A job that ended without a result: it was killed, or its process
+    died. Nothing it did counts."""
 
     status: Literal["interrupted"] = "interrupted"
     ok: bool = False
+    reason: Interruption = Interruption.DIED
     artifacts: Artifacts
     recent_output: str = ""
 
@@ -284,13 +295,13 @@ class TimeoutResponse(BaseModel):
     job_id: str = ""
     max_wait_seconds: int = 0
     poll_interval_seconds: float = 0.0
-    last_status: RunStatus = RunStatus.RUNNING
+    last_status: JobState = JobState.RUNNING
     recent_output: str = ""
     artifacts: Artifacts | None = None
 
 
 WaitForCompletionResult = Annotated[
-    Union[CompletedResponse, InterruptedResponse, TimeoutResponse],
+    Union[FinishedResponse, InterruptedResponse, TimeoutResponse],
     Field(discriminator="status"),
 ]
 
@@ -377,7 +388,8 @@ class JobSummary(BaseModel):
     """One row in a job listing."""
 
     job_id: str = ""
-    status: RunStatus = RunStatus.RUNNING
+    status: JobState = JobState.RUNNING
+    reason: Interruption | None = None
     ok: bool | None = None
     returncode: int | None = None
     feature_file: str = ""
@@ -385,13 +397,13 @@ class JobSummary(BaseModel):
     release: str = ""
     machine_type: str = ""
     started_at: str | None = None
-    completed_at: str | None = None
+    finished_at: str | None = None
     artifacts: Artifacts | None = None
 
 
 class ListScenarioJobsResponse(BaseModel):
     jobs: list[JobSummary] = []
-    total_completed: int = 0
+    total_ended: int = 0
     truncated: bool = False
     limit_clamped: bool = False
 
@@ -406,11 +418,10 @@ class ResultsResponse(BaseModel):
 
 
 class KillJobResponse(BaseModel):
-    """Outcome of terminating a job.
+    """Outcome of killing a job.
 
-    ``killed`` is False when there was nothing to stop -- the job had
-    already finished, or this server has no live handle on it, which is the
-    case for one recovered from disk after a restart.
+    ``killed`` is False when there was nothing to stop: the job had already
+    ended, or its process could not be reached.
     """
 
     job_id: str = ""

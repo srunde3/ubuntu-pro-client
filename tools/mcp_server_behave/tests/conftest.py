@@ -73,7 +73,7 @@ class FakeLease:
     """A lane taken from a ``FakeLanePool``.
 
     The launcher closes its own hold once a job runs, but the lane stays
-    busy until the job ends, as it does when the wrapper holds the lock.
+    busy until the job ends, as it does when the job process holds the lock.
     """
 
     def __init__(self, pool, lanes):
@@ -110,8 +110,8 @@ class FakeLanePool:
 class FakeJobLauncher:
     """A ``JobLauncher`` whose jobs run until the test ends them.
 
-    ``finish`` writes the exit the way the wrapper does; ``crash`` ends a
-    job without one, as a wrapper killed outright would. With
+    ``finish`` writes the exit the way the job process does; ``crash`` ends a
+    job without one, as a job process killed outright would. With
     ``finish_on_launch`` (``finish`` keywords), each job ends at once.
     """
 
@@ -120,16 +120,16 @@ class FakeJobLauncher:
         jobs_dir=None,
         *,
         error=None,
-        unsignallable=(),
+        unkillable=(),
         finish_on_launch=None,
     ):
         self.jobs_dir = jobs_dir
         self.calls = []
         self.running = set()
-        self.signalled = []
+        self.killed = []
         self._leases = {}
         self._error = error
-        self._unsignallable = set(unsignallable)
+        self._unkillable = set(unkillable)
         self._finish_on_launch = finish_on_launch
 
     def launch(self, job_id, command, cwd, env, lease):
@@ -148,9 +148,9 @@ class FakeJobLauncher:
     def is_running(self, job_id):
         return job_id in self.running
 
-    def signal(self, job_id):
-        self.signalled.append(job_id)
-        return job_id in self.running and job_id not in self._unsignallable
+    def kill(self, job_id):
+        self.killed.append(job_id)
+        return job_id in self.running and job_id not in self._unkillable
 
     def finish(self, job_id, returncode=0, killed=False, log="", report=None):
         """End a job: its log, its report, then its exit, in that order."""
@@ -163,7 +163,7 @@ class FakeJobLauncher:
         store.write_exit(
             job_id,
             JobExit(
-                completed_at="T1",
+                finished_at="T1",
                 returncode=returncode,
                 ok=returncode == 0 and not killed,
                 killed=killed,
@@ -189,14 +189,14 @@ class FakeWorkspace:
         self,
         *,
         repo_root: Path | None = None,
-        log_dir: Path | None = None,
+        jobs_dir: Path | None = None,
         env: dict[str, str] | None = None,
         repo_root_error: str | None = None,
         repo_state: RepoState | None = None,
         campaign_dir: Path | None = None,
     ) -> None:
         self._repo_root = repo_root
-        self._log_dir = log_dir
+        self._jobs_dir = jobs_dir
         self._campaign_dir = campaign_dir
         self._env = env if env is not None else {}
         self._repo_root_error = repo_root_error
@@ -216,10 +216,10 @@ class FakeWorkspace:
             )
         return self._repo_root
 
-    def resolve_log_dir(self) -> Path:
-        if self._log_dir is None:
-            raise ValueError("FakeWorkspace has no log_dir configured")
-        return self._log_dir
+    def resolve_jobs_dir(self) -> Path:
+        if self._jobs_dir is None:
+            raise ValueError("FakeWorkspace has no jobs_dir configured")
+        return self._jobs_dir
 
     def resolve_campaign_dir(self) -> Path:
         if self._campaign_dir is None:
@@ -251,9 +251,9 @@ def result_error_text(result):
 
 
 def job_result(passed=1, failed=0, job_id="job", failures=()):
-    """A completed job as ``LaneRunner.poll`` reports it."""
+    """A finished job as ``LaneRunner.poll`` reports it."""
     return {
-        "status": "completed",
+        "status": "finished",
         "ok": failed == 0,
         "job_id": job_id,
         "summary": {
@@ -314,16 +314,21 @@ class FakeLanes:
         self.results[job_id] = job_result(job_id=job_id, **kwargs)
 
     def kill(self, job_id):
-        """Signal a job; a killed job reports a failure on its next poll.
+        """Kill a job; it reports itself interrupted on its next poll.
 
-        Returns False for a job that already finished, or one in
-        ``unkillable``, as the real runner does for a job it holds no
-        handle on.
+        Returns False for a job that already ended, or one in
+        ``unkillable``, as the real runner does for a job whose process
+        cannot be reached.
         """
         self.killed.append(job_id)
         if job_id in self.results or job_id in self.unkillable:
             return False
-        self.finish(job_id, passed=0, failed=1)
+        self.results[job_id] = {
+            "status": "interrupted",
+            "reason": "killed",
+            "ok": False,
+            "job_id": job_id,
+        }
         return True
 
     @property
@@ -427,7 +432,7 @@ class FakeJobFiles:
 
     def files(self, job_id):
         found = {}
-        for name in ("job.json", "status.json", "report.json", "stdout.log"):
+        for name in ("job.json", "exit.json", "report.json", "stdout.log"):
             if (job_id, name) in self.without:
                 continue
             path = self.tmp_path / "jobs" / job_id / name

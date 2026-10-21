@@ -253,7 +253,7 @@ The bundle unpacks to one directory named after the campaign:
 | `SUMMARY.md` | Counts and scope, then every unit by feature, scenario and release: passed units, then the rest with their state and job id |
 | `campaign.json` | Scope, install source, lanes, state, counts |
 | `units.csv` | One row per unit: `feature, scenario, release, machine_type, state, job_id, finished_at` |
-| `jobs/<job_id>/` | `job.json`, `status.json`, `report.json`, `stdout.log` for every attempt, including superseded ones |
+| `jobs/<job_id>/` | `job.json`, `exit.json`, `report.json`, `stdout.log` for every attempt, including superseded ones |
 | `audit/campaign.json` | The campaign's header and units, as stored |
 | `audit/events.jsonl` | The campaign's record log, as stored |
 

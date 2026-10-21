@@ -140,7 +140,7 @@ def test_a_campaign_runs_its_lanes_concurrently(monkeypatch, tmp_path):
     for status in statuses:
         assert status.job_id
         job_dir = tmp_path / "state" / "jobs" / status.job_id
-        for name in ("job.json", "status.json", "report.json", "stdout.log"):
+        for name in ("job.json", "exit.json", "report.json", "stdout.log"):
             assert (job_dir / name).is_file(), job_dir / name
 
     # The stream a watching agent would have seen, from real jobs.
@@ -228,7 +228,7 @@ def test_pause_with_kill_stops_a_real_job_and_run_redoes_it(
         assert unit().attempts[-1].interrupted
         # The job's process group really went away.
         _wait_for(
-            lambda: service.job_status(killed_job).status == "completed",
+            lambda: service.get_artifacts(killed_job).exit is not None,
             CAMPAIGN_TIMEOUT_SECONDS,
             "the killed job to exit",
         )

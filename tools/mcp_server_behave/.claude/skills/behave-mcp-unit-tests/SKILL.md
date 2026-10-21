@@ -167,10 +167,10 @@ assert _eventually(lambda: _exit(tmp_path, "job") is not None)
 assert log.read_text().strip() == "got="
 ```
 
-Good: a crash shown with a real crash. The wrapper is killed outright, and the test observes what is left: no exit, a free lock and lane, and no orphaned child.
+Good: a crash shown with a real crash. The job process is killed outright, and the test observes what is left: no exit, a free lock and lane, and no orphaned child.
 
 ```python
-os.kill(wrapper, signal.SIGKILL)
+os.kill(job_process, signal.SIGKILL)
 
 assert _eventually(lambda: not launcher.is_running("job"))
 assert _exit(tmp_path, "job") is None
@@ -191,7 +191,7 @@ Golden tests pin the exact bytes of job records and exits. A failure means the f
 
 A fake is a small working implementation of a port. It behaves like the real thing in the ways the test needs, records what it was asked, and fails loudly on anything else. A mock accepts every call and returns another mock, so a test built on one passes even when the code calls the wrong method or passes the wrong shape.
 
-Good: a fake with the port's real signature, which records calls and behaves like the real thing where the service can tell: a job runs until the test ends it, and ending it writes the exit the way the wrapper does.
+Good: a fake with the port's real signature, which records calls and behaves like the real thing where the service can tell: a job runs until the test ends it, and ending it writes the exit the way the job process does.
 
 ```python
 class FakeJobLauncher:
@@ -207,7 +207,7 @@ class FakeJobLauncher:
         return job_id in self.running
 
     def finish(self, job_id, returncode=0, killed=False, log="", report=None):
-        ...  # writes the log, the report, then status.json
+        ...  # writes the log, the report, then exit.json
 ```
 
 Bad: a mock standing in for the port. A typo in `launch`, or a method the port never had, still passes.

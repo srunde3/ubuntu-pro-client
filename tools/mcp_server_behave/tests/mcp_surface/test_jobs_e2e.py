@@ -1,6 +1,6 @@
 """A real behave job, seen and killed from another process.
 
-Nothing about a job lives in the process that started it: its wrapper holds
+Nothing about a job lives in the process that started it: its process holds
 the job's lock, and its state is read off disk. So a second process -- a
 restarted server, or the CLI -- sees the job running and can kill it, and
 the first process sees the kill recorded.
@@ -76,4 +76,8 @@ def test_another_process_sees_a_running_job_and_kills_it(
     assert ended.exit is not None
     assert ended.exit.killed is True
     assert ended.exit.ok is False
-    assert service.job_status(started.job_id).status == "completed"
+    interrupted = service.job_status(started.job_id)
+    assert (interrupted.status, interrupted.reason) == (
+        "interrupted",
+        "killed",
+    )

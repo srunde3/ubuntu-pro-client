@@ -9,10 +9,10 @@ import pytest
 import behave_mcp.adapters as adapters_module
 from behave_mcp.adapters import (
     FileLanePool,
+    JobProcessLauncher,
     LocalFeatureFileReader,
     LocalJobResultStoreFactory,
     LocalWorkspace,
-    LockedJobLauncher,
 )
 from behave_mcp.domain.pools import Pool
 from behave_mcp.messages import JobExit, JobRecord
@@ -137,7 +137,7 @@ def test_exists_and_list_job_ids(tmp_path):
     )
     flags = store.exists("jobx")
     assert flags.record is True
-    assert flags.status is False
+    assert flags.exit is False
     assert flags.stdout_log is True
     assert flags.json_report is False
     assert store.list_job_ids() == ["jobx"]
@@ -152,7 +152,7 @@ def test_write_targets_and_artifacts_naming(tmp_path):
     artifacts = store.artifacts("jobx")
     assert artifacts.job_dir == str(tmp_path / "jobx")
     assert artifacts.record == str(tmp_path / "jobx" / "job.json")
-    assert artifacts.status == str(tmp_path / "jobx" / "status.json")
+    assert artifacts.exit == str(tmp_path / "jobx" / "exit.json")
 
 
 def test_a_job_directory_without_a_record_is_not_listed(tmp_path):
@@ -164,8 +164,8 @@ def test_a_job_directory_without_a_record_is_not_listed(tmp_path):
 
 def test_the_first_exit_written_wins(tmp_path):
     store = _store(tmp_path)
-    first = JobExit(completed_at="T1", returncode=0, ok=True)
-    later = JobExit(completed_at="T2", returncode=1, ok=False)
+    first = JobExit(finished_at="T1", returncode=0, ok=True)
+    later = JobExit(finished_at="T2", returncode=1, ok=False)
     store.write_exit("jobx", first)
 
     kept = store.write_exit("jobx", later)
@@ -186,7 +186,7 @@ def test_an_interrupted_write_leaves_no_partial_file(tmp_path, monkeypatch):
 
     monkeypatch.setattr(adapters_module.os, "replace", crash)
 
-    store.write_exit("jobx", JobExit(completed_at="T1", returncode=0))
+    store.write_exit("jobx", JobExit(finished_at="T1", returncode=0))
 
     # Neither the status file nor a temporary file is left behind.
     assert list((tmp_path / "jobx").iterdir()) == []
@@ -251,7 +251,7 @@ def test_state_defaults_to_one_directory_in_the_servers_checkout(
     state = repo.resolve() / ".mcp_server_behave"
 
     assert workspace.resolve_state_dir() == state
-    assert workspace.resolve_log_dir() == state / "jobs"
+    assert workspace.resolve_jobs_dir() == state / "jobs"
     assert workspace.resolve_campaign_dir() == state / "campaigns"
 
 
@@ -261,7 +261,7 @@ def test_each_kind_of_artifact_gets_its_own_subdirectory(
     monkeypatch.setenv("MCP_STATE_DIR", str(tmp_path / "state"))
     workspace = LocalWorkspace()
 
-    jobs = workspace.resolve_log_dir()
+    jobs = workspace.resolve_jobs_dir()
     campaigns = workspace.resolve_campaign_dir()
 
     # Created on demand, and distinct, so job output cannot land among
@@ -279,7 +279,7 @@ def test_the_state_directory_can_be_moved_wholesale(tmp_path, monkeypatch):
     # One variable relocates every kind of artifact together, and needs no
     # checkout to resolve.
     assert workspace.resolve_state_dir() == custom.resolve()
-    assert workspace.resolve_log_dir() == custom.resolve() / "jobs"
+    assert workspace.resolve_jobs_dir() == custom.resolve() / "jobs"
     assert workspace.resolve_campaign_dir() == custom.resolve() / "campaigns"
 
 
@@ -342,7 +342,7 @@ def test_repo_state_returns_all_none_outside_a_git_checkout(tmp_path):
     assert state.dirty is None
 
 
-# ---- lanes, job locks and the wrapper: real processes ----
+# ---- lanes, job locks and the job process: real processes ----
 
 
 PATH_ONLY = {"PATH": "/usr/bin:/bin"}
@@ -372,7 +372,7 @@ def lanes(tmp_path):
 
 @pytest.fixture
 def launcher(tmp_path):
-    return LockedJobLauncher(lambda: tmp_path / "jobs")
+    return JobProcessLauncher(lambda: tmp_path / "jobs")
 
 
 def _launch(tmp_path, lanes, launcher, job_id, command):
@@ -471,12 +471,12 @@ class TestLockedJobLauncher:
         log = tmp_path / "jobs" / "job" / "stdout.log"
         assert log.read_text().strip() == "got="
 
-    def test_the_wrapper_holds_the_lane_and_lock_until_it_exits(
+    def test_the_job_process_holds_the_lane_and_lock_until_it_exits(
         self, tmp_path, lanes, launcher
     ):
         _launch(tmp_path, lanes, launcher, "job", ["sleep", "1"])
 
-        # The launcher has let go of both; only the wrapper holds them.
+        # The launcher has let go of both; only the job process holds them.
         assert launcher.is_running("job")
         assert lanes.busy(Pool.LXD, 1) == 1
 
@@ -489,7 +489,7 @@ class TestLockedJobLauncher:
     ):
         _launch(tmp_path, lanes, launcher, "job", ["sleep", "30"])
 
-        signalled = launcher.signal("job")
+        signalled = launcher.kill("job")
 
         assert signalled is True
         assert _eventually(lambda: _exit(tmp_path, "job") is not None)
@@ -512,7 +512,7 @@ class TestLockedJobLauncher:
         )
         child = int(pid_file.read_text())
 
-        launcher.signal("job")
+        launcher.kill("job")
 
         assert _eventually(lambda: not _pid_alive(child))
 
@@ -522,9 +522,9 @@ class TestLockedJobLauncher:
         _launch(tmp_path, lanes, launcher, "job", ["true"])
         assert _eventually(lambda: not launcher.is_running("job"))
 
-        assert launcher.signal("job") is False
+        assert launcher.kill("job") is False
 
-    def test_a_dead_wrapper_leaves_no_exit_and_takes_its_job_with_it(
+    def test_a_dead_job_process_leaves_no_exit_and_takes_its_job_with_it(
         self, tmp_path, lanes, launcher
     ):
         pid_file = tmp_path / "child.pid"
@@ -539,20 +539,20 @@ class TestLockedJobLauncher:
             lambda: pid_file.exists() and pid_file.read_text().strip()
         )
         child = int(pid_file.read_text())
-        wrapper = int((tmp_path / "jobs" / "job" / "job.lock").read_text())
+        job_process = int((tmp_path / "jobs" / "job" / "job.lock").read_text())
 
-        os.kill(wrapper, signal.SIGKILL)
+        os.kill(job_process, signal.SIGKILL)
 
         assert _eventually(lambda: not launcher.is_running("job"))
         assert _exit(tmp_path, "job") is None
         assert lanes.busy(Pool.LXD, 1) == 0
-        # The parent-death signal stops the job when its wrapper dies.
+        # The parent-death signal stops the job when its process dies.
         assert _eventually(lambda: not _pid_alive(child))
 
-    def test_a_kill_before_the_wrapper_is_ready_still_lands(
+    def test_a_kill_before_the_job_process_is_ready_still_lands(
         self, tmp_path, lanes, launcher
     ):
-        # The marker a kill leaves, as if it came before the wrapper had
+        # The marker a kill leaves, as if it came before the job process had
         # published its PID.
         marker = tmp_path / "jobs" / "job" / "kill"
         marker.parent.mkdir(parents=True)

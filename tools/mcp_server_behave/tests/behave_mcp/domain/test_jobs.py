@@ -10,13 +10,14 @@ from behave_mcp.domain.jobs import (
     UnitMatch,
     build_command,
     exact_name_pattern,
+    interruption,
     job_matches_result_filters,
     job_state,
     match_unit,
     validate_machine_type,
 )
 from behave_mcp.domain.pools import Pool
-from behave_mcp.messages import JobRecord, RunStatus
+from behave_mcp.messages import Interruption, JobExit, JobRecord, JobState
 
 
 def test_build_command_escapes_scenario_name_for_behave_regex(tmp_path):
@@ -169,32 +170,58 @@ def test_exact_name_pattern_selects_one_scenario_and_its_rows(tmp_path):
     ]
 
 
-# A job's state for every combination of "an exit is recorded" and "its
-# wrapper holds the job lock". The wrapper writes the exit before letting go
-# of the lock, so an exit decides even while the lock is still held.
+# The exits a job can have: none yet, one from tox ending, one from a kill.
+EXITS = {
+    "no-exit": None,
+    "exited": JobExit(returncode=0, ok=True),
+    "killed": JobExit(returncode=-15, killed=True),
+}
+
+# A job's state for every exit and "its process holds the job lock". The job
+# process writes the exit before letting go of the lock, so an exit decides
+# even while the lock is still held.
 JOB_STATE = {
-    (True, True): RunStatus.COMPLETED,
-    (True, False): RunStatus.COMPLETED,
-    (False, True): RunStatus.RUNNING,
-    (False, False): RunStatus.INTERRUPTED,
+    ("no-exit", True): JobState.RUNNING,
+    ("no-exit", False): JobState.INTERRUPTED,
+    ("exited", True): JobState.FINISHED,
+    ("exited", False): JobState.FINISHED,
+    ("killed", True): JobState.INTERRUPTED,
+    ("killed", False): JobState.INTERRUPTED,
 }
 
 
 def test_every_combination_has_an_expected_state():
-    assert set(JOB_STATE) == set(itertools.product((True, False), repeat=2))
+    assert set(JOB_STATE) == set(itertools.product(EXITS, (True, False)))
 
 
 def test_every_state_is_reached():
-    assert set(JOB_STATE.values()) == set(RunStatus)
+    assert set(JOB_STATE.values()) == set(JobState)
 
 
 @pytest.mark.parametrize(
-    "exited, lock_held, expected",
+    "exit, lock_held, expected",
     [(e, h, want) for (e, h), want in JOB_STATE.items()],
     ids=str,
 )
-def test_job_state(exited, lock_held, expected):
-    assert job_state(exited=exited, lock_held=lock_held) == expected
+def test_job_state(exit, lock_held, expected):
+    assert job_state(exit=EXITS[exit], lock_held=lock_held) == expected
+
+
+# Why an interrupted job has no result: a kill leaves an exit saying so, and
+# anything else that ends a job without an exit is its process dying.
+INTERRUPTION = {
+    "no-exit": Interruption.DIED,
+    "killed": Interruption.KILLED,
+}
+
+
+def test_every_interruption_is_reached():
+    assert set(INTERRUPTION.values()) == set(Interruption)
+
+
+@pytest.mark.parametrize("exit, expected", INTERRUPTION.items(), ids=str)
+def test_interruption(exit, expected):
+    assert interruption(EXITS[exit]) == expected
 
 
 def test_job_matches_result_filters_no_filters_matches_everything():

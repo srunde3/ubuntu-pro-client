@@ -525,7 +525,7 @@ class TestExport:
             attempts.append(attempt(unit, "passed", job_id))
             for name in (
                 "job.json",
-                "status.json",
+                "exit.json",
                 "report.json",
                 "stdout.log",
             ):

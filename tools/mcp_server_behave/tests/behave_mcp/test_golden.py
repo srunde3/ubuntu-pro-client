@@ -48,13 +48,13 @@ def test_write_record_byte_shape(tmp_path):
 def test_write_exit_byte_shape(tmp_path):
     store = LocalJobResultStoreFactory().bind(tmp_path)
     store.write_exit(
-        "jobshape", JobExit(completed_at="T1", returncode=0, ok=True)
+        "jobshape", JobExit(finished_at="T1", returncode=0, ok=True)
     )
-    path = tmp_path / "jobshape" / "status.json"
+    path = tmp_path / "jobshape" / "exit.json"
     expected = (
         "{\n"
-        '  "completed_at": "T1",\n'
         '  "error": "",\n'
+        '  "finished_at": "T1",\n'
         '  "killed": false,\n'
         '  "ok": true,\n'
         '  "returncode": 0\n'
@@ -73,7 +73,7 @@ _SETTINGS = Settings(
 
 def _service(tmp_path, launcher, monotonic=lambda: 0.0) -> BehaveService:
     return BehaveService(
-        workspace=FakeWorkspace(repo_root=tmp_path, log_dir=tmp_path),
+        workspace=FakeWorkspace(repo_root=tmp_path, jobs_dir=tmp_path),
         settings=_SETTINGS,
         feature_reader=LocalFeatureFileReader(),
         results=LocalJobResultStoreFactory(),

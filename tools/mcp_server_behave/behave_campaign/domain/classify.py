@@ -15,22 +15,21 @@ from behave_campaign.domain.records import (
     text_field,
 )
 
-MCP_RUNNING_STATUSES = ("started", "timeout")
+MCP_FINISHED = "finished"
 
 
-MCP_COMPLETED = "completed"
-
-
-# A job whose wrapper died before recording an exit.
+# A job that ended without a result: it was killed, or its process died.
 MCP_INTERRUPTED = "interrupted"
 
 
 # The statuses a job that has stopped running reports.
-MCP_ENDED = (MCP_COMPLETED, MCP_INTERRUPTED)
+MCP_ENDED = (MCP_FINISHED, MCP_INTERRUPTED)
 
 
-# Why an attempt is recorded as interrupted when its job's wrapper died.
-WRAPPER_DIED = "wrapper_died"
+# Why an attempt is interrupted: its job was killed, or its process died.
+KILLED = "killed"
+DIED = "died"
+INTERRUPTIONS = (KILLED, DIED)
 
 
 def _completed_outcome(result: dict[str, Any]) -> Outcome:
@@ -82,17 +81,17 @@ def _completed_outcome(result: dict[str, Any]) -> Outcome:
 def finished_from_mcp(unit: Unit, result: Any) -> AttemptFinished:
     """Map one completed MCP job payload onto a finished attempt.
 
-    Only a completed job has an outcome. Handing a job still in flight here
+    Only a finished job has an outcome. Handing a job still in flight here
     means something is being recorded that nobody has an outcome for yet.
     """
     if not isinstance(result, dict):
         raise CampaignError("each MCP result must be a JSON object")
 
     status = result.get("status")
-    if status != MCP_COMPLETED:
+    if status != MCP_FINISHED:
         raise CampaignError(
             "cannot record an outcome for MCP status '{}'; only a "
-            "completed job has one".format(status)
+            "finished job has one".format(status)
         )
     if "job_id" not in result:
         raise CampaignError("MCP result is missing 'job_id'")
@@ -109,17 +108,19 @@ def classify_result(
 ) -> AttemptFinished | AttemptInterrupted:
     """Map an ended MCP job onto the record that closes its attempt.
 
-    Never raises. A job whose wrapper died established nothing, so its
-    attempt is interrupted and the unit may be queued again. A result that
+    Never raises. A job that was killed, or whose process died,
+    established nothing, so its attempt is interrupted and the unit may be
+    queued again. A result that
     cannot be classified is recorded as ``error`` with the reason in
     ``problem``: a scheduler has nobody to raise at.
     """
     if isinstance(result, dict) and result.get("status") == MCP_INTERRUPTED:
+        reason = result.get("reason")
         return AttemptInterrupted(
             unit=unit,
             job_id=str(result.get("job_id", "")),
             at=at,
-            reason=WRAPPER_DIED,
+            reason=reason if reason in INTERRUPTIONS else DIED,
         )
     try:
         finished = finished_from_mcp(unit, result)

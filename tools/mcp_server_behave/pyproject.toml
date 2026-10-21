@@ -76,7 +76,7 @@ root_packages = ["behave_mcp", "behave_campaign"]
 include_external_packages = true
 
 [[tool.importlinter.contracts]]
-name = "behave_mcp imports behave_campaign only in the server.py tool wrappers"
+name = "behave_mcp imports behave_campaign only in the server.py tool handlers"
 type = "forbidden"
 source_modules = ["behave_mcp"]
 forbidden_modules = ["behave_campaign"]
@@ -105,7 +105,7 @@ name = "behave_mcp layers"
 type = "layers"
 containers = ["behave_mcp"]
 layers = [
-  "server | wrapper",
+  "server | job_process",
   "service | adapters",
   "ports | config | views",
   "parser",

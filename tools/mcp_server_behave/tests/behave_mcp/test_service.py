@@ -16,7 +16,7 @@ from behave_mcp.domain.limits import (
     MAX_RESULTS_LIMIT,
 )
 from behave_mcp.domain.pools import Pool
-from behave_mcp.messages import JobRecord, RepoState, RunStatus
+from behave_mcp.messages import JobRecord, JobState, RepoState
 from behave_mcp.ports import JobStartError
 from behave_mcp.service import (
     BehaveService,
@@ -267,7 +267,7 @@ def test_find_scenarios_filters_combos_by_machine_type(tmp_path):
 def test_start_scenario_rejects_unlisted_feature(tmp_path):
     repo_root = make_repo_with_feature(tmp_path, "features/cli/attach.feature")
     service = _make_service(
-        FakeWorkspace(repo_root=repo_root, log_dir=tmp_path)
+        FakeWorkspace(repo_root=repo_root, jobs_dir=tmp_path)
     )
 
     with pytest.raises(
@@ -285,7 +285,7 @@ def test_start_scenario_accepts_normalized_listed_feature(tmp_path):
     repo_root = make_repo_with_feature(tmp_path, "features/cli/attach.feature")
     launcher = FakeJobLauncher()
     service = _make_service(
-        FakeWorkspace(repo_root=repo_root, log_dir=tmp_path),
+        FakeWorkspace(repo_root=repo_root, jobs_dir=tmp_path),
         launcher=launcher,
     )
 
@@ -311,7 +311,7 @@ def test_start_scenario_refuses_a_name_the_feature_lacks(tmp_path):
     )
     launcher = FakeJobLauncher()
     service = _make_service(
-        FakeWorkspace(repo_root=repo_root, log_dir=tmp_path),
+        FakeWorkspace(repo_root=repo_root, jobs_dir=tmp_path),
         launcher=launcher,
     )
 
@@ -329,7 +329,7 @@ def test_start_scenario_refuses_a_combo_the_scenario_lacks(tmp_path):
     repo_root = make_repo_with_feature(tmp_path, "features/cli/attach.feature")
     launcher = FakeJobLauncher()
     service = _make_service(
-        FakeWorkspace(repo_root=repo_root, log_dir=tmp_path),
+        FakeWorkspace(repo_root=repo_root, jobs_dir=tmp_path),
         launcher=launcher,
     )
 
@@ -353,7 +353,7 @@ def test_start_scenario_refuses_an_ambiguous_unit(tmp_path):
     )
     launcher = FakeJobLauncher()
     service = _make_service(
-        FakeWorkspace(repo_root=repo_root, log_dir=tmp_path),
+        FakeWorkspace(repo_root=repo_root, jobs_dir=tmp_path),
         launcher=launcher,
     )
 
@@ -373,7 +373,7 @@ def test_start_scenario_builds_command(tmp_path):
     service = _make_service(
         FakeWorkspace(
             repo_root=repo_root,
-            log_dir=tmp_path,
+            jobs_dir=tmp_path,
             env={"UACLIENT_BEHAVE_CONTRACT_TOKEN": "token"},
         ),
         launcher=launcher,
@@ -410,7 +410,7 @@ def test_start_scenario_defaults_install_from_to_local(tmp_path):
     repo_root = make_repo_with_feature(tmp_path, "features/cli/attach.feature")
     launcher = FakeJobLauncher()
     service = _make_service(
-        FakeWorkspace(repo_root=repo_root, log_dir=tmp_path),
+        FakeWorkspace(repo_root=repo_root, jobs_dir=tmp_path),
         launcher=launcher,
     )
 
@@ -428,7 +428,7 @@ def test_start_scenario_sets_install_from_env_var(tmp_path):
     repo_root = make_repo_with_feature(tmp_path, "features/cli/attach.feature")
     launcher = FakeJobLauncher()
     service = _make_service(
-        FakeWorkspace(repo_root=repo_root, log_dir=tmp_path),
+        FakeWorkspace(repo_root=repo_root, jobs_dir=tmp_path),
         launcher=launcher,
     )
 
@@ -448,7 +448,7 @@ def test_start_scenario_sets_install_from_env_var(tmp_path):
 def test_start_scenario_rejects_invalid_install_from(tmp_path):
     repo_root = make_repo_with_feature(tmp_path, "features/cli/attach.feature")
     service = _make_service(
-        FakeWorkspace(repo_root=repo_root, log_dir=tmp_path)
+        FakeWorkspace(repo_root=repo_root, jobs_dir=tmp_path)
     )
 
     with pytest.raises(BehaveServiceError, match="Unsupported install_from"):
@@ -467,7 +467,7 @@ def test_start_scenario_includes_repo_state_in_response_and_record(tmp_path):
     service = _make_service(
         FakeWorkspace(
             repo_root=repo_root,
-            log_dir=tmp_path,
+            jobs_dir=tmp_path,
             repo_state=RepoState(
                 commit="deadbeef", branch="main", dirty=False
             ),
@@ -505,7 +505,7 @@ def test_a_repo_root_override_runs_there_but_files_stay_with_the_server(
     server_jobs.mkdir(parents=True)
     launcher = FakeJobLauncher()
     service = _make_service(
-        FakeWorkspace(repo_root=None, log_dir=server_jobs), launcher=launcher
+        FakeWorkspace(repo_root=None, jobs_dir=server_jobs), launcher=launcher
     )
 
     result = service.start_scenario(
@@ -529,7 +529,7 @@ def test_start_scenario_does_not_reference_combo_formatter(tmp_path):
     repo_root = _make_repo_with_outline(tmp_path)
     launcher = FakeJobLauncher()
     service = _make_service(
-        FakeWorkspace(repo_root=repo_root, log_dir=tmp_path),
+        FakeWorkspace(repo_root=repo_root, jobs_dir=tmp_path),
         launcher=launcher,
     )
 
@@ -565,7 +565,7 @@ def test_start_scenario_rejects_invalid_repo_root():
 def test_start_scenario_refuses_an_unknown_machine_type(tmp_path):
     repo_root = make_repo_with_feature(tmp_path, "features/cli/attach.feature")
     service = _make_service(
-        FakeWorkspace(repo_root=repo_root, log_dir=tmp_path)
+        FakeWorkspace(repo_root=repo_root, jobs_dir=tmp_path)
     )
 
     with pytest.raises(BehaveServiceError, match="Unsupported machine_type"):
@@ -583,7 +583,7 @@ def test_start_scenario_rejects_cloud_machine_type_by_default(
 ):
     repo_root = make_repo_with_feature(tmp_path, "features/cli/attach.feature")
     service = _make_service(
-        FakeWorkspace(repo_root=repo_root, log_dir=tmp_path)
+        FakeWorkspace(repo_root=repo_root, jobs_dir=tmp_path)
     )
 
     with pytest.raises(
@@ -601,7 +601,7 @@ def test_start_scenario_rejects_cloud_machine_type_by_default(
 def test_start_scenario_rejects_a_disabled_wsl_pool(tmp_path):
     repo_root = make_repo_with_feature(tmp_path, "features/cli/attach.feature")
     service = _make_service(
-        FakeWorkspace(repo_root=repo_root, log_dir=tmp_path),
+        FakeWorkspace(repo_root=repo_root, jobs_dir=tmp_path),
         settings=_settings(wsl=0),
     )
 
@@ -617,7 +617,7 @@ def test_start_scenario_rejects_a_disabled_wsl_pool(tmp_path):
 def test_start_scenario_allows_cloud_machine_type_with_a_limit(tmp_path):
     repo_root = make_repo_with_feature(tmp_path, "features/cli/attach.feature")
     service = _make_service(
-        FakeWorkspace(repo_root=repo_root, log_dir=tmp_path),
+        FakeWorkspace(repo_root=repo_root, jobs_dir=tmp_path),
         settings=_settings(cloud=1),
     )
 
@@ -635,7 +635,7 @@ def test_start_scenario_fails_fast_when_capacity_reached(tmp_path):
     repo_root = make_repo_with_feature(tmp_path, "features/cli/attach.feature")
     ids = iter(["job1", "job2"])
     service = _make_service(
-        FakeWorkspace(repo_root=repo_root, log_dir=tmp_path),
+        FakeWorkspace(repo_root=repo_root, jobs_dir=tmp_path),
         settings=_settings(lxd=1),
         new_job_id=lambda: next(ids),
     )
@@ -653,7 +653,7 @@ def test_a_full_pool_leaves_other_pools_free(tmp_path):
     repo_root = make_repo_with_feature(tmp_path, "features/cli/attach.feature")
     ids = iter(["job1", "job2", "job3"])
     service = _make_service(
-        FakeWorkspace(repo_root=repo_root, log_dir=tmp_path),
+        FakeWorkspace(repo_root=repo_root, jobs_dir=tmp_path),
         settings=_settings(lxd=2, wsl=1),
         new_job_id=lambda: next(ids),
     )
@@ -673,7 +673,7 @@ def test_a_finished_job_frees_its_lane(tmp_path):
     ids = iter(["job1", "job2"])
     launcher = FakeJobLauncher(tmp_path)
     service = _make_service(
-        FakeWorkspace(repo_root=repo_root, log_dir=tmp_path),
+        FakeWorkspace(repo_root=repo_root, jobs_dir=tmp_path),
         settings=_settings(lxd=1),
         launcher=launcher,
         new_job_id=lambda: next(ids),
@@ -692,7 +692,7 @@ def test_a_launch_that_fails_frees_its_lane_and_reads_as_interrupted(
     repo_root = make_repo_with_feature(tmp_path, "features/cli/attach.feature")
     lanes = FakeLanePool()
     service = _make_service(
-        FakeWorkspace(repo_root=repo_root, log_dir=tmp_path),
+        FakeWorkspace(repo_root=repo_root, jobs_dir=tmp_path),
         lanes=lanes,
         launcher=FakeJobLauncher(tmp_path, error=JobStartError("boom")),
         new_job_id=lambda: JOB_ID,
@@ -730,7 +730,7 @@ def launched(tmp_path, job_id=JOB_ID, **record):
 
 def job_service(tmp_path, launcher, **kwargs):
     return _make_service(
-        FakeWorkspace(repo_root=tmp_path, log_dir=tmp_path),
+        FakeWorkspace(repo_root=tmp_path, jobs_dir=tmp_path),
         launcher=launcher,
         **kwargs,
     )
@@ -755,9 +755,9 @@ def arrange(tmp_path, state):
     """A launched job in ``state``, and the launcher that knows of it."""
     launched(tmp_path)
     launcher = FakeJobLauncher(tmp_path)
-    if state == RunStatus.RUNNING:
+    if state == JobState.RUNNING:
         launcher.running.add(JOB_ID)
-    elif state == RunStatus.COMPLETED:
+    elif state == JobState.FINISHED:
         launcher.finish(JOB_ID, report=PASSING_REPORT)
     job_file(tmp_path, JOB_ID, "stdout.log").write_text("line1\nline2\n")
     return launcher
@@ -765,14 +765,14 @@ def arrange(tmp_path, state):
 
 # What a status read reports for a job in each state.
 STATUS_OF = {
-    RunStatus.RUNNING: ("running", True),
-    RunStatus.COMPLETED: ("completed", True),
-    RunStatus.INTERRUPTED: ("interrupted", False),
+    JobState.RUNNING: ("running", True),
+    JobState.FINISHED: ("finished", True),
+    JobState.INTERRUPTED: ("interrupted", False),
 }
 
 
 def test_every_job_state_has_an_expected_status():
-    assert set(STATUS_OF) == set(RunStatus)
+    assert set(STATUS_OF) == set(JobState)
 
 
 @pytest.mark.parametrize("state, expected", STATUS_OF.items(), ids=str)
@@ -811,29 +811,35 @@ def test_a_completed_job_without_a_report_shows_its_output(tmp_path):
     assert "tox failed" in payload["recent_output"]
 
 
-def test_a_killed_job_is_not_ok(tmp_path):
+def test_a_killed_job_is_interrupted_whatever_tox_returned(tmp_path):
     launched(tmp_path)
     launcher = FakeJobLauncher(tmp_path)
     launcher.finish(JOB_ID, returncode=0, killed=True)
     service = job_service(tmp_path, launcher)
 
-    assert service.job_status(JOB_ID).ok is False
+    status = service.job_status(JOB_ID)
+
+    assert (status.status, status.reason, status.ok) == (
+        "interrupted",
+        "killed",
+        False,
+    )
 
 
 def test_reading_a_job_never_writes_its_exit(tmp_path):
-    # The wrapper alone records an exit; the server only reads it.
-    launcher = arrange(tmp_path, RunStatus.RUNNING)
+    # The job process alone records an exit; the server only reads it.
+    launcher = arrange(tmp_path, JobState.RUNNING)
     service = job_service(tmp_path, launcher)
 
     service.job_status(JOB_ID)
     service.list_jobs()
     service.get_results()
 
-    assert not job_file(tmp_path, JOB_ID, "status.json").exists()
+    assert not job_file(tmp_path, JOB_ID, "exit.json").exists()
 
 
 def test_wait_for_completion_returns_once_the_job_ends(tmp_path):
-    launcher = arrange(tmp_path, RunStatus.RUNNING)
+    launcher = arrange(tmp_path, JobState.RUNNING)
     service = job_service(
         tmp_path,
         launcher,
@@ -844,12 +850,12 @@ def test_wait_for_completion_returns_once_the_job_ends(tmp_path):
         JOB_ID, max_wait_seconds=5, poll_interval_seconds=0.01
     )
 
-    assert result.status == "completed"
+    assert result.status == "finished"
     assert result.ok is True
 
 
 def test_wait_for_completion_returns_an_interrupted_job(tmp_path):
-    launcher = arrange(tmp_path, RunStatus.RUNNING)
+    launcher = arrange(tmp_path, JobState.RUNNING)
     service = job_service(
         tmp_path, launcher, sleep=lambda seconds: launcher.crash(JOB_ID)
     )
@@ -858,12 +864,12 @@ def test_wait_for_completion_returns_an_interrupted_job(tmp_path):
         JOB_ID, max_wait_seconds=5, poll_interval_seconds=0.01
     )
 
-    assert result.status == "interrupted"
+    assert (result.status, result.reason) == ("interrupted", "died")
     assert "line2" in result.recent_output
 
 
 def test_wait_for_completion_times_out_on_a_running_job(tmp_path):
-    launcher = arrange(tmp_path, RunStatus.RUNNING)
+    launcher = arrange(tmp_path, JobState.RUNNING)
     clock = iter([0.0, 0.0, 10.0])
     service = job_service(tmp_path, launcher, monotonic=lambda: next(clock))
 
@@ -897,14 +903,14 @@ def test_an_unknown_job_id_is_actionable(tmp_path, call):
 
 # What kill_job does to a job in each state.
 KILL_OF = {
-    RunStatus.RUNNING: (True, "Termination signalled"),
-    RunStatus.COMPLETED: (False, "already finished"),
-    RunStatus.INTERRUPTED: (False, "not running"),
+    JobState.RUNNING: (True, "Kill sent"),
+    JobState.FINISHED: (False, "already finished"),
+    JobState.INTERRUPTED: (False, "already been interrupted"),
 }
 
 
 def test_every_job_state_has_an_expected_kill():
-    assert set(KILL_OF) == set(RunStatus)
+    assert set(KILL_OF) == set(JobState)
 
 
 @pytest.mark.parametrize("state, expected", KILL_OF.items(), ids=str)
@@ -917,19 +923,19 @@ def test_kill_job_by_state(tmp_path, state, expected):
     killed, message = expected
     assert result.killed is killed
     assert message in result.message
-    assert launcher.signalled == ([JOB_ID] if killed else [])
+    assert launcher.killed == ([JOB_ID] if killed else [])
 
 
-def test_a_wrapper_that_cannot_be_signalled_is_reported(tmp_path):
+def test_a_job_process_that_cannot_be_reached_is_reported(tmp_path):
     launched(tmp_path)
-    launcher = FakeJobLauncher(tmp_path, unsignallable={JOB_ID})
+    launcher = FakeJobLauncher(tmp_path, unkillable={JOB_ID})
     launcher.running.add(JOB_ID)
     service = job_service(tmp_path, launcher)
 
     result = service.kill_job(JOB_ID)
 
     assert result.killed is False
-    assert "could not be signalled" in result.message
+    assert "could not be reached" in result.message
 
 
 # ---- logs, errors and artifacts ----
@@ -1044,7 +1050,7 @@ def test_get_artifacts_reports_paths_record_and_exit(tmp_path):
 
     assert result["exists"] == {
         "record": True,
-        "status": True,
+        "exit": True,
         "stdout_log": True,
         "json_report": True,
     }
@@ -1058,38 +1064,38 @@ def test_get_artifacts_reports_paths_record_and_exit(tmp_path):
 
 def listed(tmp_path, launcher, job_id, started_at, state):
     launched(tmp_path, job_id=job_id, started_at=started_at)
-    if state == RunStatus.RUNNING:
+    if state == JobState.RUNNING:
         launcher.running.add(job_id)
-    elif state == RunStatus.COMPLETED:
+    elif state == JobState.FINISHED:
         launcher.finish(job_id)
 
 
 def test_list_jobs_reads_every_job_off_disk(tmp_path):
     launcher = FakeJobLauncher(tmp_path)
-    listed(tmp_path, launcher, "a-running", "T1", RunStatus.RUNNING)
-    listed(tmp_path, launcher, "b-done", "T2", RunStatus.COMPLETED)
-    listed(tmp_path, launcher, "c-gone", "T3", RunStatus.INTERRUPTED)
+    listed(tmp_path, launcher, "a-running", "T1", JobState.RUNNING)
+    listed(tmp_path, launcher, "b-done", "T2", JobState.FINISHED)
+    listed(tmp_path, launcher, "c-gone", "T3", JobState.INTERRUPTED)
     service = job_service(tmp_path, launcher)
 
     result = service.list_jobs()
 
     assert {(job.job_id, job.status) for job in result.jobs} == {
-        ("a-running", RunStatus.RUNNING),
-        ("b-done", RunStatus.COMPLETED),
-        ("c-gone", RunStatus.INTERRUPTED),
+        ("a-running", JobState.RUNNING),
+        ("b-done", JobState.FINISHED),
+        ("c-gone", JobState.INTERRUPTED),
     }
 
 
 def test_list_jobs_keeps_running_jobs_and_caps_the_rest(tmp_path):
     launcher = FakeJobLauncher(tmp_path)
-    listed(tmp_path, launcher, "running", "T0", RunStatus.RUNNING)
+    listed(tmp_path, launcher, "running", "T0", JobState.RUNNING)
     for number in range(DEFAULT_JOB_LIST_LIMIT + 2):
         listed(
             tmp_path,
             launcher,
             "done-{:02d}".format(number),
             "T{:02d}".format(number + 1),
-            RunStatus.COMPLETED,
+            JobState.FINISHED,
         )
     service = job_service(tmp_path, launcher)
 
@@ -1097,13 +1103,13 @@ def test_list_jobs_keeps_running_jobs_and_caps_the_rest(tmp_path):
 
     assert result.jobs[0].job_id == "running"
     assert len(result.jobs) == DEFAULT_JOB_LIST_LIMIT + 1
-    assert result.total_completed == DEFAULT_JOB_LIST_LIMIT + 2
+    assert result.total_ended == DEFAULT_JOB_LIST_LIMIT + 2
     assert result.truncated is True
 
 
 def test_list_jobs_is_not_truncated_under_the_limit(tmp_path):
     launcher = FakeJobLauncher(tmp_path)
-    listed(tmp_path, launcher, "done", "T1", RunStatus.COMPLETED)
+    listed(tmp_path, launcher, "done", "T1", JobState.FINISHED)
     service = job_service(tmp_path, launcher)
 
     result = service.list_jobs(limit=5)
@@ -1166,7 +1172,7 @@ def test_get_results_reports_one_result_per_job(tmp_path):
 
     (job,) = result["results"]
     assert result["total"] == 1
-    assert job["status"] == "completed"
+    assert job["status"] == "finished"
     assert (job["release"], job["machine_type"]) == ("resolute", "lxd-vm")
     assert job["summary"]["scenarios"]["failed"] == 1
     assert job["failures"][0]["error_message"] == "boom"

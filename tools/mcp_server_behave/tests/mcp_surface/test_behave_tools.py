@@ -168,7 +168,7 @@ async def test_mcp_start_wait_and_log_flow(monkeypatch, tmp_path):
     monkeypatch.setenv("MCP_STATE_DIR", str(tmp_path))
 
     # Real wiring but for the launcher: each job ends as soon as it starts,
-    # with a log and a passing report, as a real wrapper would leave them.
+    # with a log and a passing report, as a real job process would leave them.
     launcher = FakeJobLauncher(
         tmp_path / "jobs",
         finish_on_launch=dict(
@@ -217,7 +217,7 @@ async def test_mcp_start_wait_and_log_flow(monkeypatch, tmp_path):
             },
         )
         completed_payload = result_json(completed_result)
-        assert completed_payload["status"] == "completed"
+        assert completed_payload["status"] == "finished"
         assert completed_payload["ok"] is True
         assert completed_payload["summary"]["steps"]["passed"] == 1
         assert "artifacts" in completed_payload

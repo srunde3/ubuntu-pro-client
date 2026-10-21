@@ -12,6 +12,7 @@ from behave_mcp.domain.jobs import (
     ScenarioCombos,
     UnitMatch,
     build_command,
+    interruption,
     job_matches_result_filters,
     job_state,
     match_unit,
@@ -39,14 +40,15 @@ from behave_mcp.domain.report import summarize_report
 from behave_mcp.messages import (
     ArtifactsResponse,
     CapacityExceededResponse,
-    CompletedResponse,
     DescribeFeatureResponse,
     ErrorsResponse,
     FindScenariosResponse,
+    FinishedResponse,
     InterruptedResponse,
     JobExit,
     JobRecord,
     JobResult,
+    JobState,
     JobSummary,
     KillJobResponse,
     ListDimensionsResponse,
@@ -58,7 +60,6 @@ from behave_mcp.messages import (
     PoolCapacity,
     ResultsResponse,
     RunningResponse,
-    RunStatus,
     ScenarioMatch,
     StartScenarioResponse,
     StartScenarioResult,
@@ -355,7 +356,7 @@ class BehaveService:
 
         repo_state = self._workspace.repo_state(resolved_repo_root)
 
-        results = self._results.bind(self._log_dir())
+        results = self._results.bind(self._jobs_dir())
         pool = POOL_OF[machine_type]
         limit = self._settings.pool_limits.get(pool, 0)
         lease = self._lanes.take(pool, limit)
@@ -387,7 +388,7 @@ class BehaveService:
         env[INSTALL_FROM_ENV_VAR] = install_from
 
         artifacts = results.artifacts(job_id)
-        # Written before the wrapper exists, so a launch that dies part way
+        # Written before the job process exists, so a launch that dies part way
         # reads as an interrupted job rather than as no job at all.
         results.write_record(
             job_id,
@@ -466,27 +467,27 @@ class BehaveService:
     def kill_job(self, job_id: str) -> KillJobResponse:
         """Stop a running job, from any process.
 
-        The job's wrapper passes the signal to tox and waits for it, so the
-        job ends and records its exit as killed. A campaign's next tick then
-        records the unit, rather than waiting on it forever.
+        The job process passes the kill to tox and waits for it, so the job
+        ends and records its exit as killed: it is interrupted. A campaign's
+        next tick then records the unit, rather than waiting on it forever.
         """
         results = self._known(job_id)
         state = self._state(job_id, results)
-        if state == RunStatus.COMPLETED:
+        if state == JobState.FINISHED:
             message = "Job had already finished."
-        elif state == RunStatus.INTERRUPTED:
-            message = "Job is not running: its wrapper is gone."
-        elif self._launcher.signal(job_id):
+        elif state == JobState.INTERRUPTED:
+            message = "Job had already been interrupted."
+        elif self._launcher.kill(job_id):
             return KillJobResponse(
-                job_id=job_id, killed=True, message="Termination signalled."
+                job_id=job_id, killed=True, message="Kill sent."
             )
         else:
-            message = "Job's wrapper could not be signalled."
+            message = "Job's process could not be reached."
         return KillJobResponse(job_id=job_id, killed=False, message=message)
 
     def job_status(
         self, job_id: str
-    ) -> RunningResponse | CompletedResponse | InterruptedResponse:
+    ) -> RunningResponse | FinishedResponse | InterruptedResponse:
         """Return a job's current state without waiting.
 
         ``wait_for_completion`` requires a positive timeout, so this is what
@@ -521,7 +522,7 @@ class BehaveService:
                     job_id=job_id,
                     max_wait_seconds=max_wait_seconds,
                     poll_interval_seconds=poll_interval_seconds,
-                    last_status=RunStatus.RUNNING,
+                    last_status=JobState.RUNNING,
                     recent_output=payload.recent_output,
                     artifacts=payload.artifacts,
                 )
@@ -640,20 +641,20 @@ class BehaveService:
             )
         limit_clamped = limit > MAX_JOB_LIST_LIMIT
         limit = min(limit, MAX_JOB_LIST_LIMIT)
-        results = self._results.bind(self._log_dir())
+        results = self._results.bind(self._jobs_dir())
 
         summaries = [
             self._job_summary(job_id, results)
             for job_id in results.list_job_ids()
         ]
         summaries.sort(key=lambda summary: summary.started_at or "")
-        running = [s for s in summaries if s.status == RunStatus.RUNNING]
-        others = [s for s in summaries if s.status != RunStatus.RUNNING]
+        running = [s for s in summaries if s.status == JobState.RUNNING]
+        others = [s for s in summaries if s.status != JobState.RUNNING]
         trimmed = running + others[-limit:]
 
         return ListScenarioJobsResponse(
             jobs=trimmed,
-            total_completed=len(others),
+            total_ended=len(others),
             truncated=len(others) > limit,
             limit_clamped=limit_clamped,
         )
@@ -668,12 +669,12 @@ class BehaveService:
         status: str = "",
         limit: int = DEFAULT_RESULTS_LIMIT,
     ) -> ResultsResponse:
-        status_filter: RunStatus | None = None
+        status_filter: JobState | None = None
         if status:
             try:
-                status_filter = RunStatus(status)
+                status_filter = JobState(status)
             except ValueError:
-                allowed = ", ".join(s.value for s in RunStatus)
+                allowed = ", ".join(s.value for s in JobState)
                 raise BehaveServiceError(
                     f"Invalid status filter: {status}. "
                     f"Allowed values: {allowed}"
@@ -692,7 +693,7 @@ class BehaveService:
         limit_clamped = limit > MAX_RESULTS_LIMIT
         limit = min(limit, MAX_RESULTS_LIMIT)
 
-        results = self._results.bind(self._log_dir())
+        results = self._results.bind(self._jobs_dir())
 
         matched: list[tuple[str, JobSummary]] = []
         for job_id in results.list_job_ids():
@@ -726,7 +727,7 @@ class BehaveService:
         self, job_id: str, summary: JobSummary, results: JobResultStore
     ) -> JobResult:
         report = None
-        if summary.status == RunStatus.COMPLETED:
+        if summary.status == JobState.FINISHED:
             report_data = results.read_report(job_id)
             if report_data is not None:
                 report = summarize_report(report_data)
@@ -749,10 +750,13 @@ class BehaveService:
         return JobSummary(
             job_id=job_id,
             status=status,
+            reason=(
+                interruption(exit) if status == JobState.INTERRUPTED else None
+            ),
             ok=(
                 exit.ok
                 if exit is not None
-                else (None if status == RunStatus.RUNNING else False)
+                else (None if status == JobState.RUNNING else False)
             ),
             returncode=exit.returncode if exit is not None else None,
             feature_file=record.feature_file,
@@ -760,19 +764,19 @@ class BehaveService:
             release=record.release,
             machine_type=record.machine_type,
             started_at=record.started_at,
-            completed_at=exit.completed_at if exit is not None else None,
+            finished_at=exit.finished_at if exit is not None else None,
             artifacts=results.artifacts(job_id),
         )
 
     def _status_payload(
         self, job_id: str
-    ) -> RunningResponse | CompletedResponse | InterruptedResponse:
+    ) -> RunningResponse | FinishedResponse | InterruptedResponse:
         results = self._known(job_id)
         exit = results.read_exit(job_id)
         state = self._state(job_id, results, exit)
         artifacts = results.artifacts(job_id)
 
-        if state == RunStatus.RUNNING:
+        if state == JobState.RUNNING:
             return RunningResponse(
                 job_id=job_id,
                 recent_output=results.log_tail(
@@ -782,9 +786,10 @@ class BehaveService:
             )
 
         record = results.read_record(job_id)
-        if exit is None:
+        if state == JobState.INTERRUPTED or exit is None:
             return InterruptedResponse(
                 job_id=job_id,
+                reason=interruption(exit),
                 artifacts=artifacts,
                 recent_output=results.log_tail(
                     job_id, DEFAULT_RUNNING_TAIL_LINES
@@ -799,7 +804,7 @@ class BehaveService:
         report = (
             summarize_report(report_data) if report_data is not None else None
         )
-        return CompletedResponse(
+        return FinishedResponse(
             ok=exit.ok,
             job_id=job_id,
             returncode=exit.returncode,
@@ -819,7 +824,7 @@ class BehaveService:
 
     def _known(self, job_id: str) -> JobResultStore:
         """The store holding ``job_id``, which must have been launched."""
-        results = self._results.bind(self._log_dir())
+        results = self._results.bind(self._jobs_dir())
         if not results.exists(job_id).record:
             raise UnknownJobError(job_id)
         return results
@@ -829,16 +834,16 @@ class BehaveService:
         job_id: str,
         results: JobResultStore,
         exit: JobExit | None = None,
-    ) -> RunStatus:
+    ) -> JobState:
         if exit is None:
             exit = results.read_exit(job_id)
         return job_state(
-            exited=exit is not None,
+            exit=exit,
             lock_held=exit is None and self._launcher.is_running(job_id),
         )
 
-    def _log_dir(self) -> Path:
+    def _jobs_dir(self) -> Path:
         try:
-            return self._workspace.resolve_log_dir()
+            return self._workspace.resolve_jobs_dir()
         except ValueError as exc:
             raise BehaveServiceError(str(exc)) from exc

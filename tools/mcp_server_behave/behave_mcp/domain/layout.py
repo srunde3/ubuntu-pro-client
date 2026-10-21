@@ -19,15 +19,15 @@ CAMPAIGNS_SUBDIR = "campaigns"
 LANES_SUBDIR = "lanes"
 # The files in one job's directory, ``jobs/<job_id>/``.
 JOB_RECORD_NAME = "job.json"
-JOB_STATUS_NAME = "status.json"
+JOB_EXIT_NAME = "exit.json"
 JOB_LOCK_NAME = "job.lock"
-# Left by a kill, so a wrapper still starting up sees it was killed.
+# Left by a kill, so a job process still starting up sees it was killed.
 JOB_KILL_NAME = "kill"
 STDOUT_LOG_NAME = "stdout.log"
 JSON_REPORT_NAME = "report.json"
 JOB_FILE_NAMES = (
     JOB_RECORD_NAME,
-    JOB_STATUS_NAME,
+    JOB_EXIT_NAME,
     STDOUT_LOG_NAME,
     JSON_REPORT_NAME,
 )
@@ -84,13 +84,13 @@ def export_file(state: Path, campaign_id: str) -> Path:
 class JobPaths(NamedTuple):
     """The directory one job owns, and the files in it.
 
-    ``record`` is written once at launch and ``status`` once at exit;
+    ``record`` is written once at launch and ``exit`` once at exit;
     behave writes ``stdout_log`` and ``json_report`` as it runs.
     """
 
     job_dir: Path
     record: Path
-    status: Path
+    exit: Path
     stdout_log: Path
     json_report: Path
     lock: Path
@@ -102,7 +102,7 @@ def job_paths(jobs: Path, job_id: str) -> JobPaths:
     return JobPaths(
         job_dir=job_dir,
         record=job_dir / JOB_RECORD_NAME,
-        status=job_dir / JOB_STATUS_NAME,
+        exit=job_dir / JOB_EXIT_NAME,
         stdout_log=job_dir / STDOUT_LOG_NAME,
         json_report=job_dir / JSON_REPORT_NAME,
         lock=job_dir / JOB_LOCK_NAME,

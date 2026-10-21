@@ -33,9 +33,10 @@ cause is rarely in the tail.
 3. Only if a region's capped text is not enough, `get_scenario_logs` around
    its `first_line`.
 
-A job with `status: interrupted` did not fail: its wrapper died before it
-could record an exit -- a crash, a hard kill or a reboot. Nothing it did
-counts; start it again.
+A job with `status: interrupted` did not fail. With `reason: killed`, someone
+killed it; with `reason: died`, its process died before it could record an
+exit -- a crash, a hard kill or a reboot. Nothing it did counts; start it
+again.
 
 Then say which class below it is and why.
 

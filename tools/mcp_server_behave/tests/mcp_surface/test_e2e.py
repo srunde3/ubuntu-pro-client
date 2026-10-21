@@ -74,7 +74,7 @@ async def test_mcp_e2e_long_running_attach_flow(monkeypatch):
             await client.call_tool("kill_job", {"job_id": job_id})
 
         assert completed_payload is not None
-        assert completed_payload["status"] == "completed"
+        assert completed_payload["status"] == "finished"
         assert isinstance(completed_payload.get("ok"), bool)
         assert "returncode" in completed_payload
         assert completed_payload["summary"] is not None
@@ -88,7 +88,7 @@ async def test_mcp_e2e_long_running_attach_flow(monkeypatch):
             job["job_id"]: job
             for job in result_json(jobs_after_completion)["jobs"]
         }
-        assert finished_jobs[job_id]["status"] == "completed"
+        assert finished_jobs[job_id]["status"] == "finished"
         assert finished_jobs[job_id]["ok"] == completed_payload["ok"]
 
         logs_result = await client.call_tool(
@@ -117,7 +117,7 @@ async def test_mcp_e2e_long_running_attach_flow(monkeypatch):
         )
         (result,) = results["results"]
         assert result["job_id"] == job_id
-        assert result["status"] == "completed"
+        assert result["status"] == "finished"
         assert result["summary"]["scenarios"]["total"] >= 1
         assert result["release"] == "noble"
 
@@ -135,5 +135,5 @@ async def test_mcp_e2e_long_running_attach_flow(monkeypatch):
         assert job_id not in await ids(release="jammy")
         assert job_id in await ids(machine_type="lxd-container")
         assert job_id not in await ids(machine_type="lxd-vm")
-        assert await ids(job_ids=[job_id], status="completed") == [job_id]
+        assert await ids(job_ids=[job_id], status="finished") == [job_id]
         assert await ids(job_ids=[job_id], status="running") == []

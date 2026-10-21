@@ -664,7 +664,7 @@ class TestExportCampaign:
         for job_id in ("a1", "a2", "n1", "b1"):
             for name in (
                 "job.json",
-                "status.json",
+                "exit.json",
                 "report.json",
                 "stdout.log",
             ):

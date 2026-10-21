@@ -12,6 +12,7 @@ from typing import NamedTuple
 import pytest
 
 from behave_campaign.adapters import JsonlCampaignStore
+from behave_campaign.domain.classify import KILLED
 from behave_campaign.domain.events import event_matches
 from behave_campaign.domain.feed import derive_feed
 from behave_campaign.domain.records import (
@@ -32,7 +33,7 @@ from behave_campaign.domain.records import (
 )
 from behave_campaign.domain.state import reduce_units, state_of
 from behave_campaign.ports import CampaignLockedError
-from behave_campaign.runner import KILLED_REASON, CampaignRunner, ThreadTicker
+from behave_campaign.runner import CampaignRunner, ThreadTicker
 from behave_mcp.domain.pools import Pool
 from tests.conftest import FakeLanes, FakeLock, FakeTicker
 
@@ -351,7 +352,7 @@ class TestTick:
         runner.run(CAMPAIGN)
         runner.tick(CAMPAIGN)
         lanes.results["job1"] = {
-            "status": "completed",
+            "status": "finished",
             "ok": True,
             "job_id": "job1",
             "summary": {
@@ -458,7 +459,7 @@ class TestTick:
 
         assert not runner.tick(CAMPAIGN).finished
 
-    def test_a_job_whose_wrapper_died_is_run_again(self, runner, store, lanes):
+    def test_a_job_whose_process_died_is_run_again(self, runner, store, lanes):
         create(store, units=[UNITS[0]], lxd_lanes=1)
         runner.run(CAMPAIGN)
         runner.tick(CAMPAIGN)
@@ -820,7 +821,7 @@ class TestEvents:
             CAMPAIGN, since_seq=0, kinds=["unit.interrupted"], limit=10
         )
         assert interrupted.data["job_id"] == "job1"
-        assert interrupted.data["reason"] == KILLED_REASON
+        assert interrupted.data["reason"] == KILLED
 
     def test_an_opened_lane_is_announced_with_its_job(
         self, runner, store, events, lanes
@@ -854,7 +855,7 @@ class TestEvents:
         runner.run(CAMPAIGN)
         runner.tick(CAMPAIGN)
         lanes.results["job1"] = {
-            "status": "completed",
+            "status": "finished",
             "ok": False,
             "job_id": "job1",
             "summary": {
@@ -886,7 +887,7 @@ class TestEvents:
         runner.run(CAMPAIGN)
         runner.tick(CAMPAIGN)
         lanes.results["job1"] = {
-            "status": "completed",
+            "status": "finished",
             "ok": True,
             "job_id": "job1",
             "summary": {

@@ -19,7 +19,7 @@ from behave_mcp.parser import FeatureDetail
 
 
 class JobStartError(Exception):
-    """Raised by a JobLauncher when a job's wrapper cannot be started."""
+    """Raised by a JobLauncher when a job's process cannot be started."""
 
 
 class Lease(Protocol):
@@ -44,8 +44,8 @@ class LanePool(Protocol):
 
 
 class JobLauncher(Protocol):
-    """Starts a job under a wrapper that outlives this process, and reads
-    and signals it from any process."""
+    """Starts a job under a job process that outlives this process, and
+    reads and kills it from any process."""
 
     def launch(
         self,
@@ -55,20 +55,20 @@ class JobLauncher(Protocol):
         env: dict[str, str],
         lease: Lease,
     ) -> None:
-        """Start ``command`` for ``job_id`` under a wrapper that takes over
-        ``lease`` and the job's own lock for as long as it lives.
+        """Start ``command`` for ``job_id`` under a job process that takes
+        over ``lease`` and the job's own lock for as long as it lives.
 
         The launcher's own hold on ``lease`` is closed either way. Raises
-        JobStartError if the wrapper cannot be started.
+        JobStartError if the job process cannot be started.
         """
         ...
 
     def is_running(self, job_id: str) -> bool:
-        """Return whether the job's wrapper is alive: its lock is held."""
+        """Return whether the job's process is alive: its lock is held."""
         ...
 
-    def signal(self, job_id: str) -> bool:
-        """Ask a running job to stop; return whether a signal was sent."""
+    def kill(self, job_id: str) -> bool:
+        """Ask a running job to stop; return whether the kill was sent."""
         ...
 
 
@@ -147,8 +147,8 @@ class JobResultStore(Protocol):
 class JobResultStoreFactory(Protocol):
     """Binds a ``JobResultStore`` to a resolved results location."""
 
-    def bind(self, log_dir: Path) -> JobResultStore:
-        """Return a store rooted at ``log_dir``."""
+    def bind(self, jobs_dir: Path) -> JobResultStore:
+        """Return a store rooted at ``jobs_dir``."""
         ...
 
 
@@ -159,7 +159,7 @@ class Workspace(Protocol):
         """Resolve the repository root, raising ValueError if invalid."""
         ...
 
-    def resolve_log_dir(self) -> Path:
+    def resolve_jobs_dir(self) -> Path:
         """Resolve and create the server's directory for job artifacts.
 
         It is under the server's own state directory, whatever checkout a

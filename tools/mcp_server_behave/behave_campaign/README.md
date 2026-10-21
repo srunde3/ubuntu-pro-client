@@ -186,10 +186,14 @@ job covers exactly one unit, so the mapping is:
 
 | MCP payload | Outcome |
 | --- | --- |
-| `completed`, every scenario passed | `passed` |
-| `completed`, any scenario failed | `failed` |
-| `completed`, only skips | `skipped` |
-| `completed`, no parseable report (`summary: null`) | `error` |
+| `finished`, every scenario passed | `passed` |
+| `finished`, any scenario failed | `failed` |
+| `finished`, only skips | `skipped` |
+| `finished`, no parseable report (`summary: null`) | `error` |
+
+An `interrupted` job, killed or dead, closes its attempt as `interrupted`
+with that reason. It has no outcome, so the unit runs again while the
+campaign runs.
 
 Anything else -- a scenario status outside passed/failed/skipped, no scenario
 counts at all, or a pass contradicted by `ok: false` -- cannot be classified.
@@ -230,7 +234,7 @@ checkout whose feature files define the scope and whose jobs run.
   reading the event stream.
 - `retry_units` -- ask for another attempt at units that already had one,
   and set the intent to run.
-- `kill_job` -- terminate a job that has hung.
+- `kill_job` -- kill a job that has hung.
 
 ## Events
 
@@ -317,10 +321,10 @@ The commands:
   changes nothing: there is no work to schedule.
 - `pause` sets the intent to hold, from any state. Jobs in flight finish and
   are recorded, so the campaign is `pausing` until they do. With `kill`, each
-  job in flight is signalled and its attempt is recorded as `interrupted` at
+  job in flight is killed and its attempt is recorded as `interrupted` at
   once, so the campaign is paused at once and those units run again on the
-  next `run`. A job the server cannot signal, such as one started by an
-  earlier server process, is named in `unsignalled`.
+  next `run`. A job whose process cannot be reached is named in
+  `unsignalled`.
 - `retry_units` requests another attempt at the selected units and sets the
   intent to run, in any state.
 
@@ -410,7 +414,7 @@ The other modules:
   Both share one serialisation path, so there is one on-disk format.
   `behave_mcp.domain.layout` names the directory convention.
 - `repo.py`: reads the checkout state a campaign was built from.
-- `service.py`: `CampaignService`, driven by both the MCP tool wrappers and
+- `service.py`: `CampaignService`, driven by both the MCP tool handlers and
   the CLI. Behaviour changes belong here.
 - `runner.py`: `CampaignRunner`, which handles `run`, `pause` and
   `retry_units`, opens lanes, records what finishes, and holds the run lock
@@ -419,7 +423,7 @@ The other modules:
   those are `schedule.plan_tick`, so the scheduler is testable without a
   thread. `ThreadTicker` is the `Ticker` port's real implementation; tests
   inject a fake and call `tick` themselves.
-- `cli.py`: the standalone front-end. Wrappers only: read arguments, call
+- `cli.py`: the standalone front-end. Handlers only: read arguments, call
   the service, print the response as JSON. Behaviour belongs in
   `service.py`, so the CLI and the MCP tools cannot drift apart.
 

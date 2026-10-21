@@ -35,7 +35,7 @@ def ordered_releases(
     return first + sorted(present - set(first))
 
 
-def completed_at(statuses: Sequence[UnitStatus]) -> str:
+def finished_at(statuses: Sequence[UnitStatus]) -> str:
     """When the last attempt finished."""
     return max(
         (
@@ -83,7 +83,7 @@ def render_campaign_json(
     document = {
         "campaign_id": campaign_id,
         "created_at": header.at,
-        "completed_at": completed_at(statuses),
+        "finished_at": finished_at(statuses),
         "state": state,
         "install_from": header.install_from,
         "lanes": lanes_as_dict(header.lanes),
@@ -179,7 +179,7 @@ def render_summary(
         "# SRU verification evidence: {}".format(campaign_id),
         "",
         "Completed {}. install_from: {}".format(
-            completed_at(statuses) or "unknown", header.install_from
+            finished_at(statuses) or "unknown", header.install_from
         ),
         _scope_line(header, statuses),
         _counts_line(statuses),

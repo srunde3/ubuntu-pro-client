@@ -29,7 +29,7 @@ Both packages use ports and adapters. A layer with more than one concern is a pa
 | Adapters | `adapters.py` | `adapters.py`, `repo.py` | Implement the ports with the filesystem, `subprocess`, `fcntl` and git. |
 | Services | `service.py` (`BehaveService`) | `service.py` (`CampaignService`), `runner.py` (`CampaignRunner`) | Orchestrate domain and ports. Most behaviour changes belong here. |
 | DTOs | `messages.py` | `messages.py` | Pydantic models returned to front-ends. |
-| Front-ends | `server.py`, `wrapper.py` | `cli.py` | Entry points. `server.py` and `cli.py` parse arguments, call one service method and serialise the result; `wrapper.py` is the process each job runs under. |
+| Front-ends | `server.py`, `job_process.py` | `cli.py` | Entry points. The handlers in `server.py` and `cli.py` parse arguments, call one service method and serialise the result; `job_process.py` is the process each job runs under. |
 | Config | `config.py` | none | Env vars parsed once into `Settings`. |
 
 Small collaborators are passed as plain callables, not ports: the clock (`now_utc`, `now`, `monotonic`), `sleep`, `new_job_id` and the git read (`repo_state`). Tests replace them with lambdas.
@@ -42,8 +42,8 @@ Small collaborators are passed as plain callables, not ports: the clock (`now_ut
 | How a result is shown to a caller or written for a reviewer | the package's views |
 | A new kind of external interaction | a `Protocol` in `ports.py`, an adapter in `adapters.py`, and a fake for tests |
 | What a tool or command does | the service method |
-| A new MCP tool | a wrapper in `server.py` registered with the local `@tool`, plus the README and the agent skills |
-| A new CLI command | a wrapper in `cli.py` over a `CampaignService` method |
+| A new MCP tool | a handler in `server.py` registered with the local `@tool`, plus the README and the agent skills |
+| A new CLI command | a handler in `cli.py` over a `CampaignService` method |
 | A new env var | `config.py` (`Settings` and its parser) and the README's environment section |
 | A new path under the state directory | `domain/layout.py`, which names paths and reads no env vars. The caller resolves `MCP_STATE_DIR` and passes it in. |
 
@@ -56,10 +56,10 @@ Everything the server writes lives under its own checkout's `.mcp_server_behave/
 | Path | Holds | Written by |
 | --- | --- | --- |
 | `jobs/<job_id>/job.json` | the launch record (`JobRecord`), written once | `BehaveService` |
-| `jobs/<job_id>/status.json` | the exit (`JobExit`), written once by rename | the wrapper |
-| `jobs/<job_id>/job.lock` | held by the wrapper while the job lives; holds its PID | the wrapper |
-| `jobs/<job_id>/kill` | left by a kill, for a wrapper still starting up | `kill_job` |
-| `lanes/<pool>/<n>.lock` | held by the wrapper of the job using that lane | the wrapper |
+| `jobs/<job_id>/exit.json` | the exit (`JobExit`), written once by rename | the job process |
+| `jobs/<job_id>/job.lock` | held by the job process while the job lives; holds its PID | the job process |
+| `jobs/<job_id>/kill` | left by a kill, for a job process still starting up | `kill_job` |
+| `lanes/<pool>/<n>.lock` | held by the process of the job using that lane | the job process |
 | `jobs/<job_id>/stdout.log` | combined stdout and stderr of the job | the behave subprocess |
 | `jobs/<job_id>/report.json` | behave's JSON report | the behave subprocess |
 | `campaigns/<id>/campaign.json` | the header and the units in scope, written once | `CampaignService` (create) |
@@ -74,7 +74,7 @@ Only a campaign's intent is written, and events are never stored: `domain/feed.p
 - One long-lived server process, serving MCP over streamable HTTP at `http://MCP_HOST:MCP_PORT/mcp`. FastMCP runs tool calls on worker threads.
 - `server.py` holds the long-lived objects: one `BehaveService`, one `CampaignRunner` and one `JsonlCampaignStore`, shared so a reader waiting for events is woken by the runner's appends. `CampaignService` is built per call. Nothing about a job is held in memory.
 - One daemon ticker thread calls `CampaignRunner.tick` every 2 s for the one campaign that is scheduling: running, finishing or pausing. It stops, and the run lock is released, once that campaign is paused or complete. The runner's guard serialises ticks and the `run`, `pause` and `retry_units` commands.
-- Each behave job runs under `behave_mcp/wrapper.py`, in its own session. The wrapper holds the job's lane lock (`lanes/<pool>/<n>.lock`) and `jobs/<id>/job.lock` for its whole life, runs `tox -e behave` as a child with a parent-death signal and stdin from `/dev/null`, and writes `status.json` when tox exits. A job's state is read off those files and locks, from any process. `kill_job` signals the wrapper, which passes SIGTERM to tox's process group.
+- Each behave job runs under `behave_mcp/job_process.py`, in its own session. The job process holds the job's lane lock (`lanes/<pool>/<n>.lock`) and `jobs/<id>/job.lock` for its whole life, runs `tox -e behave` as a child with a parent-death signal and stdin from `/dev/null`, and writes `exit.json` when tox exits. A job's state is read off those files and locks, from any process: a killed job is interrupted, never failed. `kill_job` sends SIGTERM to the job process, which passes it to tox's process group.
 
 ## Surface rules
 

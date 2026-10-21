@@ -67,7 +67,7 @@ def completed(
     if unknown:
         scenarios["unknown"] = unknown
     return {
-        "status": "completed",
+        "status": "finished",
         "ok": ok,
         "job_id": job_id,
         "summary": {"scenarios": scenarios, "features": {}},

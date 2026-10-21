@@ -101,26 +101,26 @@ class FileLanePool:
         return layout.lane_path(self._lanes_dir(), pool.value, lane)
 
 
-def _wrapper_command(job_dir: Path, command: list[str]) -> list[str]:
+def _job_process_command(job_dir: Path, command: list[str]) -> list[str]:
     return [
         sys.executable,
         "-m",
-        "behave_mcp.wrapper",
+        "behave_mcp.job_process",
         str(job_dir),
         "--",
         *command,
     ]
 
 
-class LockedJobLauncher:
-    """Starts each job under ``behave_mcp.wrapper``, which holds the lane
+class JobProcessLauncher:
+    """Starts each job under ``behave_mcp.job_process``, which holds the lane
     and the job's own lock for its whole life.
 
     Whether a job is alive is whether its lock is held, which any process
-    can ask. Once the wrapper can take a kill, it writes its PID into the
-    lock file, so any process can also signal it -- trusted only while the
-    lock is held, since a held lock means the wrapper is alive and its PID
-    cannot have been reused.
+    can ask. Once the job process can take a kill, it writes its PID into
+    the lock file, so any process can also kill it -- trusted only while the
+    lock is held, since a held lock means the job process is alive and its
+    PID cannot have been reused.
     """
 
     def __init__(self, jobs_dir: Callable[[], Path]) -> None:
@@ -144,7 +144,7 @@ class LockedJobLauncher:
             inherited = tuple(fd for fd in (lane_fd, job_fd) if fd is not None)
             try:
                 subprocess.Popen(
-                    _wrapper_command(paths.job_dir, command),
+                    _job_process_command(paths.job_dir, command),
                     cwd=cwd,
                     env=env,
                     stdin=subprocess.DEVNULL,
@@ -158,7 +158,7 @@ class LockedJobLauncher:
             except OSError as exc:
                 raise JobStartError(str(exc)) from exc
         finally:
-            # From here only the wrapper holds the locks.
+            # From here only the job process holds the locks.
             if job_fd is not None:
                 os.close(job_fd)
             lease.close()
@@ -166,11 +166,11 @@ class LockedJobLauncher:
     def is_running(self, job_id: str) -> bool:
         return _is_locked(self._paths(job_id).lock)
 
-    def signal(self, job_id: str) -> bool:
+    def kill(self, job_id: str) -> bool:
         """Kill a running job.
 
-        The kill is left as a marker first. A wrapper still starting up has
-        not written its PID yet; it reads the marker before it starts the
+        The kill is left as a marker first. A job process still starting up
+        has not written its PID yet; it reads the marker before it starts the
         job, so a kill is never lost to the race.
         """
         paths = self._paths(job_id)
@@ -206,8 +206,8 @@ class LocalFeatureFileReader:
 class LocalJobResultStoreFactory:
     """Creates filesystem-backed job result stores bound to a log dir."""
 
-    def bind(self, log_dir: Path) -> "LocalJobResultStore":
-        return LocalJobResultStore(log_dir)
+    def bind(self, jobs_dir: Path) -> "LocalJobResultStore":
+        return LocalJobResultStore(jobs_dir)
 
 
 def _write_atomic(path: Path, text: str) -> None:
@@ -265,11 +265,11 @@ class LocalJobResultStore:
     results by ``job_id`` only.
     """
 
-    def __init__(self, log_dir: Path) -> None:
-        self._log_dir = log_dir
+    def __init__(self, jobs_dir: Path) -> None:
+        self._jobs_dir = jobs_dir
 
     def _paths(self, job_id: str) -> layout.JobPaths:
-        return layout.job_paths(self._log_dir, job_id)
+        return layout.job_paths(self._jobs_dir, job_id)
 
     def write_targets(self, job_id: str) -> WriteTargets:
         paths = self._paths(job_id)
@@ -283,7 +283,7 @@ class LocalJobResultStore:
         return Artifacts(
             job_dir=str(paths.job_dir),
             record=str(paths.record),
-            status=str(paths.status),
+            exit=str(paths.exit),
             stdout_log=str(paths.stdout_log),
             json_report=str(paths.json_report),
         )
@@ -301,14 +301,14 @@ class LocalJobResultStore:
             return
 
     def read_exit(self, job_id: str) -> JobExit | None:
-        return _read_model(self._paths(job_id).status, JobExit)
+        return _read_model(self._paths(job_id).exit, JobExit)
 
     def write_exit(self, job_id: str, exit: JobExit) -> JobExit:
         written = self.read_exit(job_id)
         if written is not None:
             return written
         try:
-            _write_atomic(self._paths(job_id).status, _json_text(exit))
+            _write_atomic(self._paths(job_id).exit, _json_text(exit))
         except OSError:
             # The exit is still reported; it is recorded on a later look.
             pass
@@ -349,18 +349,18 @@ class LocalJobResultStore:
         paths = self._paths(job_id)
         return ExistsFlags(
             record=paths.record.exists(),
-            status=paths.status.exists(),
+            exit=paths.exit.exists(),
             stdout_log=paths.stdout_log.exists(),
             json_report=paths.json_report.exists(),
         )
 
     def list_job_ids(self) -> list[str]:
         """Every job with a launch record: ``jobs/*/job.json``."""
-        if not self._log_dir.exists():
+        if not self._jobs_dir.exists():
             return []
         return sorted(
             path.parent.name
-            for path in self._log_dir.glob(
+            for path in self._jobs_dir.glob(
                 "*/{}".format(layout.JOB_RECORD_NAME)
             )
         )
@@ -407,7 +407,7 @@ class LocalWorkspace:
             return Path(configured).expanduser().resolve()
         return layout.state_dir(self.resolve_repo_root(None), None)
 
-    def resolve_log_dir(self) -> Path:
+    def resolve_jobs_dir(self) -> Path:
         return self._subdir(layout.JOBS_SUBDIR)
 
     def resolve_campaign_dir(self) -> Path:

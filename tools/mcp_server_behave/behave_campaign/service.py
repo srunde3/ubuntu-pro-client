@@ -1,6 +1,6 @@
 """Orchestrates the campaign domain and ports into tool behaviours.
 
-``CampaignService`` is driven by the MCP tool wrappers in
+``CampaignService`` is driven by the MCP tool handlers in
 ``behave_mcp.server`` and by ``behave_campaign.cli``. Neither the clock nor
 the filesystem is reached directly, so the whole service is exercisable with
 fakes.

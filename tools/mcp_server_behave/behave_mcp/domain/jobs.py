@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Collection, Iterable, Mapping
 
 from behave_mcp.domain.pools import POOL_LIMIT_ENV_VARS, POOL_OF, Pool
-from behave_mcp.messages import JobRecord, RunStatus
+from behave_mcp.messages import Interruption, JobExit, JobRecord, JobState
 
 # features/environment.py reads this exact name (UAClientBehaveConfig's
 # UACLIENT_BEHAVE_ prefix + install_from) to pick where the behave
@@ -104,18 +104,26 @@ def validate_install_from(install_from: str) -> str | None:
     return None
 
 
-def job_state(*, exited: bool, lock_held: bool) -> RunStatus:
-    """A job's state from its files and its lock.
+def job_state(*, exit: JobExit | None, lock_held: bool) -> JobState:
+    """A job's state from its exit and its lock.
 
-    The wrapper holds the job lock for its whole life and writes the exit
-    before it lets go, so an exit decides; without one, a held lock means
-    the wrapper is alive, and a free one means it died without finishing.
+    The job process holds the job lock for its whole life and writes the
+    exit before it lets go, so an exit decides: a killed job is
+    interrupted, any other has finished. Without one, a held lock means the
+    job process is alive, and a free one means it died.
     """
-    if exited:
-        return RunStatus.COMPLETED
+    if exit is not None:
+        return JobState.INTERRUPTED if exit.killed else JobState.FINISHED
     if lock_held:
-        return RunStatus.RUNNING
-    return RunStatus.INTERRUPTED
+        return JobState.RUNNING
+    return JobState.INTERRUPTED
+
+
+def interruption(exit: JobExit | None) -> Interruption:
+    """Why an interrupted job ended without a result."""
+    if exit is not None and exit.killed:
+        return Interruption.KILLED
+    return Interruption.DIED
 
 
 def exact_name_pattern(scenario_name: str) -> str:

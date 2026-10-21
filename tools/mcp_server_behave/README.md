@@ -24,10 +24,10 @@ The server exposes these MCP tools:
   - The job runs in its own session with no stdin, so `kill_job` stops it and everything it started.
   - Optional `install_from` controls where `ubuntu-pro-client` is installed from before the scenario runs (sets `UACLIENT_BEHAVE_INSTALL_FROM` for the behave subprocess). Allowed values: `local` (default), `archive`, `daily`, `staging`, `stable`, `proposed`.
   - Returns `repo_state`: `repo_root`'s git `commit`, `branch`, and `dirty` flag at launch time (all `null` when `repo_root` isn't a git checkout), so results can be correlated back to the exact code tested. Also persisted on the job record.
-- `list_scenario_jobs` -- lists active jobs plus a bounded window of recently completed ones.
+- `list_scenario_jobs` -- lists active jobs plus a bounded window of recently ended ones (finished or interrupted).
   - No known `job_id` or access to system processes required.
   - Reads every job off disk, so a job started by another server, by the CLI, or before a restart is listed and its state is current.
-  - Optional `limit` caps how many completed jobs are returned (most recent first). `total_completed` and `truncated` in the response tell you if older jobs were dropped. `limit` must be positive; values above the server max are silently capped, with `limit_clamped` set when that happens.
+  - Optional `limit` caps how many ended jobs are returned (most recent first). `total_ended` and `truncated` in the response tell you if older jobs were dropped. `limit` must be positive; values above the server max are silently capped, with `limit_clamped` set when that happens.
 - `get_scenario_results` -- what came of each job: what it ran, `status` and `ok`, behave's own counts, and every failing step with its message.
   - One `JobResult` per job, most recently started first -- the same shape `wait_for_scenario_completion` returns for one job.
   - Optional `job_ids`, `feature_file`, `scenario_name` (substring), `release`, `machine_type`, and `status` filters; `limit` caps the jobs listed, with `total` and `truncated` alongside. `limit` must be positive; values above the server max are capped, with `limit_clamped` set.
@@ -61,8 +61,8 @@ still land here, so one server keeps one set of jobs and campaigns:
 For each started job, the server writes artifacts under `jobs/`:
 
 - `<job_id>/job.json`: what the job was asked to do -- unit, command, install source, checkout and its git state, start time, artifact paths. Written once, at launch.
-- `<job_id>/status.json`: how it ended -- `returncode`, `ok`, `killed`, `completed_at`, and the `error` when tox could not start. Written once, by the job's wrapper; a job without one is running, or was interrupted.
-- `<job_id>/job.lock`: held by the job's wrapper for as long as it lives, and holding its PID. See [How a job runs](#how-a-job-runs).
+- `<job_id>/exit.json`: how it ended -- `returncode`, `ok`, `killed`, `finished_at`, and the `error` when tox could not start. Written once, by the job process; a job without one is running, or was interrupted.
+- `<job_id>/job.lock`: held by the job process for as long as it lives, and holding its PID. See [How a job runs](#how-a-job-runs).
 - `<job_id>/stdout.log`: combined stdout/stderr stream
 - `<job_id>/report.json`: behave JSON formatter output
 
@@ -121,7 +121,7 @@ is can be read without scanning the event stream.
 
 `retry_units` asks for another attempt at units that already had one, which
 is the only way a non-passing unit is ever re-run. It always sets the
-campaign's intent to run. `kill_job` terminates a
+campaign's intent to run. `kill_job` kills a
 job that has hung, so its lane is recorded and freed instead of held open.
 
 The package is also usable on its own through the `behave-campaign` CLI,
@@ -281,24 +281,28 @@ and campaign lives in the server's state directory.
 
 ## How a job runs
 
-Each job runs under its own wrapper process, `python -m behave_mcp.wrapper`,
+Each job runs under its own job process, `python -m behave_mcp.job_process`,
 in its own session, so the server's death or a signal to it never reaches the
-job. The server starts the wrapper and hands it two locks: the job's lane and
-`jobs/<id>/job.lock`. The wrapper holds both for its whole life, runs tox as
-its child, and when tox exits writes `status.json` and exits.
+job. The server starts the job process and hands it two locks: the job's lane
+and `jobs/<id>/job.lock`. The job process holds both for its whole life, runs
+tox as its child, and when tox exits writes `exit.json` and exits.
 
 That is what makes a job's state readable from any process, after any crash:
 
-| `status.json` | `job.lock` held | state |
+| `exit.json` | `job.lock` held | state |
 | --- | --- | --- |
-| yes | either | `completed` |
+| yes, `killed: false` | either | `finished` |
+| yes, `killed: true` | either | `interrupted`, reason `killed` |
 | no | yes | `running` |
-| no | no | `interrupted`: the wrapper died without recording an exit |
+| no | no | `interrupted`, reason `died`: the job process died without writing an exit |
 
-tox gets a parent-death signal, so it cannot outlive its wrapper. `kill_job`
-sends SIGTERM to the wrapper, which passes it to tox's process group and waits
-for it, so pycloudlib can delete what it made; the exit is recorded with
-`killed: true`. A hard kill or a reboot can leave an instance behind: cleaning
+An interrupted job has no result: it is never a failure or an error, and
+nothing it did counts.
+
+tox gets a parent-death signal, so it cannot outlive its job process.
+`kill_job` sends SIGTERM to the job process, which passes it to tox's process
+group and waits for it, so pycloudlib can delete what it made; the exit is
+recorded with `killed: true`. A hard kill or a reboot can leave an instance behind: cleaning
 those up is pycloudlib's business, not this tool's.
 
 - Some sort of API config endpoint and tool - can expose to the agent any relevant and non-secret config values. For secret config values like the token and cloud creds, we can indicate if they're set so that the agent can at least correlate skipped tests with missing required config.

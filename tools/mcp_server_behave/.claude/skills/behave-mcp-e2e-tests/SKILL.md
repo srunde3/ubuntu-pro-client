@@ -27,7 +27,7 @@ assert peak_lanes >= LANES, (
 
 Bad: an e2e test for a rule. Classifying a skipped result is a unit test of `classify_result`. Here it costs a tox run and fails for reasons unrelated to the rule.
 
-Good: it chooses work that needs no machine when the machine is not the point. `features/_version.feature`'s attached-version scenario skips without `contract_token` config, before anything is provisioned, so the campaign and job tests prove the scheduler, the wrapper and the locks on any host with tox.
+Good: it chooses work that needs no machine when the machine is not the point. `features/_version.feature`'s attached-version scenario skips without `contract_token` config, before anything is provisioned, so the campaign and job tests prove the scheduler, the job process and the locks on any host with tox.
 
 Bad: it depends on a token or LXD without saying so. Check for the requirement and `pytest.skip` with a reason, as `test_e2e.py` does for the token.
 
