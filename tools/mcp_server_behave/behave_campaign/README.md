@@ -20,18 +20,21 @@ record types:
 
 | type | written when | says |
 | --- | --- | --- |
-| `campaign` | once, in `campaign.json` | how the campaign was built: scope, checkout, install source, lanes |
+| `campaign` | once, in `campaign.json` | how the campaign was built: scope, checkout, install source, max jobs |
 | `plan` | once per unit, in `campaign.json` | this unit is in scope |
-| `started` | a lane opens | a job began for this unit, and what it installs from |
+| `started` | a job is queued for the unit | which job, and what it installs from |
 | `finished` | that job ends | what it established: `passed`, `failed`, `skipped` or `error`; the first failing steps; and, for a result that could not be classified, the `reason` |
 | `interrupted` | the job is killed, or its process dies | the job ended without an outcome, and why: `killed` or `died` |
 | `intent` | `run`, `pause` or `retry_units` | what the caller asked the campaign to do: `run` or `hold` |
 | `retry` | `retry_units` | someone asked for another go at a unit |
-| `starved` | a lane is refused for want of capacity | which pool, and why; once per episode, until a lane next opens in that pool |
+| `starved` | the job service refuses to queue a unit, such as for a disabled pool | which pool, and why; once per episode, until a job is next queued in that pool |
 | `overdue` | a job runs past the overdue threshold | which job, and for how long; once per job |
 
 One try at a unit is one job, written as two records. Both are needed: the
-`started` record is what holds the lane, including across a restart. Neither
+`started` record is what keeps the unit in flight, including across a
+restart. It is written before the job is queued, so a crash between the two
+leaves an attempt whose job does not exist, which the next reconcile records
+as interrupted and queues again, never a job that nobody records. Neither
 is an attempt on its own -- an **attempt** is the pair, matched on `job_id`,
 and that is what `attempts` and `attempt_count` report. A unit tried twice has
 two attempts, not four.
@@ -44,9 +47,9 @@ established nothing: it closes the attempt and leaves the unit to run again.
 The `campaign` header captures how the campaign was built, so it can be
 recreated and audited later: the campaign id, the filters used, the checkout it
 was built from (root, commit, branch, dirty), and when. The header also records the
-`install_from` every job runs with and the `lanes` a runner may fill in each
-pool its units draw on; both are required, so a campaign always says how it is
-meant to be run. Every record carries a
+`install_from` every job runs with and its `max_jobs` in each pool its units
+draw on, how many of its jobs may be in flight at once; both are required, so
+a campaign always says how it is meant to be run. Every record carries a
 UTC timestamp, and every attempt records the install source the job ran with --
 the evidence an SRU verification actually rests on, which would otherwise only
 live in MCP job history that expires.
@@ -60,7 +63,7 @@ A unit's state is derived, never stored:
   or `error`.
 - With no finished attempt, it is `unattempted`.
 
-A unit is **queueable** -- the scheduler may start an attempt at it -- when it
+A unit is **queueable** -- reconcile may queue an attempt at it -- when it
 is not in flight and it is unattempted, has a retry requested since its last
 attempt, or its latest attempt was interrupted. A problem unit is not
 queueable on its own.
@@ -99,9 +102,9 @@ uv run behave-campaign create --campaign-id 1234567 \
 # With no filters, the campaign covers every feature file.
 uv run behave-campaign create --campaign-id 1234567
 
-# Record the install source and lanes per pool for a runner to honour.
+# Record the install source, and max jobs per pool.
 uv run behave-campaign create --campaign-id 1234567 \
-  --install-from proposed --lxd-lanes 6 --cloud-lanes 4 --wsl-lanes 1
+  --install-from proposed --max-lxd-jobs 6 --max-cloud-jobs 4 --max-wsl-jobs 1
 
 # Inspect a campaign a server is running.
 uv run behave-campaign status --campaign-id 1234567 --state failed
@@ -135,32 +138,33 @@ its id is always the directory's name. `--repo-root` defaults to `$UBUNTU_PRO_CL
 server of its own. `--since-seq` and
 `--kinds` work as they do for `await_campaign_events`. With `--follow` it
 prints one batch per line as events arrive, polling every `--interval`
-seconds, and returns once the campaign is paused or complete. The CLI records
-no results and has no control verbs: the scheduler, which records every
-result, and its run lock live in the server process.
+seconds, and returns once the campaign is paused or complete. The CLI has no
+control verbs yet, but every command ends with a reconcile, so running one
+moves every campaign on the checkout forward.
 
 The CLI prints the same response shapes the MCP tools return. `create` and
 `status` carry the campaign's header (how it was built: scope, checkout,
-install source, lanes) under `campaign` and its summary (state, intent,
-progress, lanes in flight, counts by unit state) under `summary`; every other
+install source, max jobs) under `campaign` and its summary (state, intent,
+progress, jobs in flight, counts by unit state) under `summary`; every other
 response carries the summary fields alone, since the header never changes. `status` reports
 counts, in-flight units and problems; `units` and `history` list individual
 units, capped at `--limit` and saying so.
 
-`create` records `--install-from` (default `local`) and lanes for each pool
-the campaign's units draw on, for a runner to honour later:
+`create` records `--install-from` (default `local`) and max jobs for each
+pool the campaign's units draw on:
 
 | Pool | Machine types | Flag |
 | --- | --- | --- |
-| `lxd` | `lxd-container`, `lxd-vm` | `--lxd-lanes` |
-| `cloud` | `aws.*`, `gcp.*`, `azure.*` | `--cloud-lanes` |
-| `wsl` | `wsl` | `--wsl-lanes` |
+| `lxd` | `lxd-container`, `lxd-vm` | `--max-lxd-jobs` |
+| `cloud` | `aws.*`, `gcp.*`, `azure.*` | `--max-cloud-jobs` |
+| `wsl` | `wsl` | `--max-wsl-jobs` |
 
-A pool in scope that is not given gets one lane. Lanes for a pool no unit
-draws on are rejected, because they usually mean the scope is not what was
-meant, and `wsl` takes at most one lane because WSL jobs share one Windows
-host. The scheduler fills each pool separately, so a busy WSL lane never
-holds back LXD work.
+A pool in scope that is not given gets 1. Max jobs for a pool no unit draws
+on are rejected, because they usually mean the scope is not what was meant,
+and `wsl` takes at most 1 because WSL jobs share one Windows host. Each pool
+fills separately, so a busy WSL job never holds back LXD work. A campaign's
+max jobs is its own share: the checkout's max jobs
+(`behave-campaign config`) still caps how many jobs run at once in all.
 
 Splitting work across people happens out of band: each person creates their
 own campaign with the slice they agreed to run.
@@ -181,7 +185,7 @@ The tool fails loudly instead of guessing:
 
 ## MCP results
 
-The scheduler records each finished job as the outcome of one attempt. Each
+Reconcile records each finished job as the outcome of one attempt. Each
 job covers exactly one unit, so the mapping is:
 
 | MCP payload | Outcome |
@@ -198,7 +202,7 @@ campaign runs.
 Anything else -- a scenario status outside passed/failed/skipped, no scenario
 counts at all, or a pass contradicted by `ok: false` -- cannot be classified.
 A skipped Examples row alongside a passing one is not one of these: that run
-passed. The scheduler records an unclassifiable result as `error`, keeps the
+passed. Reconcile records an unclassifiable result as `error`, keeps the
 reason, and goes on rather than stopping the campaign.
 
 ## MCP tools
@@ -210,22 +214,23 @@ its `campaigns/` subdirectory. Only `create_campaign` takes a `repo_root`: the
 checkout whose feature files define the scope and whose jobs run.
 
 - `create_campaign` -- plan a campaign and store it, starting nothing.
-  Returns the unit count so scope can be confirmed first. `lanes` takes
+  Returns the unit count so scope can be confirmed first. `max_jobs` takes
   `lxd`, `cloud` and `wsl`; each may not exceed the checkout's max jobs for
   that pool (`behave-campaign config`), and a campaign with units in a
   disabled pool is rejected. A campaign that would silently run
   slower than asked is rejected instead.
 - `list_campaigns` -- every stored campaign: its state, the header fields
   that identify it, and how many values each scope filter names.
-- `campaign_status` -- one campaign's counts, the lanes busy in each pool,
+- `campaign_status` -- one campaign's counts, its jobs in flight in each pool,
   the units in flight, and the units needing action, one unit per row or -- with `group_by=scenario` --
   one scenario per row with its units bucketed by state, which is how a
   scenario failing on every release reads at a glance. Either list is capped
   at `problems_limit` (50 over MCP; the CLI lists all) with `problems_total`
   alongside. Individual units are `unit_history`'s job.
 - `control_campaign` -- `run` or `pause`, from any state. `run` sets the
-  intent to run: the server then keeps each pool's lanes full and fills a
-  lane as soon as one frees, with no further calls needed to keep it moving.
+  intent to run and queues what the campaign's max jobs allow at once; each
+  job's own process records its outcome when it ends and queues the next
+  unit, so no further calls are needed to keep it moving.
   `pause` sets the intent to hold; with `kill: true` it also kills the jobs
   in flight. See [States](#states).
 - `await_campaign_events` -- wait for news, with a cursor.
@@ -280,10 +285,11 @@ appends at once, and notices another process's within a second.
 skips usually means a config the host does not have, and one scenario failing
 across every release usually means a real defect rather than flake -- but
 which of those it is, and what to do about it, is not for an unattended loop
-to decide. Each is announced once per condition, so a lane that stays slow
+to decide. Each is announced once per condition, so a job that stays slow
 does not flood the stream: a repeated failure or run of skips the first time
-it holds, a starved pool once until a lane next opens there, an overdue job
-once. Starvation and overdue are written as records, so a restart does not
+it holds, a starved pool once until a job is next queued there, an overdue
+job once, timed from when the job started running rather than from when it
+was queued. Starvation and overdue are written as records, so a restart does not
 announce them again.
 
 There is deliberately no heartbeat. Every response carries the campaign's
@@ -306,47 +312,52 @@ is queueable, `finishing` while nothing is queueable but a job is in flight,
 and `settled` otherwise. The named state is read off intent, progress and
 whether any job is in flight:
 
-| State | Intent | Progress | What the scheduler does |
+| State | Intent | Progress | What reconcile does |
 | --- | --- | --- | --- |
 | `created` | never run | untouched | nothing |
-| `running` | run | untouched or open | records exits, starts queueable units on free lanes |
-| `finishing` | run | finishing | records exits |
+| `running` | run | untouched or open | records ended jobs, queues queueable units up to max jobs |
+| `finishing` | run | finishing | records ended jobs |
 | `complete` | run or hold | settled | nothing |
-| `pausing` | hold | open or finishing, with a job in flight | records exits, starts nothing |
+| `pausing` | hold | open or finishing, with a job in flight | records ended jobs, queues nothing |
 | `paused` | hold | untouched or open, nothing in flight | nothing |
+
+A unit is in flight from the moment its job is queued, including while it
+waits for a lane. An interrupted job, killed or dead, makes its unit
+queueable, so under intent run reconcile queues it again as a new attempt;
+under hold it waits for the next `run`.
 
 The commands:
 
-- `run` sets the intent to run, from any state. On a complete campaign it
-  changes nothing: there is no work to schedule.
+- `run` sets the intent to run, from any state, and reconciles. On a
+  complete campaign it changes nothing: there is no work to queue.
 - `pause` sets the intent to hold, from any state. Jobs in flight finish and
   are recorded, so the campaign is `pausing` until they do. With `kill`, each
   job in flight is killed and its attempt is recorded as `interrupted` at
   once, so the campaign is paused at once and those units run again on the
   next `run`. The response lists those units in `killed`, and names a job
   whose process cannot be reached in `not_killed`.
-- `retry_units` requests another attempt at the selected units and sets the
-  intent to run, in any state.
+- `retry_units` requests another attempt at the selected units, sets the
+  intent to run, and reconciles, in any state.
 
 `complete` is not something anyone writes or asks for. It is when the
 evidence is final, so it gates export, and when a watcher can stop. It is not
 terminal: `retry_units` on a complete campaign gives it work and sets it
 running.
 
-The scheduler never retries. A unit that failed, was skipped, or errored stays
+Reconcile never retries. A unit that failed, was skipped, or errored stays
 that way until someone asks for another attempt, because judging a failure
 flaky-or-real is not something an unattended loop should decide. A `retry`
 record makes the unit queueable until its next attempt starts; the file still
 says who asked and when.
 
-One campaign schedules at a time. It holds the run lock while it is running,
-finishing or pausing, and releases it once paused or complete, so a paused
-campaign never blocks another.
-
-Lane state lives in the record, not in memory: a unit in flight is one with
-an attempt that has neither finished nor been interrupted, written before the
-lane is released. That is what lets a tick pick up where the last one left
-off.
+Any number of campaigns may run at once, alongside one-off jobs. Nothing
+long-lived drives them: `CampaignService.reconcile` brings every campaign up
+to date and then starts queued jobs, and it runs after every MCP tool call,
+every 5 seconds in the server, after every CLI command, and in each job's
+own process when its job ends. It decides from files alone, under the state
+directory's one `reconcile.lock`, which `run`, `pause`, `retry_units` and
+`create` take too. A restart therefore changes nothing: a new process reads
+the same files and carries on.
 
 ## Types
 
@@ -366,7 +377,7 @@ that silently matches nothing:
 | `ControlAction` | `run`, `pause` | `domain/schedule.py` |
 | `EventKind` | every event, with a `family` property | `domain/events.py` |
 | `Cause` | `run`, `pause`, `retry`, `scheduler` | `domain/records.py` |
-| `EventFamily` | `campaign`, `lane`, `unit`, `anomaly` | `domain/events.py` |
+| `EventFamily` | `campaign`, `job`, `unit`, `anomaly` | `domain/events.py` |
 
 They all subclass `StringEnum`, so a member reads and serialises as its
 value (`"hold"`, not `"Intent.HOLD"`) and compares equal to the plain
@@ -384,12 +395,13 @@ packages with one module per concern.
   read and written.
 - `state.py`: what the records say now: unit states, intent, progress, the
   named state, problems.
-- `schedule.py`: what a tick decides. `plan_tick` chooses which finished
-  lanes to record and which units to start.
+- `schedule.py`: what one reconcile decides for a campaign.
+  `plan_campaign` chooses which ended jobs to record and which units to
+  queue.
 - `classify.py`: what a finished MCP job established for its unit.
 - `events.py`: event kinds, subscription presets and matching, and the
   event a change of state announces.
-- `signals.py`: the thresholds for derived signals, and which lanes are
+- `signals.py`: the thresholds for derived signals, and which jobs are
   overdue.
 - `feed.py`: derives every event from the record log.
 - `discovery.py`: builds units from the feature files through
@@ -400,36 +412,28 @@ packages with one module per concern.
 nothing:
 
 - `responses.py`: the response DTOs in `messages.py`.
-- `export.py`: the bundle's `SUMMARY.md`, `campaign.json` and `units.csv`.
+- `export.py`: the bundle's `SUMMARY.md`, `export.json` and `units.csv`.
 
 The other modules:
 
 - `messages.py`: pydantic DTOs returned across the MCP boundary.
-- `ports.py`: the Protocols the service and runner depend on:
-  `CampaignStore`, `FeatureReader`, `LaneRunner`, `Ticker`,
-  `CampaignRunLock`, `JobFiles`, `BundleWriter`.
+- `ports.py`: the Protocols the service depends on: `CampaignStore`,
+  `FeatureReader`, `JobRunner` (the job service, as a campaign uses it),
+  `JobFiles`, `BundleWriter`.
 - `adapters.py`: concrete implementations. Two stores satisfy
   `CampaignStore`: the MCP names a campaign by id under the campaigns
   directory, and the CLI can also be pointed at one campaign's directory.
   Both share one serialisation path, so there is one on-disk format.
   `behave_mcp.domain.layout` names the directory convention.
 - `repo.py`: reads the checkout state a campaign was built from.
-- `service.py`: `CampaignService`, driven by both the MCP tool handlers and
-  the CLI. Behaviour changes belong here.
-- `runner.py`: `CampaignRunner`, which handles `run`, `pause` and
-  `retry_units`, opens lanes, records what finishes, and holds the run lock
-  for the one campaign that may be scheduling. It is the
-  only module that starts a thread, and it makes no scheduling decisions:
-  those are `schedule.plan_tick`, so the scheduler is testable without a
-  thread. `ThreadTicker` is the `Ticker` port's real implementation; tests
-  inject a fake and call `tick` themselves.
+- `service.py`: `CampaignService`, built per call by every entry point:
+  the MCP server, the CLI and each job process. It creates and reports on
+  campaigns, runs the commands, and reconciles. Behaviour changes belong
+  here; its decisions are `schedule.plan_campaign`'s, so tests drive it by
+  calling `reconcile` themselves.
 - `cli.py`: the standalone front-end. Handlers only: read arguments, call
   the service, print the response as JSON. Behaviour belongs in
   `service.py`, so the CLI and the MCP tools cannot drift apart.
-
-The run lock is an advisory `flock` on the campaign's `campaign.lock`, held for as long
-as a campaign is scheduling, so a second server cannot schedule it
-too. The CLI does not take it. The kernel drops it if the holder dies.
 
 ## Build, test, lint
 

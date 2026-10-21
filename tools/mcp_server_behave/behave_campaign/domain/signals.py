@@ -12,7 +12,7 @@ from datetime import datetime
 from typing import Iterable, Sequence
 
 from behave_campaign.domain.records import OverdueRecord
-from behave_campaign.domain.schedule import Lane
+from behave_campaign.domain.schedule import InFlightJob
 
 DEFAULT_OVERDUE_SECONDS = 3600.0
 
@@ -40,27 +40,28 @@ def elapsed_seconds(since: str, now: str) -> float | None:
     return (end - start).total_seconds()
 
 
-def overdue_lanes(
-    lanes: Sequence[Lane],
+def overdue_jobs(
+    jobs: Sequence[InFlightJob],
     *,
     at: str,
     overdue_seconds: float,
     reported: Iterable[str],
 ) -> list[OverdueRecord]:
-    """Records for lanes running past ``overdue_seconds`` and not yet
-    reported."""
+    """Records for jobs running past ``overdue_seconds`` and not yet
+    reported. Time spent queued does not count: the clock starts when the
+    job does."""
     already = set(reported)
     found = []
-    for lane in lanes:
-        if lane.finished or lane.job_id in already:
+    for job in jobs:
+        if job.ended or job.job_id in already or not job.started_at:
             continue
-        age = elapsed_seconds(lane.opened_at, at)
+        age = elapsed_seconds(job.started_at, at)
         if age is None or age < overdue_seconds:
             continue
         found.append(
             OverdueRecord(
-                unit=lane.unit,
-                job_id=lane.job_id,
+                unit=job.unit,
+                job_id=job.job_id,
                 elapsed_seconds=int(age),
                 at=at,
             )

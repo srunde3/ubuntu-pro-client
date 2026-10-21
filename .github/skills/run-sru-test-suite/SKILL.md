@@ -24,17 +24,19 @@ failure classes mean on this host.
 3. Ask whether this is a full run or a named set of feature files or
    scenarios.
 4. `create_campaign` with the agreed scope, `install_from: proposed`, and
-   `lanes` for each pool the scope covers: `lxd` for `lxd-container` and
+   `max_jobs` for each pool the scope covers: `lxd` for `lxd-container` and
    `lxd-vm`, `cloud` for `aws.*`, `gcp.*` and `azure.*`, `wsl` for `wsl`. A
-   pool left out gets 1 lane. Ask the user how many LXD and cloud lanes the
-   host and cloud accounts can take; `wsl` is always 1.
-5. Report the unit count and lanes it returns and **get the user's
+   pool left out gets 1. Ask the user how many LXD and cloud jobs the host
+   and cloud accounts can take at once; `wsl` is always 1.
+5. Report the unit count and max jobs it returns and **get the user's
    confirmation before starting**.
 
-If `create_campaign` rejects the scope or the lanes, resolve it with the
-user; do not work around it. A pool disabled or limited below the lanes
+If `create_campaign` rejects the scope or the max jobs, resolve it with the
+user; do not work around it. A pool disabled or limited below the max jobs
 asked for is the checkout's config (`behave-campaign config set
-max_jobs.<pool> N`), which only the user changes.
+max_jobs.<pool> N`), which only the user changes. Other campaigns and
+one-off jobs share the checkout's lanes, so this campaign's jobs may wait
+their turn.
 
 ## Run it
 
@@ -68,7 +70,7 @@ complete picture, not a green one.
 - `job.overdue`: decide whether to `kill_job` it.
 - Before retrying a unit a second time, check `unit_history`; a unit that
   erred the same way twice is not a flake.
-- If one cause is failing every lane, pause, fix it, then `retry_units` in
+- If one cause is failing every job, pause, fix it, then `retry_units` in
   a batch with a `reason`.
 
 ## Stop, retry, run again

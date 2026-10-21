@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 import behave_mcp.server as server_module
-from behave_campaign.ports import CampaignLockedError, LaneStartError
+from behave_campaign.ports import QueueRefused
 from behave_mcp.adapters import (
     LocalFeatureFileReader,
     LocalJobResultStore,
@@ -29,10 +29,9 @@ def private_state_dir(monkeypatch, tmp_path):
 
 @pytest.fixture(autouse=True)
 def fresh_campaign_store(monkeypatch):
-    """The server builds its campaign store and runner on first use; each
-    test gets its own, bound to that test's state directory."""
+    """The server builds its campaign store on first use; each test gets
+    its own, bound to that test's state directory."""
     monkeypatch.setattr(server_module, "_store", None)
-    monkeypatch.setattr(server_module, "_runner", None)
 
 
 # One scenario covering every pool, so a test can start a job on any of
@@ -317,7 +316,7 @@ def result_error_text(result):
 
 
 def job_result(passed=1, failed=0, job_id="job", failures=()):
-    """A finished job as ``LaneRunner.poll`` reports it."""
+    """A finished job as ``JobRunner.poll`` reports it."""
     return {
         "state": "finished",
         "ok": failed == 0,
@@ -330,51 +329,64 @@ def job_result(passed=1, failed=0, job_id="job", failures=()):
     }
 
 
-class FakeLanes:
-    """A ``LaneRunner`` that starts fake jobs.
+class FakeJobRunner:
+    """A ``JobRunner`` over fake jobs.
 
-    A job finishes when the test calls ``finish``. With ``auto_finish``
-    (``job_result`` keywords, ``{}`` for a pass), each job finishes on its
-    first poll instead and reports it on the next, the way a real job is
-    seen running at least once.
+    A queued job runs until the test calls ``finish`` or ``kill``. With
+    ``auto_finish`` (``job_result`` keywords, ``{}`` for a pass), each job
+    finishes on its first poll and reports it on the next, the way a real
+    job is seen running at least once. A unit in ``full_pools`` is refused.
+    ``started_at`` is when every running job began.
     """
 
     def __init__(
         self,
         *,
-        max_starts=None,
         full_pools=(),
         auto_finish=None,
         unkillable=(),
+        started_at="",
     ):
-        self.started = []
+        self.queued = []
         self.results = {}
         self.killed = []
         self.unkillable = set(unkillable)
-        self.max_starts = max_starts
         self.full_pools = set(full_pools)
         self.auto_finish = auto_finish
+        self.started_at = started_at
         self.refusals = 0
+        self.locks = 0
+        self.job_reconciles = 0
 
-    def start(self, unit, *, repo_root, install_from):
+    @contextmanager
+    def lock(self):
+        self.locks += 1
+        yield
+
+    def new_job_id(self):
+        return "job{}".format(len(self.queued) + self.refusals + 1)
+
+    def queue(
+        self, job_id, unit, *, repo_root, install_from, campaign_id, record
+    ):
         if unit.pool in self.full_pools:
             self.refusals += 1
-            raise LaneStartError("pool is full", full_pool=unit.pool)
-        if (
-            self.max_starts is not None
-            and len(self.started) >= self.max_starts
-        ):
-            self.refusals += 1
-            raise LaneStartError("at capacity")
-        job_id = "job{}".format(len(self.started) + 1)
-        self.started.append((unit, job_id, install_from, repo_root))
-        return job_id
+            raise QueueRefused("pool is full", unit.pool)
+        record()
+        self.queued.append((unit, job_id, install_from, repo_root))
 
     def poll(self, job_id):
-        if job_id in self.results or self.auto_finish is None:
-            return self.results.get(job_id)
-        self.finish(job_id, **self.auto_finish)
-        return None
+        if job_id in self.results:
+            return self.results[job_id]
+        if job_id not in {queued[1] for queued in self.queued}:
+            return {"state": "interrupted", "reason": "died", "job_id": job_id}
+        if self.auto_finish is not None:
+            self.finish(job_id, **self.auto_finish)
+        return {
+            "state": "running",
+            "job_id": job_id,
+            "started_at": self.started_at,
+        }
 
     def finish(self, job_id, **kwargs):
         self.results[job_id] = job_result(job_id=job_id, **kwargs)
@@ -397,67 +409,12 @@ class FakeLanes:
         }
         return True
 
+    def reconcile_jobs(self):
+        self.job_reconciles += 1
+
     @property
-    def started_units(self):
-        return [unit for unit, _, _, _ in self.started]
-
-
-class FakeTicker:
-    """A ``Ticker`` that captures the tick callable and never calls it.
-
-    Tests call ``runner.tick`` themselves, or ``drive`` to tick until the
-    runner reports the campaign finished, as the real thread would.
-    """
-
-    # A campaign of a few units finishes in a handful of ticks; this only
-    # stops a bug from looping forever.
-    MAX_TICKS = 200
-
-    def __init__(self):
-        self.tick = None
-        self.stopped = 0
-
-    def start(self, tick):
-        self.tick = tick
-
-    def stop(self):
-        self.stopped += 1
-        self.tick = None
-
-    def is_running(self):
-        return self.tick is not None
-
-    def drive(self):
-        assert self.tick is not None, "the ticker was never started"
-        for _ in range(self.MAX_TICKS):
-            if self.tick is None or self.tick():
-                return
-        raise AssertionError(
-            "campaign still unfinished after {} ticks".format(self.MAX_TICKS)
-        )
-
-
-class FakeLock:
-    """A ``CampaignRunLock`` that records what it was asked."""
-
-    def __init__(self, taken_by_other=False):
-        self.held = set()
-        self.acquired = []
-        self.released = []
-        self._taken_by_other = taken_by_other
-
-    def acquire(self, campaign_id):
-        if self._taken_by_other:
-            raise CampaignLockedError("held elsewhere")
-        self.held.add(campaign_id)
-        self.acquired.append(campaign_id)
-
-    def release(self, campaign_id):
-        self.held.discard(campaign_id)
-        self.released.append(campaign_id)
-
-    def held_by_other(self, campaign_id):
-        return self._taken_by_other
+    def queued_units(self):
+        return [unit for unit, _, _, _ in self.queued]
 
 
 class FakeFeatureReader:

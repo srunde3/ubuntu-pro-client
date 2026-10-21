@@ -31,7 +31,7 @@ from behave_campaign.domain.records import (
     StarvedRecord,
     UnitHistory,
     UnitState,
-    lanes_as_dict,
+    max_jobs_as_dict,
 )
 from behave_campaign.domain.signals import (
     REPEATED_FAILURE_RELEASES,
@@ -78,7 +78,7 @@ class _Feed:
             {
                 "total_units": len(self._replay.statuses()),
                 "install_from": header.install_from,
-                "lanes": lanes_as_dict(header.lanes),
+                "max_jobs": max_jobs_as_dict(header.max_jobs),
                 "scope": header.scope.as_dict(),
             },
         )

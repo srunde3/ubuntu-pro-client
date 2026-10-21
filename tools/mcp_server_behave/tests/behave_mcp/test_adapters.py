@@ -2,6 +2,7 @@ import os
 import signal
 import subprocess
 import sys
+import threading
 import time
 
 import pytest
@@ -686,3 +687,31 @@ def test_list_job_ids_finds_every_queued_job(tmp_path):
 def test_list_job_ids_missing_dir(tmp_path):
     store = LocalJobResultStoreFactory().bind(tmp_path / "missing")
     assert store.list_job_ids() == []
+
+
+class TestReconcileLockReentry:
+    def test_a_thread_that_holds_it_can_take_it_again(self, tmp_path):
+        lock = FileReconcileLock(lambda: tmp_path)
+        other = FileReconcileLock(lambda: tmp_path)
+
+        with lock.hold():
+            with other.hold():
+                inner = True
+
+        assert inner
+
+    def test_another_thread_still_waits(self, tmp_path):
+        lock = FileReconcileLock(lambda: tmp_path)
+        entered = threading.Event()
+
+        def take():
+            with lock.hold():
+                entered.set()
+
+        with lock.hold():
+            thread = threading.Thread(target=take)
+            thread.start()
+            assert not entered.wait(0.2)
+        thread.join(5)
+
+        assert entered.is_set()

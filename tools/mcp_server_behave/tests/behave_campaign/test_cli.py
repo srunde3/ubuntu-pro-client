@@ -134,12 +134,12 @@ class TestInit:
         assert [unit_of(unit) for unit in history["units"]] == [UNIT_A_NOBLE]
 
     def test_lanes_are_set_per_pool(self, run):
-        result = run(["create", "--lxd-lanes", "4"])
+        result = run(["create", "--max-lxd-jobs", "4"])
 
-        assert result["campaign"]["lanes"] == {"lxd": 4}
+        assert result["campaign"]["max_jobs"] == {"lxd": 4}
 
     def test_lanes_for_a_pool_out_of_scope_are_rejected(self, run):
-        error = run(["create", "--wsl-lanes", "1"], expect=2)
+        error = run(["create", "--max-wsl-jobs", "1"], expect=2)
 
         assert "no unit in scope" in error
 

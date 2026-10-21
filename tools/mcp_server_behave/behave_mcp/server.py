@@ -16,10 +16,9 @@ from pydantic import BaseModel, Field
 from starlette.responses import JSONResponse
 
 from behave_campaign.adapters import (
-    FileCampaignRunLock,
     JsonlCampaignStore,
     ParserFeatureReader,
-    ServiceLaneRunner,
+    ServiceJobRunner,
     system_now,
 )
 from behave_campaign.domain.events import MAX_EVENT_ERROR_CHARS
@@ -39,7 +38,6 @@ from behave_campaign.messages import (
     UnitHistoryResponse,
 )
 from behave_campaign.repo import repo_state as read_repo_state
-from behave_campaign.runner import CampaignRunner
 from behave_campaign.service import CampaignService
 from behave_mcp.adapters import (
     FileConfigStore,
@@ -81,7 +79,11 @@ from behave_mcp.messages import (
     ResultsResponse,
     StartScenarioResponse,
 )
-from behave_mcp.service import BehaveService
+from behave_mcp.service import (
+    BehaveService,
+    BehaveServiceError,
+    UnknownJobError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -132,7 +134,7 @@ def tool(**kwargs: Any) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     return register
 
 
-class CampaignLanes(BaseModel):
+class CampaignMaxJobs(BaseModel):
     """Jobs at once per pool. A pool in scope left out gets 1."""
 
     lxd: int | None = Field(
@@ -244,21 +246,19 @@ def create_service() -> BehaveService:
 
 
 def _reconcile_quietly() -> None:
-    """Reconcile, logging what goes wrong: a tool has its own answer to
-    return, and the next call or the timer retries."""
+    """Reconcile campaigns and the job queue, logging what goes wrong: a
+    tool has its own answer to return, and the next call or the timer
+    retries."""
     try:
-        _service.reconcile()
+        campaign_service().reconcile()
     except Exception:
         logger.exception("reconcile failed; the next caller retries it")
 
 
 _service = create_service()
 _workspace = LocalWorkspace()
-# The runner holds the run lock and the ticker for the active campaign, so
-# unlike the per-call service there is exactly one for the server's lifetime.
-_runner: CampaignRunner | None = None
 _store: JsonlCampaignStore | None = None
-_runner_guard = threading.Lock()
+_store_guard = threading.Lock()
 
 
 def _campaign_dir() -> Path:
@@ -269,34 +269,14 @@ def campaign_store() -> JsonlCampaignStore:
     """Return the one store for the server's campaign directory.
 
     Shared rather than per-call: a reader waiting for events is woken by
-    the appends the runner makes through this same object.
+    the appends a reconcile in this process makes through this same object.
     """
     global _store
     campaign_dir = _campaign_dir()
-    with _runner_guard:
+    with _store_guard:
         if _store is None:
             _store = JsonlCampaignStore(campaign_dir)
         return _store
-
-
-def campaign_runner() -> CampaignRunner:
-    """Return the one runner, bound to the server's campaign directory.
-
-    Unlike the service, the runner outlives a single call: it holds the run
-    lock and the ticker for whichever campaign is active.
-    """
-    global _runner
-    # Resolved before the guard, which is not reentrant.
-    store = campaign_store()
-    with _runner_guard:
-        if _runner is None:
-            _runner = CampaignRunner(
-                store=store,
-                lanes=ServiceLaneRunner(_service),
-                lock=FileCampaignRunLock(store.root),
-                now=system_now,
-            )
-        return _runner
 
 
 def campaign_service() -> CampaignService:
@@ -309,7 +289,15 @@ def campaign_service() -> CampaignService:
         features=ParserFeatureReader(),
         now=system_now,
         repo_state=read_repo_state,
-        lane_ceiling=_service.read_config().max_jobs,
+        max_jobs_ceiling=_service.read_config().max_jobs,
+        jobs=campaign_jobs(),
+    )
+
+
+def campaign_jobs() -> ServiceJobRunner:
+    """The job service, as campaigns use it."""
+    return ServiceJobRunner(
+        _service, refusal=BehaveServiceError, unknown_job=UnknownJobError
     )
 
 
@@ -677,10 +665,10 @@ def get_scenario_artifacts(job_id: JobId) -> ArtifactsResponse:
         "campaign is never a Cartesian product. Omit every filter to cover "
         "the whole suite. Use list_dimensions first to discover valid "
         "release and machine_type values. Returns the unit count so the "
-        "scope can be confirmed before any test runs. lanes sets how many "
-        "jobs run at once in each pool the units draw on (lxd, cloud, wsl); "
-        "a pool left out gets 1, and none may exceed the server's limit "
-        "for that pool."
+        "scope can be confirmed before any test runs. max_jobs sets how "
+        "many of its jobs may be in flight at once in each pool the units "
+        "draw on (lxd, cloud, wsl); a pool left out gets 1, and none may "
+        "exceed the checkout's max jobs for that pool."
     )
 )
 def create_campaign(
@@ -715,7 +703,7 @@ def create_campaign(
         ),
     ] = [],
     install_from: InstallFromArg = InstallFrom.LOCAL,
-    lanes: CampaignLanes = CampaignLanes(),
+    max_jobs: CampaignMaxJobs = CampaignMaxJobs(),
     repo_root: RepoRoot = "",
 ) -> CreateCampaignResponse:
     return campaign_service().create_campaign(
@@ -726,7 +714,7 @@ def create_campaign(
         feature_files=features,
         scenarios=scenarios,
         install_from=install_from.value,
-        lanes=lanes.requested(),
+        max_jobs=max_jobs.requested(),
     )
 
 
@@ -743,8 +731,8 @@ def list_campaigns() -> ListCampaignsResponse:
 
 @tool(
     description=(
-        "Report one campaign's current state: counts by unit state, lanes "
-        "busy in each pool, the units in flight, and the units needing "
+        "Report one campaign's current state: counts by unit state, jobs "
+        "in flight in each pool, the units in flight, and the units needing "
         "action (failed, skipped or error) -- one unit per row, or with "
         "group_by='scenario' one "
         "scenario per row with its units bucketed by state, which is how "
@@ -864,11 +852,12 @@ def unit_history(
     description=(
         "Run or pause a campaign. A campaign's state is its intent (what "
         "was last asked: never_run, run or hold) plus its progress (how "
-        "much work is left). Only one campaign schedules at a time.\n"
-        "  run    intent -> run, from any state. The server keeps the "
-        "campaign's lanes full with no further calls: running while units "
-        "are left to start, finishing while the last jobs run, then "
-        "complete. Running a complete campaign changes nothing; use "
+        "much work is left). Any number of campaigns may run at once.\n"
+        "  run    intent -> run, from any state. Queues up to the "
+        "campaign's max_jobs at once; each job, as it ends, records its "
+        "outcome and queues the next unit, with no further calls: running "
+        "while units are left to queue, finishing while the last jobs run, "
+        "then complete. Running a complete campaign changes nothing; use "
         "retry_units to give it work.\n"
         "  pause  intent -> hold, from any state. No new job starts; jobs "
         "in flight finish and are recorded (pausing), then the campaign is "
@@ -895,12 +884,12 @@ def control_campaign(
         ),
     ] = False,
 ) -> CampaignControlResponse:
-    runner = campaign_runner()
+    campaigns = campaign_service()
     if action == ControlAction.RUN:
         if kill:
             raise ValueError("kill applies only to pause")
-        return runner.run(campaign_id)
-    return runner.pause(campaign_id, kill=kill)
+        return campaigns.run(campaign_id=campaign_id)
+    return campaigns.pause(campaign_id=campaign_id, kill=kill)
 
 
 @tool(
@@ -1027,8 +1016,8 @@ def retry_units(
         ),
     ] = "",
 ) -> RetryUnitsResponse:
-    return campaign_runner().retry_units(
-        campaign_id,
+    return campaign_service().retry_units(
+        campaign_id=campaign_id,
         filters=Filters(
             feature=(feature,) if feature else (),
             scenario=(scenario,) if scenario else (),
@@ -1046,9 +1035,9 @@ def retry_units(
         "it. A queued job never starts. Use it for a running job that has "
         "hung: tox is stopped and allowed to clean up, "
         "and the job ends interrupted with reason killed, never as a "
-        "failure; a campaign's next tick records its attempt as "
-        "interrupted, rather than holding the lane open. killed is false "
-        "when there was nothing to stop."
+        "failure; a running campaign records its attempt as interrupted "
+        "and queues the unit again. killed is false when there was nothing "
+        "to stop."
     )
 )
 def kill_job(job_id: JobId) -> KillJobResponse:

@@ -39,21 +39,21 @@ Bad: calling the tool function in `server.py` directly. It skips argument parsin
 payload = server.await_campaign_events(campaign_id=CAMPAIGN_ID).model_dump()
 ```
 
-Bad: re-proving scheduling rules through the protocol, one permutation per test. Each permutation belongs in a `plan_tick` unit test. One protocol test that shows the tool reports the result is enough.
+Bad: re-proving scheduling rules through the protocol, one permutation per test. Each permutation belongs in a `plan_campaign` unit test. One protocol test that shows the tool reports the result is enough.
 
 Bad: a job test without a fake `Popen`. It starts a real `tox -e behave` and turns into an e2e test that no one meant to write.
 
 ## Server wiring and startup: how the process is assembled
 
-Wiring tests check the objects `server.py` builds and shares, such as one campaign store shared by the runner and every service. Startup tests check that bad configuration ends the process with a clean message. Configuration is read at import, so these tests import the server in a fresh subprocess.
+Wiring tests check the objects `server.py` builds and shares, such as one campaign store shared by every campaign service it builds. Startup tests check that bad configuration ends the process with a clean message. Configuration is read at import, so these tests import the server in a fresh subprocess.
 
 Good: the shared object is identified directly.
 
 ```python
-service = fresh_server.campaign_service("")
-runner = fresh_server.campaign_runner("")
+service = fresh_server.campaign_service()
+again = fresh_server.campaign_service()
 
-assert service._events is runner._events
+assert service._store is again._store
 ```
 
 Bad: testing startup config by importing `behave_mcp.server` inside the test process. The module is already imported by `tests/conftest.py`, so the import does nothing and the test passes whatever the config.

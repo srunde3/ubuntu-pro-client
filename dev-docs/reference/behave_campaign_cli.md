@@ -72,12 +72,13 @@ Optional arguments:
 
 * `--install-from SOURCE`: Install source every job in the campaign uses.
   Defaults to `local`.
-* `--lxd-lanes N`: LXD jobs (`lxd-container`, `lxd-vm`) a runner may keep
-  in flight. Defaults to `1` when the scope has LXD units.
-* `--cloud-lanes N`: Cloud jobs (`aws.*`, `gcp.*`, `azure.*`) a runner may
-  keep in flight. Defaults to `1` when the scope has cloud units.
-* `--wsl-lanes N`: WSL jobs a runner may keep in flight, at most `1`.
-  Defaults to `1` when the scope has WSL units.
+* `--max-lxd-jobs N`: How many of the campaign's LXD jobs (`lxd-container`,
+  `lxd-vm`) may be in flight at once. Defaults to `1` when the scope has LXD
+  units.
+* `--max-cloud-jobs N`: The same for cloud jobs (`aws.*`, `gcp.*`,
+  `azure.*`). Defaults to `1` when the scope has cloud units.
+* `--max-wsl-jobs N`: The same for WSL jobs, at most `1`. Defaults to `1`
+  when the scope has WSL units.
 * `--feature PATH`: Only this feature file. Repeatable.
 * `--scenario NAME`: Only this exact scenario name. Repeatable.
 * `--release NAME`: Only this release. Repeatable.
@@ -88,16 +89,16 @@ Omit every filter to cover every feature file.
 ```bash
 uv run behave-campaign create --campaign-id 1234567 --repo-root ../.. \
   --release jammy --release noble --machine-type lxd-vm \
-  --install-from proposed --lxd-lanes 4
+  --install-from proposed --max-lxd-jobs 4
 ```
 
 Errors: an unknown release, machine type, or feature; a campaign that already
-exists; no unit matching the filters; lanes for a pool no unit in
-scope draws on; fewer than one lane for a pool, or more than one for `wsl`.
+exists; no unit matching the filters; max jobs for a pool no unit in
+scope draws on; fewer than one for a pool, or more than one for `wsl`.
 
 ## status
 
-Report a campaign's header, state, lanes busy in each pool, in-flight units,
+Report a campaign's header, state, jobs in flight in each pool, in-flight units,
 and problem units.
 
 Required arguments:
@@ -219,7 +220,7 @@ Optional arguments:
   campaign is `paused` or `complete`.
 * `--interval SECONDS`: Poll interval with `--follow`. Defaults to `5`.
 
-Families: `campaign`, `lane`, `unit`, `anomaly`. Presets: `actionable`
+Families: `campaign`, `job`, `unit`, `anomaly`. Presets: `actionable`
 (every non-passing outcome, `anomaly.*`, `job.overdue`, `campaign.*`) and
 `*` (everything).
 
@@ -255,7 +256,7 @@ The bundle unpacks to one directory named after the campaign:
 | Path | Contents |
 | --- | --- |
 | `SUMMARY.md` | Counts and scope, then every unit by feature, scenario and release: passed units, then the rest with their state and job id |
-| `campaign.json` | Scope, install source, lanes, state, counts |
+| `export.json` | Scope, install source, max jobs, state, counts |
 | `units.csv` | One row per unit: `feature, scenario, release, machine_type, state, job_id, finished_at` |
 | `jobs/<job_id>/` | `job.json`, `exit.json`, `report.json`, `stdout.log` for every attempt, including superseded ones |
 | `audit/campaign.json` | The campaign's header and units, as stored |
@@ -316,8 +317,7 @@ Each campaign is one directory, `campaigns/<id>/`:
 | File                          | Written by            | Contents                                   |
 | ----------------------------- | --------------------- | ------------------------------------------ |
 | `campaign.json`               | `create`, once        | The header and the units in scope          |
-| `records.jsonl`                | the server            | Every later record, append-only            |
-| `campaign.lock`               | the server            | Advisory lock while the campaign schedules |
+| `records.jsonl`               | every reconcile       | Every later record, append-only            |
 | `../../exports/<id>.tar.gz`   | `export`              | The evidence bundle, by default            |
 
 A crash mid-append can leave part of a line at the end of `records.jsonl`.

@@ -2,7 +2,7 @@
 
 import logging
 from pathlib import Path
-from typing import Callable
+from typing import Callable, ContextManager
 
 from behave_mcp import parser
 from behave_mcp.domain.config import (
@@ -340,6 +340,60 @@ class BehaveService:
         machine type, and start it at once if its pool has a free lane. A
         selection that matches no unit, or more than one, is refused before
         anything is queued."""
+        job_id = self.queue_job(
+            feature_file,
+            scenario_name,
+            release,
+            machine_type,
+            repo_root=repo_root,
+            install_from=install_from,
+        )
+        self.reconcile()
+        payload = self._status_payload(job_id)
+        if isinstance(payload, QueuedResponse):
+            message = (
+                f"Queued, position {payload.queue_position} in the "
+                f"{POOL_OF[machine_type]} pool. Call "
+                "wait_for_scenario_completion."
+            )
+        else:
+            message = "Started. Call wait_for_scenario_completion."
+        return StartScenarioResponse(
+            job_id=job_id,
+            state=payload.state,
+            queue_position=(
+                payload.queue_position
+                if isinstance(payload, QueuedResponse)
+                else None
+            ),
+            message=message,
+            artifacts=payload.artifacts,
+        )
+
+    def new_job_id(self) -> str:
+        """A fresh job id, for a caller that records it before queuing."""
+        return self._new_job_id()
+
+    def queue_job(
+        self,
+        feature_file: str,
+        scenario_name: str,
+        release: str,
+        machine_type: str,
+        *,
+        repo_root: str = "",
+        install_from: str = DEFAULT_INSTALL_FROM,
+        job_id: str = "",
+        campaign_id: str = "",
+        record: Callable[[], None] | None = None,
+    ) -> str:
+        """Validate one unit and queue its job, without reconciling; return
+        the job's id.
+
+        ``record``, when given, is called once the unit is valid and before
+        the job is queued: a campaign records its attempt there, so a
+        refused unit has no attempt and a queued job always has one.
+        """
         try:
             resolved_repo_root = self._workspace.resolve_repo_root(
                 repo_root or None
@@ -373,7 +427,7 @@ class BehaveService:
             raise BehaveServiceError(install_from_error)
 
         results = self._results.bind(self._jobs_dir())
-        job_id = self._new_job_id()
+        job_id = job_id or self._new_job_id()
         write_targets = results.write_targets(job_id)
         command = build_command(
             feature_file,
@@ -382,6 +436,8 @@ class BehaveService:
             machine_type,
             write_targets.json_report,
         )
+        if record is not None:
+            record()
         try:
             results.write_request(
                 job_id,
@@ -395,32 +451,17 @@ class BehaveService:
                     install_from=install_from,
                     command=command,
                     repo_root=str(resolved_repo_root),
+                    campaign_id=campaign_id,
                 ),
             )
         except OSError as exc:
             raise BehaveServiceError(f"Could not queue the job: {exc}")
+        return job_id
 
-        self.reconcile()
-        payload = self._status_payload(job_id)
-        if isinstance(payload, QueuedResponse):
-            message = (
-                f"Queued, position {payload.queue_position} in the "
-                f"{POOL_OF[machine_type]} pool. Call "
-                "wait_for_scenario_completion."
-            )
-        else:
-            message = "Started. Call wait_for_scenario_completion."
-        return StartScenarioResponse(
-            job_id=job_id,
-            state=payload.state,
-            queue_position=(
-                payload.queue_position
-                if isinstance(payload, QueuedResponse)
-                else None
-            ),
-            message=message,
-            artifacts=results.artifacts(job_id),
-        )
+    def reconcile_lock(self) -> ContextManager[None]:
+        """Hold the state directory's reconcile lock, re-entrantly: for a
+        caller that reconciles more than this service's own queue."""
+        return self._reconcile_lock.hold()
 
     def reconcile(self) -> None:
         """Start queued jobs on free lanes, oldest first in each pool.
@@ -483,6 +524,7 @@ class BehaveService:
                     machine_type=request.machine_type,
                     install_from=request.install_from,
                     command=request.command,
+                    campaign_id=request.campaign_id,
                     repo=repo,
                     config=shown_options(config.behave),
                     artifacts=results.artifacts(job_id),
@@ -864,6 +906,7 @@ class BehaveService:
             scenario_name=request.scenario_name,
             release=request.release,
             machine_type=request.machine_type,
+            campaign_id=request.campaign_id,
             queued_at=request.queued_at,
             started_at=record.started_at,
             finished_at=exit.finished_at if exit is not None else None,
@@ -885,6 +928,7 @@ class BehaveService:
         if state == JobState.RUNNING:
             return RunningResponse(
                 job_id=job_id,
+                started_at=results.read_record(job_id).started_at or "",
                 recent_output=results.log_tail(
                     job_id, DEFAULT_RUNNING_TAIL_LINES
                 ),

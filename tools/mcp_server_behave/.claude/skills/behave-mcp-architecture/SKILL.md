@@ -27,7 +27,7 @@ Both packages use ports and adapters. A layer with more than one concern is a pa
 | Views | `views.py` | `views/`: `responses`, `export` | Pure projections of domain and parser types into DTOs and export files. A view decides nothing. |
 | Ports | `ports.py` | `ports.py` | `Protocol` interfaces the services depend on. |
 | Adapters | `adapters.py` | `adapters.py`, `repo.py` | Implement the ports with the filesystem, `subprocess`, `fcntl` and git. |
-| Services | `service.py` (`BehaveService`) | `service.py` (`CampaignService`), `runner.py` (`CampaignRunner`) | Orchestrate domain and ports. Most behaviour changes belong here. |
+| Services | `service.py` (`BehaveService`) | `service.py` (`CampaignService`) | Orchestrate domain and ports. Most behaviour changes belong here. |
 | DTOs | `messages.py` | `messages.py` | Pydantic models returned to front-ends. |
 | Front-ends | `server.py`, `job_process.py` | `cli.py` | Entry points. Each builds its own `BehaveService` from the real adapters; the copies are deliberate, and `tests/behave_mcp/test_reconcile.py` checks they act alike. The handlers in `server.py` and `cli.py` parse arguments, call one service method and serialise the result; `job_process.py` is the process each job runs under. |
 | Config | `config.py` | none | The server's own env vars (address, poll timeout) parsed once into `Settings`. The checkout's config is not here: it is `domain/config.py`, stored in `config.json`. |
@@ -67,8 +67,7 @@ Everything the server writes lives under its own checkout's `.mcp_server_behave/
 | `jobs/<job_id>/stdout.log` | combined stdout and stderr of the job | the behave subprocess |
 | `jobs/<job_id>/report.json` | behave's JSON report | the behave subprocess |
 | `campaigns/<id>/campaign.json` | the header and the units in scope, written once | `CampaignService` (create) |
-| `campaigns/<id>/records.jsonl` | every later record, append only; a torn last line is ignored and cut off by the next append | `CampaignRunner` |
-| `campaigns/<id>/campaign.lock` | the run lock (`flock`) while a campaign schedules | `FileCampaignRunLock` |
+| `campaigns/<id>/records.jsonl` | every later record, append only; a torn last line is ignored and cut off by the next append | `CampaignService`, under `reconcile.lock` |
 | `exports/<id>.tar.gz` | the evidence bundle | CLI `export` |
 
 Only a campaign's intent is written, and events are never stored: `domain/feed.py` derives them from the records on every read. Its unit states, progress and named state are rebuilt by replaying its record file through `domain/state.py` (`reduce_units`, `progress`, `state_of`).
@@ -77,8 +76,8 @@ Only a campaign's intent is written, and events are never stored: `domain/feed.p
 
 - A server process serves MCP over streamable HTTP at `http://MCP_HOST:MCP_PORT/mcp`. FastMCP runs tool calls on worker threads. Several servers and CLIs may share a state directory.
 - Nothing long-lived drives jobs. `BehaveService.reconcile` starts queued jobs on free lanes, under `reconcile.lock`, from files alone. It runs after every tool call (in the `@tool` decorator), every 5 s in the server, after every CLI command, and in a job's own process after it records its exit and lets go of its lane.
-- `server.py` holds the long-lived objects: one `BehaveService`, one `CampaignRunner` and one `JsonlCampaignStore`, shared so a reader waiting for events is woken by the runner's appends. `CampaignService` is built per call. Nothing about a job is held in memory.
-- One daemon ticker thread calls `CampaignRunner.tick` every 2 s for the one campaign that is scheduling: running, finishing or pausing. It stops, and the run lock is released, once that campaign is paused or complete. The runner's guard serialises ticks and the `run`, `pause` and `retry_units` commands.
+- Campaigns have no driver either. `CampaignService.reconcile` brings every campaign up to date -- records ended jobs, queues queueable units up to each campaign's max jobs -- and then reconciles the job queue, all under one hold of `reconcile.lock`. Every reconcile caller runs it, including the job process, which is why `behave_mcp.job_process` may import `behave_campaign`. Any number of campaigns run at once.
+- `server.py` holds one `BehaveService` and one `JsonlCampaignStore`, shared so a reader waiting for events is woken by this process's appends. `CampaignService` is built per call, with `campaign_jobs()` as its job runner. Nothing about a job or a campaign is held in memory.
 - Each behave job runs under `behave_mcp/job_process.py`, in its own session. The job process holds the job's lane lock (`lanes/<pool>/<n>.lock`) and `jobs/<id>/job.lock` for its whole life, runs `tox -e behave` as a child with a parent-death signal and stdin from `/dev/null`, and writes `exit.json` when tox exits. A job's state is read off those files and locks, from any process: a killed job is interrupted, never failed. `kill_job` sends SIGTERM to the job process, which passes it to tox's process group.
 
 ## Surface rules

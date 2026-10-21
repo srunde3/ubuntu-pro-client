@@ -138,6 +138,8 @@ class JobRequest(BaseModel):
     install_from: str = ""
     command: list[str] = []
     repo_root: str = ""
+    # The campaign this job is an attempt for; empty for a one-off job.
+    campaign_id: str = ""
 
 
 class JobRecord(BaseModel):
@@ -155,6 +157,7 @@ class JobRecord(BaseModel):
     machine_type: str = ""
     install_from: str = ""
     command: list[str] = []
+    campaign_id: str = ""
     repo: RepoState = RepoState()
     config: dict[str, str] = {}
     artifacts: Artifacts | None = None
@@ -277,6 +280,7 @@ class RunningResponse(BaseModel):
 
     state: Literal[JobState.RUNNING] = JobState.RUNNING
     job_id: str = ""
+    started_at: str = ""
     recent_output: str = ""
     timed_out: bool = False
     artifacts: Artifacts | None = None
@@ -424,6 +428,7 @@ class JobListing(BaseModel):
     scenario_name: str = ""
     release: str = ""
     machine_type: str = ""
+    campaign_id: str = ""
     queued_at: str = ""
     started_at: str | None = None
     finished_at: str | None = None

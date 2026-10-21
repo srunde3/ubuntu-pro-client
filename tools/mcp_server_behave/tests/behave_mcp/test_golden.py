@@ -24,6 +24,7 @@ def test_write_record_byte_shape(tmp_path):
     expected = (
         "{\n"
         '  "artifacts": null,\n'
+        '  "campaign_id": "",\n'
         '  "command": [],\n'
         '  "config": {},\n'
         '  "feature_file": "",\n'
@@ -186,6 +187,7 @@ def test_timed_out_key_order(tmp_path):
     assert list(payload.keys()) == [
         "state",
         "job_id",
+        "started_at",
         "recent_output",
         "timed_out",
         "artifacts",

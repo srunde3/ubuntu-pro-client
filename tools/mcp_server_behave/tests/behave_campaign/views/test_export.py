@@ -25,7 +25,7 @@ HEADER = CampaignRecord(
     repo=RepoState(root="/repo", commit="abc123", branch="main", dirty=True),
     scope=Scope(release=("noble", "jammy")),
     install_from="proposed",
-    lanes={Pool.LXD: 2},
+    max_jobs={Pool.LXD: 2},
 )
 
 

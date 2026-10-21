@@ -1,6 +1,6 @@
 ---
 name: behave-mcp-e2e-tests
-description: What the end-to-end tests in tools/mcp_server_behave test, with good and bad examples. They start real tox and behave subprocesses. Use when writing or reviewing an e2e test, or when a change to the scheduler, the lane runner, job launch, polling, killing or job artifacts needs proof with real jobs.
+description: What the end-to-end tests in tools/mcp_server_behave test, with good and bad examples. They start real tox and behave subprocesses. Use when writing or reviewing an e2e test, or when a change to reconcile, the job queue, job launch, polling, killing or job artifacts needs proof with real jobs.
 ---
 
 # behave MCP end-to-end tests
@@ -11,7 +11,8 @@ Each e2e test carries `@pytest.mark.e2e` and `@pytest.mark.long_running`, so the
 
 | Test | Needs | Proves |
 | --- | --- | --- |
-| `tests/mcp_surface/test_campaign_e2e.py` | tox; no LXD, no token | lanes really fill concurrently, every unit is recorded, reports exist, the event stream is dense |
+| `tests/mcp_surface/test_campaign_e2e.py` | tox; no LXD, no token | a campaign finishes with nothing driving it, its jobs really ran side by side, every unit is recorded, reports exist, the event stream is dense; pause with kill stops a real job |
+| `tests/mcp_surface/test_jobs_e2e.py` | tox; no LXD, no token | another process sees and kills a running job; two jobs on one lane run back to back with nobody calling |
 | `tests/mcp_surface/test_e2e.py` | LXD and `UACLIENT_BEHAVE_CONTRACT_TOKEN`; skips without the token | one real attach job through the MCP protocol: start, list, wait, logs, artifacts, results |
 
 ## What makes a good e2e test
@@ -19,10 +20,8 @@ Each e2e test carries `@pytest.mark.e2e` and `@pytest.mark.long_running`, so the
 Good: it asserts on what the fakes cannot show, and its message reports what was seen.
 
 ```python
-assert peak_lanes >= LANES, (
-    "only ever saw {} of {} lanes in flight at once; the sliding window "
-    "is not filling to capacity".format(peak_lanes, LANES)
-)
+# From the jobs' own start and end times, not from sampling.
+assert _most_at_once(spans) == LANES, spans
 ```
 
 Bad: an e2e test for a rule. Classifying a skipped result is a unit test of `classify_result`. Here it costs a tox run and fails for reasons unrelated to the rule.
@@ -41,7 +40,7 @@ service.set_config("max_jobs.lxd", str(LANES))
 
 Good: it proves what no caller does. Only the job process's own reconcile can start a queued job when the test makes nothing but reads, so two jobs on one lane finishing back to back proves it.
 
-Good: it always cleans up. `runner.shutdown()` and `kill_job` on a still-running job sit in a `finally` block. A leaked behave process holds an LXD instance or a lane after the test ends.
+Good: it always cleans up. `kill_job` on a still-running job sits in a `finally` block. A leaked behave process holds an LXD instance or a lane after the test ends.
 
 Good: it proves what crosses a process boundary from another process. Job state and kills are read off locks and files, so a second interpreter, started with `subprocess`, stands in for a restarted server or the CLI.
 

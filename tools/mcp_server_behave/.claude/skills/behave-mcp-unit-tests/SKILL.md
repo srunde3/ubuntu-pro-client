@@ -27,16 +27,16 @@ def test_the_actionable_preset(kind, actionable):
 Bad: acts and asserts interleaved. The test checks four behaviours, and the first failure hides the rest.
 
 ```python
-def test_run_and_pause(runner):
-    runner.run(campaign_id)
-    assert state_of(store.replay(campaign_id)) == CampaignState.RUNNING
-    runner.pause(campaign_id)
-    assert state_of(store.replay(campaign_id)) == CampaignState.PAUSED
-    runner.run(campaign_id)
-    assert state_of(store.replay(campaign_id)) == CampaignState.RUNNING
+def test_run_and_pause(campaigns):
+    campaigns.run(campaign_id=campaign_id)
+    assert state(store) == CampaignState.RUNNING
+    campaigns.pause(campaign_id=campaign_id)
+    assert state(store) == CampaignState.PAUSED
+    campaigns.run(campaign_id=campaign_id)
+    assert state(store) == CampaignState.RUNNING
 ```
 
-Write one test per behaviour, or a table when the behaviours are cases of one rule. When the behaviour is itself a sequence, such as what repeated ticks do, the earlier steps are part of the arrangement. Name the test after the sequence: `test_starvation_is_reported_once_per_episode`.
+Write one test per behaviour, or a table when the behaviours are cases of one rule. When the behaviour is itself a sequence, such as what repeated reconciles do, the earlier steps are part of the arrangement. Name the test after the sequence: `test_starvation_is_reported_once_per_episode`.
 
 ## Name every value
 
@@ -73,34 +73,34 @@ assert [r.job_id for r in results] == ["1", "2"]
 
 ## Domain: the rules
 
-Domain tests check a rule as a function of data: how records reduce to unit states, what a tick decides, how a result is classified, what the log digest finds. Build the input, call the function, assert on the decision.
+Domain tests check a rule as a function of data: how records reduce to unit states, what a reconcile decides for a campaign, how a result is classified, what the log digest finds. Build the input, call the function, assert on the decision.
 
 Good: the rule and its input are visible, and nothing else runs.
 
 ```python
-def test_a_busy_wsl_lane_does_not_hold_back_lxd(self):
+def test_a_busy_wsl_job_does_not_hold_back_lxd(self):
     records = [
         *plan(UNIT_W1, UNIT_W2, UNIT_A, UNIT_B),
         IntentRecord(Intent.RUN, AT),
         attempt(UNIT_W1, "running"),
     ]
-    lanes = [Lane(unit=UNIT_W1, job_id="job1")]
+    jobs = [InFlightJob(unit=UNIT_W1, job_id="job1")]
 
-    tick = plan_tick(
-        records=records, lanes=lanes, lane_limits={Pool.LXD: 2, Pool.WSL: 1}, at=AT
+    decided = plan_campaign(
+        records=records, jobs=jobs, max_jobs={Pool.LXD: 2, Pool.WSL: 1}, at=AT
     )
 
-    assert set(tick.start) == {UNIT_A, UNIT_B}
+    assert set(decided.queue) == {UNIT_A, UNIT_B}
 ```
 
-Bad: the same rule tested through the runner and a store. A failure could be the store, the runner or the rule, and the test is ten times longer.
+Bad: the same rule tested through the service and a store. A failure could be the store, the service or the rule, and the test is ten times longer.
 
 ```python
-def test_wsl_does_not_block_lxd(runner, store, lanes):
-    campaign_id = create(store, units=[*WSL_UNITS, *UNITS], lanes={Pool.LXD: 2, Pool.WSL: 1})
-    runner.run(campaign_id)
-    runner.tick(campaign_id)
-    assert len(lanes.started) == 3
+def test_wsl_does_not_block_lxd(campaigns, store, jobs):
+    campaign_id = create(store, units=[*WSL_UNITS, *UNITS], max_jobs={Pool.LXD: 2, Pool.WSL: 1})
+    campaigns.run(campaign_id=campaign_id)
+    campaigns.reconcile()
+    assert len(jobs.queued) == 3
 ```
 
 ## Services: the orchestration
@@ -128,31 +128,29 @@ monkeypatch.setattr(service, "_scenario_names", lambda *_: set())
 
 Time enters a service through `monotonic`, `sleep`, `now_utc` and `new_job_id`. A test of waiting or timestamps passes lambdas for them. It never sleeps.
 
-## Runner: the tick loop
+## Reconcile: one step at a time
 
-Runner tests check what a sequence of ticks does to a campaign's records and events. The test drives `runner.tick` itself, with a ticker that never runs on its own, and finishes fake jobs when it chooses.
+Nothing runs on its own, so a test of what reconciles do calls `reconcile` itself, where a tool call, a CLI command or a finished job would, and finishes fake jobs with `FakeJobRunner` when it chooses. A restart is a new service over the same store.
 
-Good: each step is an explicit tick, so the order of events is certain.
+Good: each step is an explicit reconcile, so the order of events is certain.
 
 ```python
-runner.tick(campaign_id)
-runner.tick(campaign_id)
+campaigns.reconcile()
+campaigns.reconcile()
 assert len(starved()) == 1
 
-lanes.full_pools.clear()
-runner.tick(campaign_id)
+jobs.full_pools.clear()
+campaigns.reconcile()
 ```
 
-Bad: a real thread and a sleep. The test is slow, and it fails when the machine is busy.
+Bad: a background thread and a sleep. The test is slow, and it fails when the machine is busy.
 
 ```python
-runner = CampaignRunner(..., ticker=ThreadTicker(interval=0.1))
-runner.run(campaign_id)
+threading.Thread(target=reconcile_forever).start()
+campaigns.run(campaign_id=campaign_id)
 time.sleep(1)
-assert len(lanes.started) == 2
+assert len(jobs.queued) == 2
 ```
-
-Only the ticker's own test runs a real thread, and it waits on a condition against a deadline.
 
 ## Adapters: the real effect
 

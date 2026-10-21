@@ -55,7 +55,7 @@ still land here, so one server keeps one set of jobs and campaigns:
   reconcile.lock  held while a process reconciles the queue
   jobs/           one directory per behave job
   lanes/          one lock file per lane, held by the job using it
-  campaigns/      one directory per campaign: its record and run lock
+  campaigns/      one directory per campaign: its records
 ```
 
 `MCP_STATE_DIR` moves the whole thing; there is no separate variable per kind.
@@ -85,9 +85,10 @@ runs for days is recorded there instead.
 its intent -- what the caller last asked for: `never_run`, `run` or `hold` --
 plus its progress, read off its units. `control_campaign` takes two actions:
 
-- `run` sets the intent to run. The server keeps up to the campaign's `lanes`
-  behave jobs in flight in each pool, records every outcome, and fills a lane
-  as soon as one frees, with no further calls needed to keep it moving.
+- `run` sets the intent to run, and queues up to the campaign's `max_jobs`
+  behave jobs in each pool. When a job ends, its own process records the
+  outcome and queues the next unit, so no further calls are needed to keep
+  the campaign moving.
 - `pause` sets the intent to hold. No new job starts, and jobs in flight
   finish and are recorded. With `kill: true` the jobs in flight are killed
   instead: their attempts are recorded as interrupted, and their units run
@@ -99,9 +100,9 @@ this), `pausing` (on hold, jobs still draining) and `paused`. A complete
 campaign is never closed: `retry_units` gives it work and sets it running
 again.
 
-Only one campaign schedules at a time, held by an advisory lock so a second
-server cannot schedule it too. A paused or complete campaign releases it. The
-CLI does not take the lock.
+Any number of campaigns may run at once, sharing the checkout's lanes with
+one-off jobs; see [How a job runs](#how-a-job-runs). A campaign's `max_jobs`
+is its own share, within the checkout's max jobs.
 
 State written in an earlier layout -- flat job files, single-file campaigns,
 or campaigns from before this state model -- is not read. Delete
@@ -109,13 +110,13 @@ or campaigns from before this state model -- is not read. Delete
 
 `await_campaign_events` is how a caller follows a running campaign: it blocks
 until something happens, returns every event after a cursor, and always
-reports the campaign's state -- state, intent, progress, lanes in flight,
+reports the campaign's state -- state, intent, progress, jobs in flight,
 counts by unit state -- so an empty batch is still informative. Each change of
 state is announced as `campaign.<state>`. Events are filtered by kind (`unit.failed`) or family
 (`unit.*`), and a `unit.failed` event carries the failing steps so a failure
 can be judged without fetching the job's report. `anomaly.*` events and
 `job.overdue` are derived signals offered for judgement -- repeated skips,
-one scenario failing across every release, a refused lane, a job running far
+one scenario failing across every release, a unit the job service refused, a job running far
 too long -- and nothing acts on them automatically.
 
 `unit_history` lists every attempt at each selected unit -- the job it ran
@@ -124,8 +125,8 @@ is can be read without scanning the event stream.
 
 `retry_units` asks for another attempt at units that already had one, which
 is the only way a non-passing unit is ever re-run. It always sets the
-campaign's intent to run. `kill_job` kills a
-job that has hung, so its lane is recorded and freed instead of held open.
+campaign's intent to run. `kill_job` kills a job that has hung: the job is
+interrupted, and a running campaign queues its unit again.
 
 The package is also usable on its own through the `behave-campaign` CLI,
 which names campaigns the way the server does (`--campaign-id`) and reads
@@ -193,9 +194,10 @@ uv run pytest -q -m "e2e and long_running"
 `tests/mcp_surface/test_campaign_e2e.py` holds the e2e tests that need no
 contract token and no LXD. They run real campaigns over
 `features/_version.feature`'s attached-version scenario, which skips for want
-of `contract_token` config: one asserts that three behave subprocesses were in
-flight at once, which proves the scheduler's concurrency is real rather than
-faked, and one pauses with kill on a real job and runs the campaign to
+of `contract_token` config. One runs a campaign to completion with nothing
+driving it after `run` -- each job's own process records it and queues the
+next -- and checks, from the jobs' own start and end times, that three ran at
+once. The other pauses with kill on a real job and runs the campaign to
 completion. They finish in seconds.
 
 ## Linting and type checking
@@ -301,7 +303,9 @@ and campaign lives in the server's state directory.
 
 A job is queued first: `start_scenario` writes its `request.json` and then
 reconciles. **Reconcile** is one short step, run under `reconcile.lock` by
-whichever process calls it: it reads the config and every job's files, and
+whichever process calls it. First it brings every campaign up to date:
+records the jobs that ended, and queues each running campaign's queueable
+units up to its max jobs. Then it reads the config and every job's files, and
 starts the oldest queued jobs in each pool on that pool's free lanes. Pools
 are independent, so a full LXD pool never holds back a WSL job.
 
@@ -310,7 +314,8 @@ Nothing long-lived drives the queue. Reconcile runs:
 - after every MCP tool call, and every 5 seconds in the server;
 - after every `behave-campaign` command;
 - in a job's own process, after it records its exit and lets go of its lane,
-  so the next queued job takes that lane at once.
+  so its campaign records the outcome and the next queued job takes that lane
+  at once.
 
 Any number of servers and CLIs may share one state directory: they
 coordinate through the lock and the files, and they all read the same

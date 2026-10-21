@@ -11,7 +11,7 @@ from behave_campaign.domain.records import (
     CampaignRecord,
     UnitHistory,
     UnitState,
-    lanes_as_dict,
+    max_jobs_as_dict,
 )
 from behave_campaign.domain.state import count_states
 
@@ -86,7 +86,7 @@ def render_campaign_json(
         "finished_at": finished_at(statuses),
         "state": state,
         "install_from": header.install_from,
-        "lanes": lanes_as_dict(header.lanes),
+        "max_jobs": max_jobs_as_dict(header.max_jobs),
         "scope": header.scope.as_dict(),
         "total_units": len(statuses),
         "counts": count_states(statuses),

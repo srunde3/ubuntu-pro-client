@@ -87,7 +87,7 @@ class CampaignHeader(BaseModel):
     campaign_id: str = ""
     created_at: str = ""
     install_from: str = ""
-    lanes: dict[str, int] = {}
+    max_jobs: dict[str, int] = {}
     total_units: int = 0
     repo: RepoState = RepoState()
     scope: CampaignScope = CampaignScope()
@@ -124,7 +124,7 @@ class CampaignListing(CampaignSummary):
 
     created_at: str = ""
     install_from: str = ""
-    lanes: dict[str, int] = {}
+    max_jobs: dict[str, int] = {}
     total_units: int = 0
     scope_size: ScopeSize = ScopeSize()
 
@@ -224,22 +224,6 @@ class CampaignControlResponse(CampaignSummary):
 
     killed: list[UnitView] = []
     not_killed: list[str] = []
-
-
-class TickReport(BaseModel):
-    """What one scheduler tick did.
-
-    ``problems`` carries anything that needed saying: a result that could
-    not be classified, or a lane that would not open.
-    """
-
-    campaign_id: str = ""
-    state: str = ""
-    recorded: int = 0
-    started: int = 0
-    in_flight: int = 0
-    problems: list[str] = []
-    finished: bool = False
 
 
 class EventView(BaseModel):

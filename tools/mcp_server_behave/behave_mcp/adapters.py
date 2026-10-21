@@ -8,6 +8,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 from collections import deque
 from contextlib import contextmanager
 from pathlib import Path
@@ -391,8 +392,17 @@ class LocalJobResultStore:
         )
 
 
+# The reconcile locks this thread holds, by path, and how deeply.
+_held_locks = threading.local()
+
+
 class FileReconcileLock:
-    """``reconcile.lock`` in the state directory, held with ``flock``."""
+    """``reconcile.lock`` in the state directory, held with ``flock``.
+
+    Re-entrant within a thread, so a command that holds it can call what
+    takes it again. Other threads and processes open their own descriptor,
+    so they still wait.
+    """
 
     def __init__(self, state_dir: Callable[[], Path]) -> None:
         self._state_dir = state_dir
@@ -400,11 +410,23 @@ class FileReconcileLock:
     @contextmanager
     def hold(self) -> Iterator[None]:
         path = layout.reconcile_lock(self._state_dir())
+        depths = _held_locks.__dict__.setdefault("depths", {})
+        if depths.get(path):
+            depths[path] += 1
+            try:
+                yield
+            finally:
+                depths[path] -= 1
+            return
         path.parent.mkdir(parents=True, exist_ok=True)
         fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)
         try:
             fcntl.flock(fd, fcntl.LOCK_EX)
-            yield
+            depths[path] = 1
+            try:
+                yield
+            finally:
+                depths[path] = 0
         finally:
             os.close(fd)
 

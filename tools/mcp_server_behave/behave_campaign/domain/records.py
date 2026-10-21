@@ -201,7 +201,7 @@ CAMPAIGN_FIELDS = (
     "repo",
     "scope",
     "install_from",
-    "lanes",
+    "max_jobs",
 )
 
 
@@ -455,11 +455,12 @@ class CampaignRecord:
     campaign_id: str | None = None
     repo: RepoState = RepoState()
     scope: Scope = Scope()
-    # The install source every job runs with, and how many lanes a runner
-    # may fill in each pool. Each attempt still records the source its own
-    # job actually used, which is what a verification rests on.
+    # The install source every job runs with, and how many of its jobs may
+    # be in flight at once in each pool. Each attempt still records the
+    # source its own job actually used, which is what a verification rests
+    # on.
     install_from: str = DEFAULT_INSTALL_FROM
-    lanes: Mapping[Pool, int] = field(default_factory=dict)
+    max_jobs: Mapping[Pool, int] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -692,17 +693,17 @@ def _parse_campaign(body: dict[str, Any]) -> CampaignRecord:
         text_field(body, "install_from", "campaign")
     )
 
-    lanes = body["lanes"]
-    if not isinstance(lanes, dict):
-        raise CampaignError("campaign field 'lanes' must be an object")
-    for pool, count in lanes.items():
+    max_jobs = body["max_jobs"]
+    if not isinstance(max_jobs, dict):
+        raise CampaignError("campaign field 'max_jobs' must be an object")
+    for pool, count in max_jobs.items():
         if pool not in POOLS:
             raise CampaignError(
-                "campaign lanes pool must be one of: {}".format(
+                "campaign max_jobs pool must be one of: {}".format(
                     ", ".join(POOLS)
                 )
             )
-        _check_lane_count(Pool(pool), count)
+        _check_max_jobs(Pool(pool), count)
 
     return CampaignRecord(
         at=text_field(body, "at", "campaign"),
@@ -715,47 +716,48 @@ def _parse_campaign(body: dict[str, Any]) -> CampaignRecord:
         ),
         scope=Scope(**values),
         install_from=install_from,
-        lanes={Pool(pool): count for pool, count in lanes.items()},
+        max_jobs={Pool(pool): count for pool, count in max_jobs.items()},
     )
 
 
-def _check_lane_count(pool: Pool, count: Any) -> None:
+def _check_max_jobs(pool: Pool, count: Any) -> None:
     if isinstance(count, bool) or not isinstance(count, int) or count < 1:
         raise CampaignError(
-            "{} lanes must be a positive integer, got {!r}".format(pool, count)
+            "{} max jobs must be a positive integer, got {!r}".format(
+                pool, count
+            )
         )
     if pool == Pool.WSL and count > MAX_WSL_JOBS:
         raise CampaignError(
-            "wsl lanes may not exceed {}: WSL jobs share one Windows "
+            "wsl max jobs may not exceed {}: WSL jobs share one Windows "
             "host".format(MAX_WSL_JOBS)
         )
 
 
-def resolve_lanes(
+def resolve_max_jobs(
     units: Iterable[Unit], requested: Mapping[Pool, int]
 ) -> dict[Pool, int]:
-    """The lanes a campaign over ``units`` runs with, one entry per pool.
+    """A campaign's max jobs over ``units``, one entry per pool.
 
-    A pool the units draw on and the caller left out gets one lane. Lanes
-    for a pool no unit draws on are an error rather than ignored, because
-    they usually mean the scope is not what the caller thinks it is.
+    A pool the units draw on and the caller left out gets 1. Max jobs for a
+    pool no unit draws on are an error rather than ignored, because they
+    usually mean the scope is not what the caller thinks it is.
     """
     in_scope = {unit.pool for unit in units}
     stray = sorted(set(requested) - in_scope)
     if stray:
         raise CampaignError(
-            "lanes were given for {}, but no unit in scope runs there".format(
-                ", ".join(str(pool) for pool in stray)
-            )
+            "max_jobs was given for {}, but no unit in scope runs "
+            "there".format(", ".join(str(pool) for pool in stray))
         )
-    lanes = {}
+    max_jobs = {}
     for pool in Pool:
         if pool not in in_scope:
             continue
         count = requested.get(pool, 1)
-        _check_lane_count(pool, count)
-        lanes[pool] = count
-    return lanes
+        _check_max_jobs(pool, count)
+        max_jobs[pool] = count
+    return max_jobs
 
 
 def parse_record(raw: Any) -> Record:
@@ -821,7 +823,7 @@ def encode_record(record: Record) -> dict[str, Any]:
             "repo": record.repo.as_dict(),
             "scope": record.scope.as_dict(),
             "install_from": record.install_from,
-            "lanes": lanes_as_dict(record.lanes),
+            "max_jobs": max_jobs_as_dict(record.max_jobs),
         }
 
     if isinstance(record, IntentRecord):
@@ -872,5 +874,5 @@ def encode_record(record: Record) -> dict[str, Any]:
     return data
 
 
-def lanes_as_dict(lanes: Mapping[Pool, int]) -> dict[str, int]:
-    return {pool.value: count for pool, count in lanes.items()}
+def max_jobs_as_dict(max_jobs: Mapping[Pool, int]) -> dict[str, int]:
+    return {pool.value: count for pool, count in max_jobs.items()}

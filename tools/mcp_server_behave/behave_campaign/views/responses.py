@@ -12,7 +12,7 @@ from behave_campaign.domain.records import (
     CampaignRecord,
     Record,
     UnitHistory,
-    lanes_as_dict,
+    max_jobs_as_dict,
 )
 from behave_campaign.domain.state import (
     campaign_state,
@@ -76,7 +76,7 @@ def campaign_header(
         campaign_id=campaign_id,
         created_at=header.at,
         install_from=header.install_from,
-        lanes=lanes_as_dict(header.lanes),
+        max_jobs=max_jobs_as_dict(header.max_jobs),
         total_units=len(reduce_units(records)),
         repo=RepoState(**header.repo.as_dict()),
         scope=CampaignScope(**header.scope.as_dict()),
@@ -110,10 +110,10 @@ def campaign_summary(
 
 
 def in_flight_view(records: Sequence[Record]) -> dict[str, int]:
-    """Jobs in flight for each pool the campaign has lanes in."""
+    """Jobs in flight for each pool the campaign has max jobs in."""
     header = header_of(records) or CampaignRecord()
     busy = in_flight_by_pool(reduce_units(records))
-    return {pool.value: busy.get(pool, 0) for pool in header.lanes}
+    return {pool.value: busy.get(pool, 0) for pool in header.max_jobs}
 
 
 def campaign_listing(
@@ -125,7 +125,7 @@ def campaign_listing(
         **campaign_summary(campaign_id, records).model_dump(),
         created_at=header.at,
         install_from=header.install_from,
-        lanes=lanes_as_dict(header.lanes),
+        max_jobs=max_jobs_as_dict(header.max_jobs),
         total_units=len(reduce_units(records)),
         scope_size=ScopeSize(
             features=len(scope.feature),

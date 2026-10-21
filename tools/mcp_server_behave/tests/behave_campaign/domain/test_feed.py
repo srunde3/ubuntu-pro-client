@@ -47,7 +47,7 @@ HEADER = CampaignRecord(
     campaign_id=CAMPAIGN,
     scope=Scope(release=("jammy", "noble")),
     install_from="proposed",
-    lanes={Pool.LXD: 2},
+    max_jobs={Pool.LXD: 2},
 )
 
 
@@ -136,7 +136,7 @@ def test_creation_is_announced_with_the_scope():
     assert event.data == {
         "total_units": 2,
         "install_from": "proposed",
-        "lanes": {"lxd": 2},
+        "max_jobs": {"lxd": 2},
         "scope": HEADER.scope.as_dict(),
     }
 

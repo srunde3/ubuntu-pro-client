@@ -4,13 +4,7 @@ import pytest
 from mcp.shared.memory import create_connected_server_and_client_session
 
 from behave_mcp.server import mcp
-from tests.conftest import (
-    FakeLanes,
-    FakeLock,
-    FakeTicker,
-    result_error_text,
-    result_json,
-)
+from tests.conftest import FakeJobRunner, result_error_text, result_json
 
 pytestmark = pytest.mark.integration
 
@@ -87,15 +81,15 @@ async def test_creating_the_same_campaign_twice_is_an_error(repo):
 
 
 @pytest.mark.asyncio
-async def test_more_lanes_than_the_server_allows_is_an_error(repo):
-    # MCP_MAX_LXD_JOBS defaults to 1, so 8 lanes cannot be honoured.
+async def test_more_max_jobs_than_the_checkout_allows_is_an_error(repo):
+    # max_jobs.lxd defaults to 1, so 8 lanes cannot be honoured.
     async with create_connected_server_and_client_session(mcp) as client:
         result = await client.call_tool(
             "create_campaign",
-            {"campaign_id": "1234567", "lanes": {"lxd": 8}},
+            {"campaign_id": "1234567", "max_jobs": {"lxd": 8}},
         )
 
-    assert "lxd job limit of 1" in result_error_text(result)
+    assert "max_jobs.lxd of 1" in result_error_text(result)
 
 
 @pytest.mark.asyncio
@@ -103,7 +97,7 @@ async def test_more_than_one_wsl_lane_is_refused_by_the_schema(repo):
     async with create_connected_server_and_client_session(mcp) as client:
         result = await client.call_tool(
             "create_campaign",
-            {"campaign_id": "1234567", "lanes": {"wsl": 2}},
+            {"campaign_id": "1234567", "max_jobs": {"wsl": 2}},
         )
 
     assert "less than or equal to 1" in result_error_text(result)
@@ -199,33 +193,29 @@ async def test_campaign_status_on_an_unknown_campaign_is_an_error(repo):
 
 
 @pytest.fixture
-def runner(repo, monkeypatch, tmp_path):
-    """Replace the server's runner with one that launches no real jobs."""
+def jobs(repo, monkeypatch):
+    """The server's campaigns run on fake jobs: nothing launches tox."""
     import behave_mcp.server as server_module
-    from behave_campaign.adapters import JsonlCampaignStore, system_now
-    from behave_campaign.runner import CampaignRunner
 
-    lanes = FakeLanes(auto_finish={})
-    ticker = FakeTicker()
-    # The same store the server's own service reads, so what the runner
-    # records is announced through await_campaign_events.
-    store = JsonlCampaignStore(tmp_path / "state" / "campaigns")
-    replacement = CampaignRunner(
-        store=store,
-        lanes=lanes,
-        lock=FakeLock(),
-        now=system_now,
-        ticker=ticker,
-    )
-    monkeypatch.setattr(server_module, "_runner", replacement)
-    monkeypatch.setattr(server_module, "_store", store)
-    replacement.lanes = lanes
-    replacement.ticker = ticker
-    return replacement
+    jobs = FakeJobRunner()
+    monkeypatch.setattr(server_module, "campaign_jobs", lambda: jobs)
+    return jobs
+
+
+def settle(jobs, **result):
+    """Let every job end with ``result`` (``job_result`` keywords; a pass by
+    default), and reconcile until nothing is left to do, as job processes
+    and tool calls would."""
+    import behave_mcp.server as server_module
+
+    jobs.auto_finish = result
+    # A few units finish within a handful of reconciles.
+    for _ in range(10):
+        server_module.campaign_service().reconcile()
 
 
 @pytest.mark.asyncio
-async def test_run_campaign_marks_it_running(repo, runner):
+async def test_run_campaign_marks_it_running(repo, jobs):
     async with create_connected_server_and_client_session(mcp) as client:
         await client.call_tool("create_campaign", {"campaign_id": "1234567"})
         result = await client.call_tool(
@@ -240,7 +230,7 @@ async def test_run_campaign_marks_it_running(repo, runner):
 
 
 @pytest.mark.asyncio
-async def test_running_an_unknown_campaign_is_an_error(repo, runner):
+async def test_running_an_unknown_campaign_is_an_error(repo, jobs):
     async with create_connected_server_and_client_session(mcp) as client:
         result = await client.call_tool(
             "control_campaign", {"campaign_id": "absent", "action": "run"}
@@ -250,7 +240,7 @@ async def test_running_an_unknown_campaign_is_an_error(repo, runner):
 
 
 @pytest.mark.asyncio
-async def test_only_one_campaign_runs_at_a_time(repo, runner):
+async def test_two_campaigns_run_at_once(repo, jobs):
     async with create_connected_server_and_client_session(mcp) as client:
         await client.call_tool("create_campaign", {"campaign_id": "111"})
         await client.call_tool("create_campaign", {"campaign_id": "222"})
@@ -261,11 +251,11 @@ async def test_only_one_campaign_runs_at_a_time(repo, runner):
             "control_campaign", {"campaign_id": "222", "action": "run"}
         )
 
-    assert "only one campaign" in result_error_text(result)
+    assert result_json(result)["state"] == "running"
 
 
 @pytest.mark.asyncio
-async def test_pause_then_run_round_trips(repo, runner):
+async def test_pause_then_run_round_trips(repo, jobs):
     async with create_connected_server_and_client_session(mcp) as client:
         await client.call_tool("create_campaign", {"campaign_id": "1234567"})
         await client.call_tool(
@@ -279,13 +269,14 @@ async def test_pause_then_run_round_trips(repo, runner):
             "control_campaign", {"campaign_id": "1234567", "action": "run"}
         )
 
-    assert result_json(paused)["state"] == "paused"
+    # The run queued a job, so the pause drains it.
+    assert result_json(paused)["state"] == "pausing"
     assert result_json(paused)["intent"] == "hold"
     assert result_json(resumed)["state"] == "running"
 
 
 @pytest.mark.asyncio
-async def test_pausing_a_campaign_that_never_ran_holds_it(repo, runner):
+async def test_pausing_a_campaign_that_never_ran_holds_it(repo, jobs):
     async with create_connected_server_and_client_session(mcp) as client:
         await client.call_tool("create_campaign", {"campaign_id": "1234567"})
         result = await client.call_tool(
@@ -296,15 +287,13 @@ async def test_pausing_a_campaign_that_never_ran_holds_it(repo, runner):
 
 
 @pytest.mark.asyncio
-async def test_pause_with_kill_interrupts_the_jobs_in_flight(repo, runner):
+async def test_pause_with_kill_interrupts_the_jobs_in_flight(repo, jobs):
     async with create_connected_server_and_client_session(mcp) as client:
         await client.call_tool("create_campaign", {"campaign_id": "1234567"})
         await client.call_tool(
             "control_campaign", {"campaign_id": "1234567", "action": "run"}
         )
-        # One tick opens the one lane, and nothing finishes it.
-        runner.lanes.auto_finish = None
-        runner.ticker.tick()
+        # The run queued one job, and nothing finishes it.
         result = await client.call_tool(
             "control_campaign",
             {"campaign_id": "1234567", "action": "pause", "kill": True},
@@ -314,11 +303,11 @@ async def test_pause_with_kill_interrupts_the_jobs_in_flight(repo, runner):
 
     assert payload["state"] == "paused"
     assert [u["job_id"] for u in payload["killed"]] == ["job1"]
-    assert runner.lanes.killed == ["job1"]
+    assert jobs.killed == ["job1"]
 
 
 @pytest.mark.asyncio
-async def test_kill_only_applies_to_pause(repo, runner):
+async def test_kill_only_applies_to_pause(repo, jobs):
     async with create_connected_server_and_client_session(mcp) as client:
         await client.call_tool("create_campaign", {"campaign_id": "1234567"})
         result = await client.call_tool(
@@ -331,7 +320,7 @@ async def test_kill_only_applies_to_pause(repo, runner):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("action", ["start", "resume", "cancel"])
-async def test_an_old_verb_is_refused(repo, runner, action):
+async def test_an_old_verb_is_refused(repo, jobs, action):
     async with create_connected_server_and_client_session(mcp) as client:
         await client.call_tool("create_campaign", {"campaign_id": "1234567"})
         result = await client.call_tool(
@@ -342,28 +331,25 @@ async def test_an_old_verb_is_refused(repo, runner, action):
 
 
 @pytest.mark.asyncio
-async def test_a_running_campaign_fills_lanes_on_its_tick(repo, runner):
+async def test_running_a_campaign_queues_its_jobs_at_once(repo, jobs):
     async with create_connected_server_and_client_session(mcp) as client:
         await client.call_tool("create_campaign", {"campaign_id": "1234567"})
         await client.call_tool(
             "control_campaign", {"campaign_id": "1234567", "action": "run"}
         )
-        # One tick only: this is about the lane being open, not the campaign
-        # finishing.
-        runner.ticker.tick()
         status = await client.call_tool(
             "campaign_status", {"campaign_id": "1234567"}
         )
 
     payload = result_json(status)
 
-    assert len(runner.lanes.started) == 1
+    assert len(jobs.queued) == 1
     assert payload["summary"]["counts"]["in_flight"] == 1
     assert len(payload["in_flight"]) == 1
 
 
 @pytest.mark.asyncio
-async def test_await_events_reports_the_campaign_being_created(repo, runner):
+async def test_await_events_reports_the_campaign_being_created(repo, jobs):
     async with create_connected_server_and_client_session(mcp) as client:
         await client.call_tool("create_campaign", {"campaign_id": "1234567"})
         result = await client.call_tool(
@@ -378,13 +364,13 @@ async def test_await_events_reports_the_campaign_being_created(repo, runner):
 
 
 @pytest.mark.asyncio
-async def test_unit_history_lists_every_attempt(repo, runner):
+async def test_unit_history_lists_every_attempt(repo, jobs):
     async with create_connected_server_and_client_session(mcp) as client:
         await client.call_tool("create_campaign", {"campaign_id": "1234567"})
         await client.call_tool(
             "control_campaign", {"campaign_id": "1234567", "action": "run"}
         )
-        runner.ticker.drive()
+        settle(jobs)
 
         result = await client.call_tool(
             "unit_history", {"campaign_id": "1234567", "release": "jammy"}
@@ -401,13 +387,13 @@ async def test_unit_history_lists_every_attempt(repo, runner):
 
 
 @pytest.mark.asyncio
-async def test_await_events_defaults_to_what_needs_acting_on(repo, runner):
+async def test_await_events_defaults_to_what_needs_acting_on(repo, jobs):
     async with create_connected_server_and_client_session(mcp) as client:
         await client.call_tool("create_campaign", {"campaign_id": "1234567"})
         await client.call_tool(
             "control_campaign", {"campaign_id": "1234567", "action": "run"}
         )
-        runner.ticker.drive()
+        settle(jobs)
 
         result = await client.call_tool(
             "await_campaign_events", {"campaign_id": "1234567"}
@@ -427,13 +413,13 @@ async def test_await_events_defaults_to_what_needs_acting_on(repo, runner):
 
 
 @pytest.mark.asyncio
-async def test_await_events_follows_a_campaign_through_a_lane(repo, runner):
+async def test_await_events_follows_a_campaign_through_a_lane(repo, jobs):
     async with create_connected_server_and_client_session(mcp) as client:
         await client.call_tool("create_campaign", {"campaign_id": "1234567"})
         await client.call_tool(
             "control_campaign", {"campaign_id": "1234567", "action": "run"}
         )
-        runner.ticker.drive()
+        settle(jobs)
 
         result = await client.call_tool(
             "await_campaign_events",
@@ -453,7 +439,7 @@ async def test_await_events_follows_a_campaign_through_a_lane(repo, runner):
 
 
 @pytest.mark.asyncio
-async def test_the_cursor_reads_the_stream_without_repeats(repo, runner):
+async def test_the_cursor_reads_the_stream_without_repeats(repo, jobs):
     async with create_connected_server_and_client_session(mcp) as client:
         await client.call_tool("create_campaign", {"campaign_id": "1234567"})
         await client.call_tool(
@@ -481,7 +467,7 @@ async def test_the_cursor_reads_the_stream_without_repeats(repo, runner):
 
 
 @pytest.mark.asyncio
-async def test_an_empty_batch_still_says_where_things_stand(repo, runner):
+async def test_an_empty_batch_still_says_where_things_stand(repo, jobs):
     async with create_connected_server_and_client_session(mcp) as client:
         await client.call_tool("create_campaign", {"campaign_id": "1234567"})
         result = await client.call_tool(
@@ -498,7 +484,7 @@ async def test_an_empty_batch_still_says_where_things_stand(repo, runner):
 
 
 @pytest.mark.asyncio
-async def test_an_unknown_event_kind_is_an_error(repo, runner):
+async def test_an_unknown_event_kind_is_an_error(repo, jobs):
     async with create_connected_server_and_client_session(mcp) as client:
         await client.call_tool("create_campaign", {"campaign_id": "1234567"})
         result = await client.call_tool(
@@ -510,7 +496,7 @@ async def test_an_unknown_event_kind_is_an_error(repo, runner):
 
 
 @pytest.mark.asyncio
-async def test_a_timeout_beyond_the_server_limit_is_refused(repo, runner):
+async def test_a_timeout_beyond_the_server_limit_is_refused(repo, jobs):
     async with create_connected_server_and_client_session(mcp) as client:
         await client.call_tool("create_campaign", {"campaign_id": "1234567"})
         result = await client.call_tool(
@@ -522,8 +508,8 @@ async def test_a_timeout_beyond_the_server_limit_is_refused(repo, runner):
 
 
 @pytest.mark.asyncio
-async def test_retry_units_requeues_a_failure(repo, runner):
-    runner.lanes.auto_finish = dict(
+async def test_retry_units_requeues_a_failure(repo, jobs):
+    failure = dict(
         passed=0,
         failed=1,
         failures=[
@@ -536,13 +522,13 @@ async def test_retry_units_requeues_a_failure(repo, runner):
     )
 
     async with create_connected_server_and_client_session(mcp) as client:
-        # lanes stay at 1: MCP_MAX_LXD_JOBS defaults to 1, and a
-        # campaign asking for more than the server allows is refused.
+        # lanes stay at 1: max_jobs.lxd defaults to 1, and a campaign
+        # asking for more than the checkout allows is refused.
         await client.call_tool("create_campaign", {"campaign_id": "1234567"})
         await client.call_tool(
             "control_campaign", {"campaign_id": "1234567", "action": "run"}
         )
-        runner.ticker.drive()
+        settle(jobs, **failure)
 
         status = result_json(
             await client.call_tool(
@@ -559,12 +545,13 @@ async def test_retry_units_requeues_a_failure(repo, runner):
         )
 
     assert retried["retried"] == 2
+    # One lane: the first retry is queued, the second waits for it.
     assert retried["state"] == "running"
     assert retried["intent"] == "run"
 
 
 @pytest.mark.asyncio
-async def test_retry_units_with_nothing_to_retry_is_an_error(repo, runner):
+async def test_retry_units_with_nothing_to_retry_is_an_error(repo, jobs):
     async with create_connected_server_and_client_session(mcp) as client:
         await client.call_tool("create_campaign", {"campaign_id": "1234567"})
         await client.call_tool(
@@ -578,7 +565,7 @@ async def test_retry_units_with_nothing_to_retry_is_an_error(repo, runner):
 
 
 @pytest.mark.asyncio
-async def test_killing_an_unknown_job_is_an_error(repo, runner):
+async def test_killing_an_unknown_job_is_an_error(repo, jobs):
     async with create_connected_server_and_client_session(mcp) as client:
         result = await client.call_tool("kill_job", {"job_id": "nope"})
 

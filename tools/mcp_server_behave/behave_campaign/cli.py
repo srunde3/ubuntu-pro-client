@@ -25,6 +25,7 @@ from behave_campaign.domain.records import (
     DEFAULT_INSTALL_FROM,
     INSTALL_FROM_VALUES,
     STATES,
+    CampaignError,
     CampaignState,
     Filters,
 )
@@ -40,12 +41,18 @@ from behave_mcp.adapters import (
 )
 from behave_mcp.domain import layout
 from behave_mcp.domain.pools import Pool
-from behave_mcp.service import BehaveService, BehaveServiceError
+from behave_mcp.service import (
+    BehaveService,
+    BehaveServiceError,
+    UnknownJobError,
+)
 
 from .adapters import (
     CampaignDirStore,
     JobDirFiles,
+    JsonlCampaignStore,
     ParserFeatureReader,
+    ServiceJobRunner,
     TarBundleWriter,
     system_now,
 )
@@ -67,8 +74,6 @@ def _service(campaign_dir: Path) -> CampaignService:
         features=ParserFeatureReader(),
         now=system_now,
         repo_state=repo_state,
-        # Nothing here runs tests, so no lane ceiling applies.
-        lane_ceiling=None,
     )
 
 
@@ -136,10 +141,10 @@ def _command_create(args: argparse.Namespace) -> BaseModel:
         feature_files=args.feature or (),
         scenarios=args.scenario or (),
         install_from=args.install_from,
-        lanes={
-            pool: getattr(args, "{}_lanes".format(pool))
+        max_jobs={
+            pool: getattr(args, "max_{}_jobs".format(pool))
             for pool in Pool
-            if getattr(args, "{}_lanes".format(pool)) is not None
+            if getattr(args, "max_{}_jobs".format(pool)) is not None
         },
     )
 
@@ -213,15 +218,26 @@ def _command_config(args: argparse.Namespace) -> BaseModel:
 
 
 def _reconcile(args: argparse.Namespace) -> None:
-    """Start any queued job with a free lane, as every front-end does."""
+    """Bring every campaign up to date and start any queued job with a free
+    lane, as every front-end does."""
     try:
         state = _state_dir(args)
     except ValueError:
         # No checkout named: there is no state directory to reconcile.
         return
     try:
-        _job_service(state).reconcile()
-    except (BehaveServiceError, OSError) as error:
+        CampaignService(
+            store=JsonlCampaignStore(layout.campaigns_dir(state)),
+            features=ParserFeatureReader(),
+            now=system_now,
+            repo_state=repo_state,
+            jobs=ServiceJobRunner(
+                _job_service(state),
+                refusal=BehaveServiceError,
+                unknown_job=UnknownJobError,
+            ),
+        ).reconcile()
+    except (BehaveServiceError, CampaignError, OSError) as error:
         # The command's own answer stands; the next caller retries.
         print("reconcile failed: {}".format(error), file=sys.stderr)
 
@@ -412,13 +428,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     for pool in Pool:
         create.add_argument(
-            "--{}-lanes".format(pool),
+            "--max-{}-jobs".format(pool),
             type=int,
-            dest="{}_lanes".format(pool),
+            dest="max_{}_jobs".format(pool),
             metavar="N",
             help=(
-                "how many {} jobs a runner may keep in flight for this "
-                "campaign (default: 1 if the scope covers the {} pool)".format(
+                "how many of this campaign's {} jobs may be in flight at "
+                "once (default: 1 if the scope covers the {} pool)".format(
                     pool, pool
                 )
             ),

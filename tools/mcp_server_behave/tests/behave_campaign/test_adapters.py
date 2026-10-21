@@ -1,3 +1,4 @@
+import itertools
 import json
 import os
 import tarfile
@@ -9,16 +10,17 @@ import pytest
 from behave_campaign import adapters as adapters_module
 from behave_campaign.adapters import (
     CampaignDirStore,
-    FileCampaignRunLock,
     JobDirFiles,
     JsonlCampaignStore,
-    ServiceLaneRunner,
+    ParserFeatureReader,
+    ServiceJobRunner,
     TarBundleWriter,
 )
 from behave_campaign.domain.bundle import BundleEntry
 from behave_campaign.domain.records import (
     CampaignError,
     CampaignRecord,
+    CampaignState,
     FinishedRecord,
     PlanRecord,
     RepoState,
@@ -26,13 +28,17 @@ from behave_campaign.domain.records import (
     StartedRecord,
     Unit,
 )
+from behave_campaign.domain.state import state_of
 from behave_campaign.ports import (
     CampaignExistsError,
-    CampaignLockedError,
     CampaignNotFoundError,
+    QueueRefused,
 )
+from behave_campaign.service import CampaignService
 from behave_mcp.domain.pools import Pool
+from behave_mcp.service import BehaveServiceError, UnknownJobError
 from tests.conftest import (
+    FakeConfigStore,
     FakeJobLauncher,
     FakeWorkspace,
     job_file,
@@ -50,7 +56,7 @@ def header(**overrides):
         "campaign_id": "1234567",
         "repo": RepoState(root="/repo", commit="abc", branch="main"),
         "scope": Scope(release=("jammy",)),
-        "lanes": {Pool.LXD: 1},
+        "max_jobs": {Pool.LXD: 1},
     }
     fields.update(overrides)
     return CampaignRecord(**fields)
@@ -75,7 +81,7 @@ def _stored_header(drop=None, **overrides):
             "machine_type": [],
         },
         "install_from": "local",
-        "lanes": {"lxd": 1},
+        "max_jobs": {"lxd": 1},
     }
     stored.update(overrides)
     if drop is not None:
@@ -258,13 +264,13 @@ class TestJsonlCampaignStore:
 
         assert "install_from" in str(error.value)
 
-    def test_a_header_missing_lanes_is_rejected(self, tmp_path):
-        write_record(tmp_path, _stored_header(drop="lanes"))
+    def test_a_header_missing_max_jobs_is_rejected(self, tmp_path):
+        write_record(tmp_path, _stored_header(drop="max_jobs"))
 
         with pytest.raises(CampaignError) as error:
             JsonlCampaignStore(tmp_path).read_records(CAMPAIGN)
 
-        assert "lanes" in str(error.value)
+        assert "max_jobs" in str(error.value)
 
     def test_an_unreadable_record_names_its_file(self, tmp_path):
         record, _ = stored(tmp_path)
@@ -278,14 +284,16 @@ class TestJsonlCampaignStore:
         store = JsonlCampaignStore(tmp_path)
         store.create(
             CAMPAIGN,
-            header(install_from="proposed", lanes={Pool.LXD: 8, Pool.WSL: 1}),
+            header(
+                install_from="proposed", max_jobs={Pool.LXD: 8, Pool.WSL: 1}
+            ),
             plans(UNIT_A),
         )
 
         replayed = store.read_records(CAMPAIGN)[0]
 
         assert replayed.install_from == "proposed"
-        assert replayed.lanes == {Pool.LXD: 8, Pool.WSL: 1}
+        assert replayed.max_jobs == {Pool.LXD: 8, Pool.WSL: 1}
 
     def test_the_header_always_states_them_on_disk(self, tmp_path):
         store = JsonlCampaignStore(tmp_path)
@@ -295,20 +303,22 @@ class TestJsonlCampaignStore:
         campaign = json.loads(record.read_text())["campaign"]
 
         assert campaign["install_from"] == "local"
-        assert campaign["lanes"] == {"lxd": 1}
+        assert campaign["max_jobs"] == {"lxd": 1}
 
     @pytest.mark.parametrize(
-        "lanes, message",
+        "max_jobs, message",
         [
-            ({"lxd": 0}, "lxd lanes must be a positive integer"),
-            ({"lxd": True}, "lxd lanes must be a positive integer"),
-            ({"wsl": 2}, "wsl lanes may not exceed 1"),
+            ({"lxd": 0}, "lxd max jobs must be a positive integer"),
+            ({"lxd": True}, "lxd max jobs must be a positive integer"),
+            ({"wsl": 2}, "wsl max jobs may not exceed 1"),
             ({"toaster": 1}, "pool must be one of"),
             ([1], "must be an object"),
         ],
     )
-    def test_bad_lanes_on_disk_are_rejected(self, tmp_path, lanes, message):
-        write_record(tmp_path, _stored_header(lanes=lanes))
+    def test_bad_max_jobs_on_disk_are_rejected(
+        self, tmp_path, max_jobs, message
+    ):
+        write_record(tmp_path, _stored_header(max_jobs=max_jobs))
 
         with pytest.raises(CampaignError, match=message):
             JsonlCampaignStore(tmp_path).read_records(CAMPAIGN)
@@ -343,49 +353,6 @@ class TestCampaignDirStore:
         assert store.list_ids() == []
         store.create("", header(), plans(UNIT_A))
         assert store.list_ids() == [CAMPAIGN]
-
-
-class TestFileCampaignRunLock:
-    def test_acquiring_marks_it_held_for_other_holders(self, tmp_path):
-        mine = FileCampaignRunLock(tmp_path)
-        theirs = FileCampaignRunLock(tmp_path)
-
-        mine.acquire("1234567")
-
-        assert theirs.held_by_other("1234567")
-        assert not mine.held_by_other("1234567")
-
-    def test_a_second_holder_is_refused(self, tmp_path):
-        # The held descriptor *is* the lock, so the first holder has to stay
-        # referenced -- letting it be collected would release it.
-        first = FileCampaignRunLock(tmp_path)
-        first.acquire("1234567")
-
-        with pytest.raises(CampaignLockedError):
-            FileCampaignRunLock(tmp_path).acquire("1234567")
-
-    def test_releasing_frees_it(self, tmp_path):
-        mine = FileCampaignRunLock(tmp_path)
-        mine.acquire("1234567")
-
-        mine.release("1234567")
-
-        assert not FileCampaignRunLock(tmp_path).held_by_other("1234567")
-        FileCampaignRunLock(tmp_path).acquire("1234567")
-
-    def test_acquiring_twice_from_one_holder_is_allowed(self, tmp_path):
-        mine = FileCampaignRunLock(tmp_path)
-        mine.acquire("1234567")
-
-        mine.acquire("1234567")
-
-        assert not mine.held_by_other("1234567")
-
-    def test_releasing_what_was_never_held_is_a_no_op(self, tmp_path):
-        FileCampaignRunLock(tmp_path).release("1234567")
-
-    def test_an_unlocked_campaign_is_not_held(self, tmp_path):
-        assert not FileCampaignRunLock(tmp_path).held_by_other("1234567")
 
 
 class TestSystemNow:
@@ -551,57 +518,171 @@ FEATURE_A = """Feature: A feature
 """
 
 
-class TestServiceLaneRunner:
-    """Lanes opened, polled and killed through a real BehaveService."""
+class TestServiceJobRunner:
+    """A campaign's jobs queued, read and killed through a real
+    BehaveService."""
 
     @staticmethod
-    def lane_runner(tmp_path, launcher):
+    def job_runner(tmp_path, launcher, **ports):
         repo_root = tmp_path / "repo"
         (repo_root / "features").mkdir(parents=True)
         (repo_root / "features" / "a.feature").write_text(FEATURE_A)
         (repo_root / "tox.ini").write_text("[tox]\n")
+        ports.setdefault("new_job_id", lambda: "job-a")
         service = make_service(
             FakeWorkspace(repo_root=repo_root, jobs_dir=tmp_path),
             launcher=launcher,
             now_utc=lambda: AT,
-            new_job_id=lambda: "job-a",
+            **ports,
         )
-        return ServiceLaneRunner(service), repo_root
+        runner = ServiceJobRunner(
+            service, refusal=BehaveServiceError, unknown_job=UnknownJobError
+        )
+        return runner, repo_root
 
-    def test_a_running_job_is_signalled(self, tmp_path):
+    @staticmethod
+    def queue(runner, repo_root, record=lambda: None, unit=UNIT_A):
+        runner.queue(
+            "job-a",
+            unit,
+            repo_root=repo_root,
+            install_from="local",
+            campaign_id="1234567",
+            record=record,
+        )
+        runner.reconcile_jobs()
+        return "job-a"
+
+    def test_a_queued_job_belongs_to_its_campaign(self, tmp_path):
         launcher = FakeJobLauncher(tmp_path)
-        lanes, repo_root = self.lane_runner(tmp_path, launcher)
-        job_id = lanes.start(UNIT_A, repo_root=repo_root, install_from="local")
+        runner, repo_root = self.job_runner(tmp_path, launcher)
 
-        killed = lanes.kill(job_id)
+        job_id = self.queue(runner, repo_root)
 
-        assert killed is True
-        assert launcher.killed == [job_id]
+        request = json.loads((tmp_path / job_id / "request.json").read_text())
+        assert request["campaign_id"] == "1234567"
 
-    def test_a_finished_job_is_not_signalled(self, tmp_path):
+    def test_the_attempt_is_recorded_before_the_request_exists(self, tmp_path):
         launcher = FakeJobLauncher(tmp_path)
-        lanes, repo_root = self.lane_runner(tmp_path, launcher)
-        job_id = lanes.start(UNIT_A, repo_root=repo_root, install_from="local")
-        launcher.finish(job_id)
+        runner, repo_root = self.job_runner(tmp_path, launcher)
+        seen = []
 
-        killed = lanes.kill(job_id)
+        self.queue(
+            runner,
+            repo_root,
+            record=lambda: seen.append(
+                (tmp_path / "job-a" / "request.json").exists()
+            ),
+        )
 
-        assert killed is False
-        assert launcher.killed == []
+        assert seen == [False]
 
-    def test_a_running_job_has_no_result_yet(self, tmp_path):
+    def test_a_refused_unit_records_nothing(self, tmp_path):
         launcher = FakeJobLauncher(tmp_path)
-        lanes, repo_root = self.lane_runner(tmp_path, launcher)
-        job_id = lanes.start(UNIT_A, repo_root=repo_root, install_from="local")
+        runner, repo_root = self.job_runner(
+            tmp_path, launcher, config=FakeConfigStore({Pool.LXD: 0})
+        )
+        recorded = []
 
-        assert lanes.poll(job_id) is None
+        with pytest.raises(QueueRefused) as refused:
+            self.queue(runner, repo_root, record=lambda: recorded.append(1))
+
+        assert refused.value.pool == Pool.LXD
+        assert recorded == []
+
+    def test_a_running_job_reads_as_running(self, tmp_path):
+        launcher = FakeJobLauncher(tmp_path)
+        runner, repo_root = self.job_runner(tmp_path, launcher)
+        job_id = self.queue(runner, repo_root)
+
+        assert runner.poll(job_id)["state"] == "running"
 
     def test_an_ended_job_reports_how_it_ended(self, tmp_path):
         launcher = FakeJobLauncher(tmp_path)
-        lanes, repo_root = self.lane_runner(tmp_path, launcher)
-        job_id = lanes.start(UNIT_A, repo_root=repo_root, install_from="local")
+        runner, repo_root = self.job_runner(tmp_path, launcher)
+        job_id = self.queue(runner, repo_root)
         launcher.crash(job_id)
 
-        result = lanes.poll(job_id)
+        result = runner.poll(job_id)
 
         assert (result["state"], result["reason"]) == ("interrupted", "died")
+
+    def test_a_job_never_queued_reads_as_died(self, tmp_path):
+        runner, _ = self.job_runner(tmp_path, FakeJobLauncher(tmp_path))
+
+        result = runner.poll("never-queued")
+
+        assert (result["state"], result["reason"]) == ("interrupted", "died")
+
+    def test_a_running_job_is_killed(self, tmp_path):
+        launcher = FakeJobLauncher(tmp_path)
+        runner, repo_root = self.job_runner(tmp_path, launcher)
+        job_id = self.queue(runner, repo_root)
+
+        assert runner.kill(job_id) is True
+        assert launcher.killed == [job_id]
+
+    def test_a_finished_job_is_not_killed(self, tmp_path):
+        launcher = FakeJobLauncher(tmp_path)
+        runner, repo_root = self.job_runner(tmp_path, launcher)
+        job_id = self.queue(runner, repo_root)
+        launcher.finish(job_id)
+
+        assert runner.kill(job_id) is False
+        assert launcher.killed == []
+
+
+class TestCampaignsShareTheJobQueue:
+    """Two campaigns and a one-off job on one pool, through the real job
+    service: one lane, so one job runs at a time, whoever queued it."""
+
+    def test_they_take_turns_on_the_one_lane(self, tmp_path):
+        repo_root = tmp_path / "repo"
+        (repo_root / "features").mkdir(parents=True)
+        (repo_root / "features" / "a.feature").write_text(FEATURE_A)
+        (repo_root / "tox.ini").write_text("[tox]\n")
+        launcher = FakeJobLauncher(tmp_path / "jobs")
+        numbers = itertools.count(1)
+        service = make_service(
+            FakeWorkspace(repo_root=repo_root, jobs_dir=tmp_path / "jobs"),
+            launcher=launcher,
+            new_job_id=lambda: "job{}".format(next(numbers)),
+        )
+        store = JsonlCampaignStore(tmp_path / "campaigns")
+        campaigns = CampaignService(
+            store=store,
+            features=ParserFeatureReader(),
+            now=lambda: AT,
+            repo_state=lambda root: RepoState(root=str(root)),
+            jobs=ServiceJobRunner(
+                service,
+                refusal=BehaveServiceError,
+                unknown_job=UnknownJobError,
+            ),
+        )
+        for campaign_id in ("111", "222"):
+            campaigns.create_campaign(
+                campaign_id=campaign_id, repo_root=repo_root
+            )
+            campaigns.run(campaign_id=campaign_id)
+        one_off = service.start_scenario(
+            "features/a.feature", "A", "jammy", "lxd-container"
+        )
+
+        # The first campaign's job holds the lane; the rest wait.
+        assert len(launcher.running) == 1
+        assert one_off.state == "queued"
+
+        for _ in range(3):
+            (running,) = launcher.running
+            launcher.finish(running)
+            campaigns.reconcile()
+
+        assert [call["job_id"] for call in launcher.calls] == [
+            "job1",
+            "job2",
+            "job3",
+        ]
+        for campaign_id in ("111", "222"):
+            records = store.read_records(campaign_id)
+            assert state_of(records) == CampaignState.COMPLETE

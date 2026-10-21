@@ -1,11 +1,12 @@
-"""What a scheduler tick decides: which lanes to record and to open."""
+"""What one reconcile decides for a campaign: what to record, what to
+queue."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
-from behave_campaign.domain.classify import classify_result
+from behave_campaign.domain.classify import MCP_ENDED, classify_result
 from behave_campaign.domain.records import (
     DEFAULT_INSTALL_FROM,
     CampaignState,
@@ -25,10 +26,10 @@ from behave_mcp.domain.pools import Pool
 def select_schedulable(
     statuses: Sequence[UnitHistory], free: Mapping[Pool, int]
 ) -> list[UnitHistory]:
-    """The units a scheduler may open lanes for, untouched ones first.
+    """The units a campaign may queue, untouched ones first.
 
-    Each pool fills only its own free lanes, so a full pool never holds
-    back units bound for another.
+    Each pool fills only its own room, so a full pool never holds back
+    units bound for another.
     """
     ready = [s for s in statuses if s.queueable]
     ready.sort(key=lambda s: s.state != UnitState.UNATTEMPTED)
@@ -50,89 +51,87 @@ class ControlAction(StringEnum):
 
 
 @dataclass(frozen=True)
-class Lane:
-    """One unit occupying a lane, and its job's result if it has finished.
+class InFlightJob:
+    """One unit's job, queued or running, and what the job service says of
+    it now.
 
-    ``install_from`` is carried from the running attempt this lane recorded
-    when it opened, so the completed attempt states what the job actually
-    ran with rather than what the campaign currently defaults to.
+    ``install_from`` is carried from the attempt that queued it, so the
+    attempt states what the job actually ran with. ``result`` is the job's
+    current status payload.
     """
 
     unit: Unit
     job_id: str
     result: Any = None
     install_from: str = DEFAULT_INSTALL_FROM
-    # When the lane opened, from the running attempt that recorded it.
-    opened_at: str = ""
 
     @property
-    def finished(self) -> bool:
-        return self.result is not None
+    def ended(self) -> bool:
+        return isinstance(self.result, dict) and (
+            self.result.get("state") in MCP_ENDED
+        )
+
+    @property
+    def started_at(self) -> str:
+        """When the job began running; empty while it is queued."""
+        if not isinstance(self.result, dict):
+            return ""
+        return str(self.result.get("started_at") or "")
 
 
 @dataclass(frozen=True)
-class TickPlan:
-    """What one scheduler tick decided to do.
+class CampaignPlan:
+    """What one reconcile decided for a campaign.
 
-    ``record`` holds the finished lanes as finished attempts; one whose
-    result could not be classified carries its ``reason``. ``start`` holds the
-    units to open new lanes for. Both are empty when there is nothing to do,
-    which is the common case. ``state`` is the campaign's named state once
-    the finished lanes are recorded.
+    ``record`` closes the attempts whose jobs ended; one whose result could
+    not be classified carries its ``reason``. ``queue`` holds the units to
+    queue jobs for. ``state`` is the campaign's named state once the ended
+    jobs are recorded.
     """
 
     record: tuple[FinishedRecord | InterruptedRecord, ...] = ()
-    start: tuple[Unit, ...] = ()
+    queue: tuple[Unit, ...] = ()
     state: CampaignState = CampaignState.CREATED
 
-    @property
-    def idle(self) -> bool:
-        return not self.record and not self.start
 
-
-def plan_tick(
+def plan_campaign(
     *,
     records: Sequence[Record],
-    lanes: Sequence[Lane],
-    lane_limits: Mapping[Pool, int],
+    jobs: Sequence[InFlightJob],
+    max_jobs: Mapping[Pool, int],
     at: str = "",
-) -> TickPlan:
-    """Decide what to do next. Pure: starts nothing and writes nothing.
+) -> CampaignPlan:
+    """Decide what to do next. Pure: queues nothing and writes nothing.
 
-    Finished lanes are classified first, so the units they free are
-    available to fill in the same tick. New lanes are opened only under
-    intent run, which is what makes a paused campaign drain: its in-flight
-    jobs are still recorded, and nothing new begins.
+    Ended jobs are recorded first, so the units they free are queued in the
+    same reconcile; an interrupted unit is queueable, so it is queued again
+    as a new attempt. New jobs are queued only under intent run, which is
+    what makes a paused campaign drain.
     """
-    classified = tuple(
-        classify_result(lane.unit, lane.result, at)
-        for lane in lanes
-        if lane.finished
+    recorded = tuple(
+        classify_result(job.unit, job.result, at) for job in jobs if job.ended
     )
 
-    replayed = replay([*records, *classified])
+    replayed = replay([*records, *recorded])
     statuses = replayed.statuses()
     state = replayed.state()
     if replayed.intent != Intent.RUN or state == CampaignState.COMPLETE:
-        return TickPlan(record=classified, state=state)
+        return CampaignPlan(record=recorded, state=state)
 
     busy: dict[Pool, int] = {}
-    for lane in lanes:
-        if not lane.finished:
-            busy[lane.unit.pool] = busy.get(lane.unit.pool, 0) + 1
+    for job in jobs:
+        if not job.ended:
+            busy[job.unit.pool] = busy.get(job.unit.pool, 0) + 1
     free = {
         pool: max(limit - busy.get(pool, 0), 0)
-        for pool, limit in lane_limits.items()
+        for pool, limit in max_jobs.items()
     }
-    if not any(free.values()):
-        return TickPlan(record=classified, state=state)
-
-    # Only queueable units: a scheduler never re-runs a problem unit on its
-    # own. Units in flight are excluded too, and every busy lane recorded
-    # an attempt when it opened, so a unit cannot enter two lanes.
-    return TickPlan(
-        record=classified,
-        start=tuple(
+    # Only queueable units: a campaign never re-runs a problem unit on its
+    # own. Every job in flight recorded an attempt when it was queued, so a
+    # unit cannot be queued twice.
+    return CampaignPlan(
+        record=recorded,
+        queue=tuple(
             status.unit for status in select_schedulable(statuses, free)
         ),
         state=state,

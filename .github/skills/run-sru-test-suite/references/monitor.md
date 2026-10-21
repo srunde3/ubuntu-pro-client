@@ -28,8 +28,8 @@ Use the `behave` MCP tools; each tool's description says how to call it.
    - `anomaly.*`, `job.overdue`, `unit.unclassifiable`: note as findings.
 3. Stop and report when any of these holds:
    - `state` is `complete` or `paused`.
-   - One cause is hitting every lane.
-   - A lane is overdue.
+   - One cause is hitting every job.
+   - A job is overdue.
    - You have run 15 cycles.
 
 ## Report

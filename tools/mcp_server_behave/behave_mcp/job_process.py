@@ -32,6 +32,13 @@ from pathlib import Path
 from types import FrameType
 from typing import Sequence
 
+from behave_campaign.adapters import (
+    JsonlCampaignStore,
+    ParserFeatureReader,
+    ServiceJobRunner,
+)
+from behave_campaign.repo import repo_state
+from behave_campaign.service import CampaignService
 from behave_mcp.adapters import (
     FileConfigStore,
     FileLanePool,
@@ -44,7 +51,11 @@ from behave_mcp.adapters import (
 )
 from behave_mcp.domain import layout
 from behave_mcp.messages import JobExit
-from behave_mcp.service import BehaveService
+from behave_mcp.service import (
+    BehaveService,
+    BehaveServiceError,
+    UnknownJobError,
+)
 
 # From <sys/prctl.h>: deliver a signal to this process when its parent dies.
 PR_SET_PDEATHSIG = 1
@@ -175,10 +186,21 @@ def _job_service(state_dir: Path) -> BehaveService:
 
 
 def _reconcile(state_dir: Path) -> None:
-    """Start the next queued jobs. The job is over either way: nobody is
-    waiting on this process to report a failure to."""
+    """Record this job for its campaign, queue what that frees, and start
+    the next queued jobs. The job is over either way: nobody is waiting on
+    this process to report a failure to."""
     try:
-        _job_service(state_dir).reconcile()
+        CampaignService(
+            store=JsonlCampaignStore(layout.campaigns_dir(state_dir)),
+            features=ParserFeatureReader(),
+            now=_now,
+            repo_state=repo_state,
+            jobs=ServiceJobRunner(
+                _job_service(state_dir),
+                refusal=BehaveServiceError,
+                unknown_job=UnknownJobError,
+            ),
+        ).reconcile()
     except Exception:
         pass
 

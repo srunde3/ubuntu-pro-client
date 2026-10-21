@@ -41,7 +41,6 @@ EXPORTS_SUBDIR = "exports"
 # The files in one campaign's directory, ``campaigns/<campaign_id>/``.
 CAMPAIGN_FILE_NAME = "campaign.json"
 CAMPAIGN_RECORDS_NAME = "records.jsonl"
-CAMPAIGN_LOCK_NAME = "campaign.lock"
 
 
 def state_dir(repo_root: Path, configured: Path | None) -> Path:
@@ -60,14 +59,12 @@ class CampaignPaths(NamedTuple):
     """The directory one campaign owns, and the files in it.
 
     ``campaign`` holds the campaign record and plan, written once at
-    creation; ``records`` is every later record, appended; ``lock`` is the
-    run lock.
+    creation; ``records`` is every later record, appended.
     """
 
     campaign_dir: Path
     campaign: Path
     records: Path
-    lock: Path
 
 
 def campaign_paths(campaigns: Path, campaign_id: str) -> CampaignPaths:
@@ -76,7 +73,6 @@ def campaign_paths(campaigns: Path, campaign_id: str) -> CampaignPaths:
         campaign_dir=campaign_dir,
         campaign=campaign_dir / CAMPAIGN_FILE_NAME,
         records=campaign_dir / CAMPAIGN_RECORDS_NAME,
-        lock=campaign_dir / CAMPAIGN_LOCK_NAME,
     )
 
 

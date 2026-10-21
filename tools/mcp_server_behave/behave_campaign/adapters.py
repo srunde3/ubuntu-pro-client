@@ -19,11 +19,10 @@ import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import IO, Any, Callable, Mapping, Sequence
+from typing import IO, Any, Callable, ContextManager, Mapping, Sequence
 
 from behave_campaign.domain import discovery
 from behave_campaign.domain.bundle import JOB_FILES, BundleEntry
-from behave_campaign.domain.classify import MCP_ENDED
 from behave_campaign.domain.records import (
     CampaignError,
     CampaignRecord,
@@ -37,8 +36,8 @@ from behave_campaign.domain.records import (
 )
 from behave_campaign.ports import (
     CampaignExistsError,
-    CampaignLockedError,
     CampaignNotFoundError,
+    QueueRefused,
 )
 from behave_mcp.domain import layout
 
@@ -329,91 +328,75 @@ class ParserFeatureReader:
         return discovery.available_dimensions(repo_root)
 
 
-class ServiceLaneRunner:
-    """Opens lanes by starting behave jobs through ``BehaveService``.
+class ServiceJobRunner:
+    """Queues, reads and kills a campaign's jobs through ``BehaveService``.
 
-    One lane is one job is one unit: a single scenario, for one release, on
-    one machine type.
+    One job is one unit: a single scenario, for one release, on one machine
+    type. The entry point that builds it passes the job service's exception
+    types, since this package does not import that service: ``refusal`` for
+    a unit it will not queue, ``unknown_job`` for a job id it never saw.
     """
 
-    def __init__(self, service: Any) -> None:
+    def __init__(
+        self,
+        service: Any,
+        *,
+        refusal: type[Exception],
+        unknown_job: type[Exception],
+    ) -> None:
         self._service = service
+        self._refusal = refusal
+        self._unknown_job = unknown_job
 
-    def start(self, unit: Unit, *, repo_root: Path, install_from: str) -> str:
-        result = self._service.start_scenario(
-            feature_file=unit.feature,
-            scenario_name=unit.scenario,
-            release=unit.release,
-            machine_type=unit.machine_type,
-            repo_root=str(repo_root),
-            install_from=install_from,
-        )
-        return str(result.job_id)
+    def lock(self) -> ContextManager[None]:
+        return self._service.reconcile_lock()
 
-    def poll(self, job_id: str) -> Any | None:
-        status = self._service.job_status(job_id).model_dump(mode="json")
-        if status.get("state") not in MCP_ENDED:
-            return None
-        return status
+    def new_job_id(self) -> str:
+        return str(self._service.new_job_id())
+
+    def queue(
+        self,
+        job_id: str,
+        unit: Unit,
+        *,
+        repo_root: Path,
+        install_from: str,
+        campaign_id: str,
+        record: Callable[[], None],
+    ) -> None:
+        try:
+            self._service.queue_job(
+                unit.feature,
+                unit.scenario,
+                unit.release,
+                unit.machine_type,
+                repo_root=str(repo_root),
+                install_from=install_from,
+                job_id=job_id,
+                campaign_id=campaign_id,
+                record=record,
+            )
+        except self._refusal as error:
+            # The unit stays queueable, and the campaign says why.
+            raise QueueRefused(str(error), unit.pool) from error
+
+    def poll(self, job_id: str) -> dict[str, Any]:
+        try:
+            status = self._service.job_status(job_id)
+        except self._unknown_job:
+            # Recorded but never queued: the reconcile that would have
+            # queued it died between the two.
+            return {"state": "interrupted", "reason": "died", "job_id": job_id}
+        return dict(status.model_dump(mode="json"))
 
     def kill(self, job_id: str) -> bool:
-        return bool(self._service.kill_job(job_id).killed)
-
-
-class FileCampaignRunLock:
-    """Advisory ``flock`` on the campaign directory's ``campaign.lock``.
-
-    The kernel drops the lock when the holding process dies, so a crashed
-    server leaves nothing to clean up by hand.
-    """
-
-    def __init__(self, root: Path) -> None:
-        self._root = root
-        self._held: dict[str, IO[str]] = {}
-
-    def path_for(self, campaign_id: str) -> Path:
-        return layout.campaign_paths(self._root, campaign_id).lock
-
-    def acquire(self, campaign_id: str) -> None:
-        if campaign_id in self._held:
-            return
-        self.path_for(campaign_id).parent.mkdir(parents=True, exist_ok=True)
-        stream = self.path_for(campaign_id).open("w")
         try:
-            fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError:
-            stream.close()
-            raise CampaignLockedError(
-                "campaign {!r} is being run by another process".format(
-                    campaign_id
-                )
-            ) from None
-        stream.write(str(os.getpid()))
-        stream.flush()
-        self._held[campaign_id] = stream
-
-    def release(self, campaign_id: str) -> None:
-        stream = self._held.pop(campaign_id, None)
-        if stream is None:
-            return
-        try:
-            fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
-        finally:
-            stream.close()
-
-    def held_by_other(self, campaign_id: str) -> bool:
-        if campaign_id in self._held:
+            return bool(self._service.kill_job(job_id).killed)
+        except self._unknown_job:
             return False
-        path = self.path_for(campaign_id)
-        if not path.is_file():
-            return False
-        with path.open("r") as stream:
-            try:
-                fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except OSError:
-                return True
-            fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
-        return False
+
+    def reconcile_jobs(self) -> None:
+        self._service.reconcile()
 
 
 class JobDirFiles:

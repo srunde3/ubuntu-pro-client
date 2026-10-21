@@ -1,4 +1,4 @@
-"""What a scheduler tick decides."""
+"""What one reconcile decides for a campaign."""
 
 import pytest
 
@@ -13,7 +13,7 @@ from behave_campaign.domain.records import (
     StartedRecord,
     Unit,
 )
-from behave_campaign.domain.schedule import Lane, plan_tick
+from behave_campaign.domain.schedule import InFlightJob, plan_campaign
 from behave_mcp.domain.pools import Pool
 
 AT = "2026-09-12T12:00:00Z"
@@ -37,8 +37,8 @@ UNIT_W2 = Unit("features/w.feature", "W", "noble", "wsl")
 UNIT_CLOUD = Unit("features/d.feature", "D", "jammy", "aws.generic")
 
 
-def lxd(lanes):
-    return {Pool.LXD: lanes}
+def lxd(max_jobs):
+    return {Pool.LXD: max_jobs}
 
 
 def plan(*units):
@@ -75,129 +75,133 @@ def completed(
 
 
 class TestPlanTick:
-    def test_each_pool_fills_only_its_own_free_lanes(self):
+    def test_each_pool_fills_only_its_own_room(self):
         records = [
             *plan(UNIT_W1, UNIT_W2, UNIT_A, UNIT_B, UNIT_C, UNIT_CLOUD),
             IntentRecord(Intent.RUN, Cause.RUN, AT),
         ]
 
-        tick = plan_tick(
+        decided = plan_campaign(
             records=records,
-            lanes=[],
-            lane_limits={Pool.LXD: 2, Pool.CLOUD: 1, Pool.WSL: 1},
+            jobs=[],
+            max_jobs={Pool.LXD: 2, Pool.CLOUD: 1, Pool.WSL: 1},
             at=AT,
         )
 
-        assert sorted(unit.pool for unit in tick.start) == [
+        assert sorted(unit.pool for unit in decided.queue) == [
             Pool.CLOUD,
             Pool.LXD,
             Pool.LXD,
             Pool.WSL,
         ]
 
-    def test_a_busy_wsl_lane_does_not_hold_back_lxd(self):
+    def test_a_busy_wsl_job_does_not_hold_back_lxd(self):
         records = [
             *plan(UNIT_W1, UNIT_W2, UNIT_A, UNIT_B),
             IntentRecord(Intent.RUN, Cause.RUN, AT),
             attempt(UNIT_W1, "running"),
         ]
-        lanes = [Lane(unit=UNIT_W1, job_id="job1")]
+        jobs = [InFlightJob(unit=UNIT_W1, job_id="job1")]
 
-        tick = plan_tick(
+        decided = plan_campaign(
             records=records,
-            lanes=lanes,
-            lane_limits={Pool.LXD: 2, Pool.WSL: 1},
+            jobs=jobs,
+            max_jobs={Pool.LXD: 2, Pool.WSL: 1},
             at=AT,
         )
 
-        assert set(tick.start) == {UNIT_A, UNIT_B}
+        assert set(decided.queue) == {UNIT_A, UNIT_B}
 
-    def test_a_pool_without_lanes_starts_nothing(self):
+    def test_a_pool_without_max_jobs_queues_nothing(self):
         records = [
             *plan(UNIT_W1, UNIT_A),
             IntentRecord(Intent.RUN, Cause.RUN, AT),
         ]
 
-        tick = plan_tick(records=records, lanes=[], lane_limits=lxd(4), at=AT)
+        decided = plan_campaign(
+            records=records, jobs=[], max_jobs=lxd(4), at=AT
+        )
 
-        assert tick.start == (UNIT_A,)
+        assert decided.queue == (UNIT_A,)
 
     def test_a_created_campaign_starts_nothing(self):
-        tick = plan_tick(
-            records=plan(UNIT_A), lanes=[], lane_limits=lxd(4), at=AT
+        decided = plan_campaign(
+            records=plan(UNIT_A), jobs=[], max_jobs=lxd(4), at=AT
         )
 
-        assert tick.idle
-        assert tick.state == CampaignState.CREATED
+        assert not decided.record and not decided.queue
+        assert decided.state == CampaignState.CREATED
 
-    def test_a_running_campaign_fills_every_free_lane(self):
+    def test_a_running_campaign_queues_up_to_its_max_jobs(self):
         records = [
             *plan(UNIT_A, UNIT_B, UNIT_C),
             IntentRecord(Intent.RUN, Cause.RUN, AT),
         ]
 
-        tick = plan_tick(records=records, lanes=[], lane_limits=lxd(2), at=AT)
+        decided = plan_campaign(
+            records=records, jobs=[], max_jobs=lxd(2), at=AT
+        )
 
-        assert len(tick.start) == 2
-        assert tick.state == CampaignState.RUNNING
+        assert len(decided.queue) == 2
+        assert decided.state == CampaignState.RUNNING
 
-    def test_it_never_opens_more_lanes_than_the_limit(self):
+    def test_it_never_queues_more_than_max_jobs(self):
         records = [
             *plan(UNIT_A, UNIT_B, UNIT_C),
             IntentRecord(Intent.RUN, Cause.RUN, AT),
         ]
-        lanes = [Lane(unit=UNIT_A, job_id="job1")]
+        jobs = [InFlightJob(unit=UNIT_A, job_id="job1")]
 
-        tick = plan_tick(
-            records=records, lanes=lanes, lane_limits=lxd(2), at=AT
+        decided = plan_campaign(
+            records=records, jobs=jobs, max_jobs=lxd(2), at=AT
         )
 
-        assert len(tick.start) == 1
+        assert len(decided.queue) == 1
 
     def test_a_full_window_starts_nothing(self):
         records = [
             *plan(UNIT_A, UNIT_B),
             IntentRecord(Intent.RUN, Cause.RUN, AT),
         ]
-        lanes = [
-            Lane(unit=UNIT_A, job_id="job1"),
-            Lane(unit=UNIT_B, job_id="job2"),
+        jobs = [
+            InFlightJob(unit=UNIT_A, job_id="job1"),
+            InFlightJob(unit=UNIT_B, job_id="job2"),
         ]
 
-        tick = plan_tick(
-            records=records, lanes=lanes, lane_limits=lxd(2), at=AT
+        decided = plan_campaign(
+            records=records, jobs=jobs, max_jobs=lxd(2), at=AT
         )
 
-        assert tick.start == ()
+        assert decided.queue == ()
 
-    def test_a_finished_lane_is_recorded(self):
+    def test_an_ended_job_is_recorded(self):
         records = [
             *plan(UNIT_A),
             IntentRecord(Intent.RUN, Cause.RUN, AT),
             attempt(UNIT_A, "running"),
         ]
-        lanes = [Lane(unit=UNIT_A, job_id="job1", result=completed())]
+        jobs = [InFlightJob(unit=UNIT_A, job_id="job1", result=completed())]
 
-        tick = plan_tick(
-            records=records, lanes=lanes, lane_limits=lxd(2), at=AT
+        decided = plan_campaign(
+            records=records, jobs=jobs, max_jobs=lxd(2), at=AT
         )
 
-        assert [f.outcome for f in tick.record] == ["passed"]
+        assert [f.outcome for f in decided.record] == ["passed"]
 
-    def test_a_freed_lane_is_refilled_in_the_same_tick(self):
+    def test_a_unit_freed_by_an_ended_job_is_replaced_at_once(self):
         records = [
             *plan(UNIT_A, UNIT_B),
             IntentRecord(Intent.RUN, Cause.RUN, AT),
             attempt(UNIT_A, "running"),
         ]
-        lanes = [Lane(unit=UNIT_A, job_id="job1", result=completed())]
+        jobs = [InFlightJob(unit=UNIT_A, job_id="job1", result=completed())]
 
-        tick = plan_tick(
-            records=records, lanes=lanes, lane_limits=lxd(1), at=AT
+        decided = plan_campaign(
+            records=records, jobs=jobs, max_jobs=lxd(1), at=AT
         )
 
-        assert [f.unit for f in tick.record] == [UNIT_A]
-        assert tick.start == (UNIT_B,)
+        assert [f.unit for f in decided.record] == [UNIT_A]
+        assert decided.queue == (UNIT_B,)
 
     def test_a_unit_in_flight_is_never_started_twice(self):
         records = [
@@ -205,13 +209,13 @@ class TestPlanTick:
             IntentRecord(Intent.RUN, Cause.RUN, AT),
             attempt(UNIT_A, "running"),
         ]
-        lanes = [Lane(unit=UNIT_A, job_id="job1")]
+        jobs = [InFlightJob(unit=UNIT_A, job_id="job1")]
 
-        tick = plan_tick(
-            records=records, lanes=lanes, lane_limits=lxd(4), at=AT
+        decided = plan_campaign(
+            records=records, jobs=jobs, max_jobs=lxd(4), at=AT
         )
 
-        assert UNIT_A not in tick.start
+        assert UNIT_A not in decided.queue
 
     def test_a_failed_unit_is_not_retried_on_its_own(self):
         records = [
@@ -221,10 +225,12 @@ class TestPlanTick:
             attempt(UNIT_B, "passed"),
         ]
 
-        tick = plan_tick(records=records, lanes=[], lane_limits=lxd(4), at=AT)
+        decided = plan_campaign(
+            records=records, jobs=[], max_jobs=lxd(4), at=AT
+        )
 
-        assert tick.start == ()
-        assert tick.state == CampaignState.COMPLETE
+        assert decided.queue == ()
+        assert decided.state == CampaignState.COMPLETE
 
     def test_a_paused_campaign_records_but_starts_nothing(self):
         records = [
@@ -233,30 +239,30 @@ class TestPlanTick:
             attempt(UNIT_A, "running"),
             IntentRecord(Intent.HOLD, Cause.PAUSE, AT),
         ]
-        lanes = [Lane(unit=UNIT_A, job_id="job1", result=completed())]
+        jobs = [InFlightJob(unit=UNIT_A, job_id="job1", result=completed())]
 
-        tick = plan_tick(
-            records=records, lanes=lanes, lane_limits=lxd(4), at=AT
+        decided = plan_campaign(
+            records=records, jobs=jobs, max_jobs=lxd(4), at=AT
         )
 
-        assert [f.outcome for f in tick.record] == ["passed"]
-        assert tick.start == ()
-        assert tick.state == CampaignState.PAUSED
+        assert [f.outcome for f in decided.record] == ["passed"]
+        assert decided.queue == ()
+        assert decided.state == CampaignState.PAUSED
 
-    def test_the_last_finished_lane_completes_the_campaign(self):
+    def test_the_last_ended_job_completes_the_campaign(self):
         records = [
             *plan(UNIT_A),
             IntentRecord(Intent.RUN, Cause.RUN, AT),
             attempt(UNIT_A, "running"),
         ]
-        lanes = [Lane(unit=UNIT_A, job_id="job1", result=completed())]
+        jobs = [InFlightJob(unit=UNIT_A, job_id="job1", result=completed())]
 
-        tick = plan_tick(
-            records=records, lanes=lanes, lane_limits=lxd(4), at=AT
+        decided = plan_campaign(
+            records=records, jobs=jobs, max_jobs=lxd(4), at=AT
         )
 
-        assert tick.state == CampaignState.COMPLETE
-        assert tick.start == ()
+        assert decided.state == CampaignState.COMPLETE
+        assert decided.queue == ()
 
     def test_an_unclassifiable_result_does_not_stop_scheduling(self):
         records = [
@@ -264,25 +270,25 @@ class TestPlanTick:
             IntentRecord(Intent.RUN, Cause.RUN, AT),
             attempt(UNIT_A, "running"),
         ]
-        lanes = [
-            Lane(
+        jobs = [
+            InFlightJob(
                 unit=UNIT_A,
                 job_id="job1",
                 result=completed(passed=1, unknown=1),
             )
         ]
 
-        tick = plan_tick(
-            records=records, lanes=lanes, lane_limits=lxd(2), at=AT
+        decided = plan_campaign(
+            records=records, jobs=jobs, max_jobs=lxd(2), at=AT
         )
 
-        assert tick.record[0].reason
+        assert decided.record[0].reason
         # UNIT_A was just recorded as error. It must not be re-queued: only
         # the untouched unit is started.
-        assert tick.start == (UNIT_B,)
+        assert decided.queue == (UNIT_B,)
 
 
-# Whether a tick opens lanes under each intent. Only run schedules.
+# Whether a reconcile queues under each intent. Only run does.
 OPENS_LANES = {
     Intent.NEVER_RUN: False,
     Intent.RUN: True,
@@ -295,7 +301,7 @@ def test_every_intent_has_an_expectation():
 
 
 @pytest.mark.parametrize("wanted, opens", OPENS_LANES.items(), ids=str)
-def test_only_intent_run_opens_lanes(wanted, opens):
+def test_only_intent_run_queues(wanted, opens):
     intent_records = (
         []
         if wanted == Intent.NEVER_RUN
@@ -303,9 +309,9 @@ def test_only_intent_run_opens_lanes(wanted, opens):
     )
     records = [*plan(UNIT_A, UNIT_B), *intent_records]
 
-    tick = plan_tick(records=records, lanes=[], lane_limits=lxd(8), at=AT)
+    decided = plan_campaign(records=records, jobs=[], max_jobs=lxd(8), at=AT)
 
-    assert bool(tick.start) is opens
+    assert bool(decided.queue) is opens
 
 
 class TestSchedulerNeverRetries:
@@ -320,9 +326,11 @@ class TestSchedulerNeverRetries:
             attempt(UNIT_B, "passed"),
         ]
 
-        tick = plan_tick(records=records, lanes=[], lane_limits=lxd(8), at=AT)
+        decided = plan_campaign(
+            records=records, jobs=[], max_jobs=lxd(8), at=AT
+        )
 
-        assert tick.start == ()
+        assert decided.queue == ()
 
     @pytest.mark.parametrize("state", ["failed", "skipped", "error"])
     def test_problem_units_do_not_crowd_out_untouched_ones(self, state):
@@ -332,21 +340,25 @@ class TestSchedulerNeverRetries:
             attempt(UNIT_A, state),
         ]
 
-        tick = plan_tick(records=records, lanes=[], lane_limits=lxd(1), at=AT)
+        decided = plan_campaign(
+            records=records, jobs=[], max_jobs=lxd(1), at=AT
+        )
 
-        assert tick.start == (UNIT_B,)
+        assert decided.queue == (UNIT_B,)
 
-    def test_a_lane_that_errors_frees_capacity_for_untouched_work(self):
+    def test_a_job_that_errors_frees_room_for_untouched_work(self):
         records = [
             *plan(UNIT_A, UNIT_B),
             IntentRecord(Intent.RUN, Cause.RUN, AT),
             attempt(UNIT_A, "running"),
         ]
-        lanes = [Lane(unit=UNIT_A, job_id="job1", result=completed(passed=0))]
+        jobs = [
+            InFlightJob(unit=UNIT_A, job_id="job1", result=completed(passed=0))
+        ]
 
-        tick = plan_tick(
-            records=records, lanes=lanes, lane_limits=lxd(1), at=AT
+        decided = plan_campaign(
+            records=records, jobs=jobs, max_jobs=lxd(1), at=AT
         )
 
-        assert tick.record[0].outcome == "error"
-        assert tick.start == (UNIT_B,)
+        assert decided.record[0].outcome == "error"
+        assert decided.queue == (UNIT_B,)

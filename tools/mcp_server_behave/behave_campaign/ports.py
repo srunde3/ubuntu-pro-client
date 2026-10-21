@@ -9,7 +9,7 @@ callables rather than Protocols, matching ``behave_mcp.service``.
 """
 
 from pathlib import Path
-from typing import Any, Callable, Mapping, Protocol, Sequence
+from typing import Any, Callable, ContextManager, Mapping, Protocol, Sequence
 
 from behave_campaign.domain.bundle import BundleEntry
 from behave_campaign.domain.records import (
@@ -33,10 +33,6 @@ class CampaignExistsError(CampaignError):
 
 class CampaignNotFoundError(CampaignError):
     """Raised when addressing a campaign that was never created."""
-
-
-class CampaignLockedError(CampaignError):
-    """Raised when a campaign's run lock is held by someone else."""
 
 
 class CampaignStore(Protocol):
@@ -107,91 +103,65 @@ class FeatureReader(Protocol):
         ...
 
 
-class LaneStartError(CampaignError):
-    """Raised when a lane could not be opened for a unit.
+class QueueRefused(CampaignError):
+    """Raised when the job service will not queue a unit's job: its pool is
+    disabled, or the unit no longer matches its feature files."""
 
-    ``full_pool`` names the pool that had no room, when that is the reason;
-    the other pools may still have room.
-    """
-
-    def __init__(self, message: str, full_pool: Pool | None = None) -> None:
+    def __init__(self, message: str, pool: Pool) -> None:
         super().__init__(message)
-        self.full_pool = full_pool
+        self.pool = pool
 
 
-class LaneRunner(Protocol):
-    """Runs one test unit as a job, and reports when it has finished."""
+class JobRunner(Protocol):
+    """The job service, as a campaign uses it: queue, read and kill jobs,
+    under the state directory's one lock."""
 
-    def start(self, unit: Unit, *, repo_root: Path, install_from: str) -> str:
-        """Start a job for ``unit`` and return its job id.
+    def lock(self) -> ContextManager[None]:
+        """Hold the state directory's reconcile lock for the block.
 
-        Raises LaneStartError when no job could be started, including when
-        the unit's pool is at capacity.
+        Re-entrant within a thread: what runs inside may take it again.
         """
         ...
 
-    def poll(self, job_id: str) -> Any | None:
-        """Return the job's result payload, or None while it is running.
+    def new_job_id(self) -> str:
+        """A fresh job id, to record before the job is queued."""
+        ...
 
-        The payload is whatever ``classify_result`` understands: the MCP's
-        own completion shape.
+    def queue(
+        self,
+        job_id: str,
+        unit: Unit,
+        *,
+        repo_root: Path,
+        install_from: str,
+        campaign_id: str,
+        record: Callable[[], None],
+    ) -> None:
+        """Queue a job for ``unit`` under ``job_id``, starting nothing.
+
+        ``record`` is called once the unit is accepted and before the job is
+        queued, so the attempt is written first. Raises QueueRefused, having
+        called nothing, when the job service will not queue it.
+        """
+        ...
+
+    def poll(self, job_id: str) -> dict[str, Any]:
+        """Return the job's current status payload, with ``state``.
+
+        A job the job service never queued reads as interrupted, ``died``.
         """
         ...
 
     def kill(self, job_id: str) -> bool:
-        """Kill the job, and return whether the kill was sent.
+        """Kill the job, queued or running; return whether it was.
 
         False means there was nothing to kill: the job had already ended,
         or its process could not be reached.
         """
         ...
 
-
-class Ticker(Protocol):
-    """Calls a function repeatedly until it reports it is done.
-
-    A port so the runner can be driven synchronously in tests: the thread is
-    an implementation of this, not a thing the runner owns.
-    """
-
-    def start(self, tick: Callable[[], bool]) -> None:
-        """Begin calling ``tick``. Calling it again while running is a no-op.
-
-        ``tick`` returning True means the work is finished and no further
-        calls should be made.
-        """
-        ...
-
-    def stop(self) -> None:
-        """Stop calling ``tick`` and wait for any call in flight."""
-        ...
-
-    def is_running(self) -> bool:
-        """Return whether ticks are still being delivered."""
-        ...
-
-
-class CampaignRunLock(Protocol):
-    """Exclusive claim on a campaign, held while it is actively scheduling.
-
-    Advisory: it binds processes that ask for it, which is every path this
-    project ships. The holder's death releases it, so a crashed server
-    strands nothing.
-    """
-
-    def acquire(self, campaign_id: str) -> None:
-        """Take the lock.
-
-        Raises CampaignLockedError if another holder has it.
-        """
-        ...
-
-    def release(self, campaign_id: str) -> None:
-        """Release the lock. Safe to call when not held."""
-        ...
-
-    def held_by_other(self, campaign_id: str) -> bool:
-        """Return whether some other process currently holds the lock."""
+    def reconcile_jobs(self) -> None:
+        """Start queued jobs on free lanes."""
         ...
 
 
