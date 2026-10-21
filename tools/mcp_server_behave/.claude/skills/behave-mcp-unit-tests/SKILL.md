@@ -113,8 +113,9 @@ Good: a refusal is proven by the port never being called.
 with pytest.raises(BehaveServiceError, match="exact name"):
     service.start_scenario(
         "features/cli/attach.feature",
-        machine_types=["lxd-container"],
         scenario_name="Attach command",
+        release="jammy",
+        machine_type="lxd-container",
     )
 assert launcher.calls == []
 ```
@@ -203,7 +204,9 @@ Bad: a mock standing in for the port. A typo in `launch`, or a handle method the
 ```python
 launcher = MagicMock()
 launcher.launch.return_value.poll.return_value = None
-service.start_scenario("features/cli/attach.feature", ["lxd-container"])
+service.start_scenario(
+    "features/cli/attach.feature", "Attach command", "jammy", "lxd-container"
+)
 launcher.launch.assert_called_once()
 ```
 

@@ -17,9 +17,10 @@ The server exposes these MCP tools:
   - Optional `release`, `machine_type`, `tag`, and `text` (scenario-name substring) filters.
   - Returns matching `feature_file`, `scenario_name`, `type`, required config, and the combos satisfying the filters.
   - `limit` caps the matches (default 50), with `total` and `truncated` alongside; `limit_clamped` is set when a value above the server max was capped.
-- `start_scenario` -- starts a behave scenario in the background.
+- `start_scenario` -- starts one unit in the background: one scenario on one release and one machine type.
   - Returns a `job_id`.
-  - Optional `scenario_name` is a scenario's exact name, as `describe_feature` lists it; the job runs that scenario's rows and no other scenario. A name the feature does not have is rejected.
+  - `feature_file`, `scenario_name`, `release` and `machine_type` are all required. `scenario_name` is a scenario's exact name, as `describe_feature` lists it, and the scenario must cover that release and machine type. The job runs that scenario's rows for that combo and no other scenario.
+  - A selection that matches no unit is rejected, and so is one that matches more than one: two scenarios with the same name that both cover the combo, which behave would run together.
   - The job runs in its own session with no stdin, so `kill_job` stops it and everything it started.
   - Optional `install_from` controls where `ubuntu-pro-client` is installed from before the scenario runs (sets `UACLIENT_BEHAVE_INSTALL_FROM` for the behave subprocess). Allowed values: `local` (default), `archive`, `daily`, `staging`, `stable`, `proposed`.
   - Returns `repo_state`: `repo_root`'s git `commit`, `branch`, and `dirty` flag at launch time (all `null` when `repo_root` isn't a git checkout), so results can be correlated back to the exact code tested. Also persisted on the job record.
@@ -176,12 +177,13 @@ Run only the long-running end-to-end tests:
 uv run pytest -q -m "e2e and long_running"
 ```
 
-`tests/mcp_surface/test_campaign_e2e.py` is the one e2e test that needs no
-contract token and no LXD: it runs a real three-lane campaign over
-`features/_version.feature`, whose scenarios skip for want of
-`check_version` config, and asserts that all three behave subprocesses were
-in flight at once. It is what proves the scheduler's concurrency is real
-rather than faked, and it finishes in seconds.
+`tests/mcp_surface/test_campaign_e2e.py` holds the e2e tests that need no
+contract token and no LXD. They run real campaigns over
+`features/_version.feature`'s attached-version scenario, which skips for want
+of `contract_token` config: one asserts that three behave subprocesses were in
+flight at once, which proves the scheduler's concurrency is real rather than
+faked, and one pauses with kill on a real job and runs the campaign to
+completion. They finish in seconds.
 
 ## Linting and type checking
 
@@ -225,7 +227,7 @@ Each machine type draws on one pool:
 | `cloud` | `aws.*`, `gcp.*`, `azure.*`, including `pro` and `pro-fips` |
 | `wsl` | `wsl` |
 
-A job holds one slot in every pool its `machine_types` draw on. When a pool
+A job holds one slot in the pool its `machine_type` draws on. When that pool
 is full, `start_scenario` fails fast with `status: capacity_exceeded` and
 `full_pools` naming each full pool with its limit and running count. Starting
 the server with a removed variable (`MCP_MAX_PARALLEL_JOBS`,
@@ -258,7 +260,7 @@ One more variable is read per call rather than at startup, because it follows
 ## Safety constraints
 
 - `feature_file` must be one of the paths returned by `list_features`.
-- `machine_types` is required.
+- A job is exactly one unit: `scenario_name`, `release` and `machine_type` are required.
 - Cloud machine types are blocked by default and require setting `MCP_MAX_CLOUD_JOBS`.
 - Concurrent jobs are capped per pool: one LXD job and one WSL job by default.
 

@@ -18,6 +18,26 @@ def clear_jobs():
     registry.clear()
 
 
+# One scenario covering every pool, so a test can start a job on any of
+# them. Its name and combos are what start_scenario must be given.
+UNIT_SCENARIO = "Attach command"
+
+
+UNIT_FEATURE = """Feature: sample
+
+  Scenario Outline: Attach command
+    Given a `<release>` `<machine_type>` machine
+
+    Examples: ubuntu release
+      | release | machine_type  |
+      | jammy   | lxd-container |
+      | noble   | lxd-vm        |
+      | jammy   | wsl           |
+      | jammy   | azure.generic |
+      | jammy   | aws.pro-fips  |
+"""
+
+
 def make_repo_with_feature(
     tmp_path: Path,
     rel: str | None = "features/cli/sample.feature",
@@ -35,7 +55,7 @@ def make_repo_with_feature(
     else:
         feature_path = repo_root / rel
         feature_path.parent.mkdir(parents=True, exist_ok=True)
-        feature_path.write_text("Feature: sample\n", encoding="utf-8")
+        feature_path.write_text(UNIT_FEATURE, encoding="utf-8")
     (repo_root / "tox.ini").write_text("[tox]\n", encoding="utf-8")
     return repo_root
 

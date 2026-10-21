@@ -24,6 +24,8 @@ from behave_mcp.service import (
     UnknownJobError,
 )
 from tests.conftest import (
+    UNIT_FEATURE,
+    UNIT_SCENARIO,
     FakeLauncher,
     FakeProcessHandle,
     FakeWorkspace,
@@ -262,7 +264,9 @@ def test_start_scenario_rejects_unlisted_feature(tmp_path):
     ):
         service.start_scenario(
             "features/cli/does-not-exist.feature",
-            machine_types=["lxd-container"],
+            scenario_name=UNIT_SCENARIO,
+            release="jammy",
+            machine_type="lxd-container",
         )
 
 
@@ -276,7 +280,9 @@ def test_start_scenario_accepts_normalized_listed_feature(tmp_path):
 
     result = service.start_scenario(
         "features/cli/../cli/attach.feature",
-        machine_types=["lxd-container"],
+        scenario_name=UNIT_SCENARIO,
+        release="jammy",
+        machine_type="lxd-container",
     ).model_dump(mode="json")
 
     assert result["ok"] is True
@@ -301,18 +307,57 @@ def test_start_scenario_refuses_a_name_the_feature_lacks(tmp_path):
     with pytest.raises(BehaveServiceError, match="exact name"):
         service.start_scenario(
             "features/cli/attach.feature",
-            machine_types=["lxd-container"],
             scenario_name="Attach command",
+            release="jammy",
+            machine_type="lxd-container",
+        )
+    assert launcher.calls == []
+
+
+def test_start_scenario_refuses_a_combo_the_scenario_lacks(tmp_path):
+    repo_root = make_repo_with_feature(tmp_path, "features/cli/attach.feature")
+    launcher = FakeLauncher()
+    service = _make_service(
+        FakeWorkspace(repo_root=repo_root, log_dir=tmp_path),
+        launcher=launcher,
+    )
+
+    with pytest.raises(BehaveServiceError, match="does not run"):
+        service.start_scenario(
+            "features/cli/attach.feature",
+            scenario_name=UNIT_SCENARIO,
+            release="noble",
+            machine_type="lxd-container",
+        )
+    assert launcher.calls == []
+
+
+def test_start_scenario_refuses_an_ambiguous_unit(tmp_path):
+    # Two outlines share a name and the jammy lxd-container row, so behave
+    # would run both: no job can name exactly one unit.
+    repo_root = make_repo_with_feature(tmp_path, "features/cli/attach.feature")
+    (repo_root / "features/cli/attach.feature").write_text(
+        UNIT_FEATURE + "\n" + UNIT_FEATURE.split("\n", 1)[1],
+        encoding="utf-8",
+    )
+    launcher = FakeLauncher()
+    service = _make_service(
+        FakeWorkspace(repo_root=repo_root, log_dir=tmp_path),
+        launcher=launcher,
+    )
+
+    with pytest.raises(BehaveServiceError, match="More than one scenario"):
+        service.start_scenario(
+            "features/cli/attach.feature",
+            scenario_name=UNIT_SCENARIO,
+            release="jammy",
+            machine_type="lxd-container",
         )
     assert launcher.calls == []
 
 
 def test_start_scenario_builds_command(tmp_path):
     repo_root = make_repo_with_feature(tmp_path, "features/cli/attach.feature")
-    (repo_root / "features/cli/attach.feature").write_text(
-        "Feature: attach\n  Scenario: attach\n    Given a step\n",
-        encoding="utf-8",
-    )
     launcher = FakeLauncher()
     service = _make_service(
         FakeWorkspace(
@@ -325,9 +370,9 @@ def test_start_scenario_builds_command(tmp_path):
 
     result = service.start_scenario(
         "features/cli/attach.feature",
-        machine_types=["lxd-container"],
-        scenario_name="attach",
-        releases=["resolute"],
+        scenario_name=UNIT_SCENARIO,
+        release="jammy",
+        machine_type="lxd-container",
     ).model_dump(mode="json")
 
     assert result["ok"] is True
@@ -360,7 +405,9 @@ def test_start_scenario_defaults_install_from_to_local(tmp_path):
 
     service.start_scenario(
         "features/cli/attach.feature",
-        machine_types=["lxd-container"],
+        scenario_name=UNIT_SCENARIO,
+        release="jammy",
+        machine_type="lxd-container",
     )
 
     assert launcher.calls[0]["env"]["UACLIENT_BEHAVE_INSTALL_FROM"] == "local"
@@ -376,7 +423,9 @@ def test_start_scenario_sets_install_from_env_var(tmp_path):
 
     service.start_scenario(
         "features/cli/attach.feature",
-        machine_types=["lxd-container"],
+        scenario_name=UNIT_SCENARIO,
+        release="jammy",
+        machine_type="lxd-container",
         install_from="proposed",
     )
 
@@ -394,7 +443,9 @@ def test_start_scenario_rejects_invalid_install_from(tmp_path):
     with pytest.raises(BehaveServiceError, match="Unsupported install_from"):
         service.start_scenario(
             "features/cli/attach.feature",
-            machine_types=["lxd-container"],
+            scenario_name=UNIT_SCENARIO,
+            release="jammy",
+            machine_type="lxd-container",
             install_from="custom",
         )
 
@@ -415,7 +466,9 @@ def test_start_scenario_includes_repo_state_in_response_and_record(tmp_path):
 
     result = service.start_scenario(
         "features/cli/attach.feature",
-        machine_types=["lxd-container"],
+        scenario_name=UNIT_SCENARIO,
+        release="jammy",
+        machine_type="lxd-container",
     ).model_dump(mode="json")
 
     assert result["repo_state"] == {
@@ -440,7 +493,9 @@ def test_start_scenario_uses_repo_root_override(tmp_path):
 
     result = service.start_scenario(
         "features/cli/sample.feature",
-        machine_types=["lxd-container"],
+        scenario_name=UNIT_SCENARIO,
+        release="jammy",
+        machine_type="lxd-container",
         repo_root=str(repo_root),
     ).model_dump(mode="json")
 
@@ -458,7 +513,9 @@ def test_start_scenario_does_not_reference_combo_formatter(tmp_path):
 
     service.start_scenario(
         "features/cli/attach.feature",
-        machine_types=["lxd-container", "lxd-vm"],
+        scenario_name="Attach on a machine",
+        release="jammy",
+        machine_type="lxd-container",
     ).model_dump(mode="json")
 
     call = launcher.calls[0]
@@ -476,19 +533,26 @@ def test_start_scenario_rejects_invalid_repo_root():
     with pytest.raises(BehaveServiceError, match="Invalid repo_root"):
         service.start_scenario(
             "features/cli/attach.feature",
-            machine_types=["lxd-container"],
+            scenario_name=UNIT_SCENARIO,
+            release="jammy",
+            machine_type="lxd-container",
             repo_root="/bad",
         )
 
 
-def test_start_scenario_requires_machine_types(tmp_path):
+def test_start_scenario_refuses_an_unknown_machine_type(tmp_path):
     repo_root = make_repo_with_feature(tmp_path, "features/cli/attach.feature")
     service = _make_service(
         FakeWorkspace(repo_root=repo_root, log_dir=tmp_path)
     )
 
-    with pytest.raises(BehaveServiceError, match="machine_types is required"):
-        service.start_scenario("features/cli/attach.feature", [])
+    with pytest.raises(BehaveServiceError, match="Unsupported machine_type"):
+        service.start_scenario(
+            "features/cli/attach.feature",
+            scenario_name=UNIT_SCENARIO,
+            release="jammy",
+            machine_type="lxd-ctr",
+        )
 
 
 @pytest.mark.parametrize("machine_type", ["azure.generic", "aws.pro-fips"])
@@ -502,10 +566,13 @@ def test_start_scenario_rejects_cloud_machine_type_by_default(
 
     with pytest.raises(
         BehaveServiceError,
-        match="cloud machine_types are disabled.*MCP_MAX_CLOUD_JOBS",
+        match="cloud machine types are disabled.*MCP_MAX_CLOUD_JOBS",
     ):
         service.start_scenario(
-            "features/cli/attach.feature", machine_types=[machine_type]
+            "features/cli/attach.feature",
+            scenario_name=UNIT_SCENARIO,
+            release="jammy",
+            machine_type=machine_type,
         )
 
 
@@ -518,7 +585,10 @@ def test_start_scenario_rejects_a_disabled_wsl_pool(tmp_path):
 
     with pytest.raises(BehaveServiceError, match="MCP_MAX_WSL_JOBS"):
         service.start_scenario(
-            "features/cli/attach.feature", machine_types=["wsl"]
+            "features/cli/attach.feature",
+            scenario_name=UNIT_SCENARIO,
+            release="jammy",
+            machine_type="wsl",
         )
 
 
@@ -530,7 +600,10 @@ def test_start_scenario_allows_cloud_machine_type_with_a_limit(tmp_path):
     )
 
     result = service.start_scenario(
-        "features/cli/attach.feature", machine_types=["azure.generic"]
+        "features/cli/attach.feature",
+        scenario_name=UNIT_SCENARIO,
+        release="jammy",
+        machine_type="azure.generic",
     ).model_dump(mode="json")
 
     assert result["ok"] is True
@@ -550,12 +623,18 @@ def test_start_scenario_fails_fast_when_capacity_reached(tmp_path):
     )
 
     first_result = service.start_scenario(
-        "features/cli/attach.feature", machine_types=["lxd-container"]
+        "features/cli/attach.feature",
+        scenario_name=UNIT_SCENARIO,
+        release="jammy",
+        machine_type="lxd-container",
     ).model_dump(mode="json")
     assert first_result["ok"] is True
 
     second_result = service.start_scenario(
-        "features/cli/attach.feature", machine_types=["lxd-container"]
+        "features/cli/attach.feature",
+        scenario_name=UNIT_SCENARIO,
+        release="jammy",
+        machine_type="lxd-container",
     ).model_dump(mode="json")
     assert second_result["ok"] is False
     assert second_result["status"] == "capacity_exceeded"
@@ -578,7 +657,10 @@ def test_a_full_pool_leaves_other_pools_free(tmp_path):
 
     def start(machine_type):
         return service.start_scenario(
-            "features/cli/attach.feature", machine_types=[machine_type]
+            "features/cli/attach.feature",
+            scenario_name=UNIT_SCENARIO,
+            release="jammy",
+            machine_type=machine_type,
         ).model_dump(mode="json")
 
     assert start("wsl")["ok"] is True
@@ -587,7 +669,7 @@ def test_a_full_pool_leaves_other_pools_free(tmp_path):
     assert second_wsl["full_pools"] == [
         {"pool": "wsl", "limit": 1, "running": 1}
     ]
-    assert start("lxd-vm")["ok"] is True
+    assert start("lxd-container")["ok"] is True
 
 
 def test_start_scenario_releases_slot_when_process_start_fails(tmp_path):
@@ -605,7 +687,10 @@ def test_start_scenario_releases_slot_when_process_start_fails(tmp_path):
         BehaveServiceError, match="Failed to start behave scenario"
     ):
         service.start_scenario(
-            "features/cli/attach.feature", machine_types=["lxd-container"]
+            "features/cli/attach.feature",
+            scenario_name=UNIT_SCENARIO,
+            release="jammy",
+            machine_type="lxd-container",
         )
     assert registry.get("jobX") is None
 
@@ -626,7 +711,10 @@ def test_start_scenario_reports_log_open_failure(tmp_path):
         match="Failed to open log file for job_id jobLog",
     ):
         service.start_scenario(
-            "features/cli/attach.feature", machine_types=["lxd-container"]
+            "features/cli/attach.feature",
+            scenario_name=UNIT_SCENARIO,
+            release="jammy",
+            machine_type="lxd-container",
         )
     assert registry.get("jobLog") is None
 
@@ -1265,8 +1353,9 @@ def test_get_results_reports_one_result_per_job(tmp_path):
 
     start_result = service.start_scenario(
         "features/cli/attach.feature",
-        machine_types=["lxd-container", "lxd-vm"],
-        releases=["jammy", "resolute"],
+        scenario_name="Attach on a machine",
+        release="resolute",
+        machine_type="lxd-vm",
     ).model_dump(mode="json")
     job_id = start_result["job_id"]
 
@@ -1316,8 +1405,8 @@ def test_get_results_reports_one_result_per_job(tmp_path):
     assert job["status"] == "completed"
     assert job["ok"] is True
     assert job["feature_file"] == "features/cli/attach.feature"
-    assert job["releases"] == ["jammy", "resolute"]
-    assert job["machine_types"] == ["lxd-container", "lxd-vm"]
+    assert job["release"] == "resolute"
+    assert job["machine_type"] == "lxd-vm"
     assert job["summary"]["scenarios"] == {
         "total": 2,
         "passed": 1,
@@ -1341,8 +1430,8 @@ def _write_meta(tmp_path, job_id, feature_file, started_at, **extra):
             {
                 "feature_file": feature_file,
                 "started_at": started_at,
-                "releases": extra.get("releases", []),
-                "machine_types": extra.get("machine_types", []),
+                "release": extra.get("release", ""),
+                "machine_type": extra.get("machine_type", ""),
             }
         ),
         encoding="utf-8",
@@ -1370,8 +1459,8 @@ def test_get_results_recovers_disk_only_job(tmp_path):
         job_id,
         "features/a.feature",
         "T1",
-        releases=["jammy"],
-        machine_types=["lxd-container"],
+        release="jammy",
+        machine_type="lxd-container",
     )
     (tmp_path / f"{job_id}_report.json").write_text(
         json.dumps(
@@ -1404,7 +1493,7 @@ def test_get_results_recovers_disk_only_job(tmp_path):
     assert job.status == "completed"
     assert job.summary is not None
     assert job.summary["scenarios"]["passed"] == 1
-    assert job.releases == ["jammy"]
+    assert job.release == "jammy"
 
 
 def test_get_results_rejects_invalid_status(tmp_path):

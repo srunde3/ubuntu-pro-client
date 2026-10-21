@@ -394,59 +394,49 @@ def find_scenarios(
 
 @tool(
     description=(
-        "Start a listed behave scenario through tox in the background and "
-        "return a job_id immediately. feature_file must be a path returned "
-        "by list_features. machine_types is required; each draws on the "
-        "lxd, cloud or wsl pool, and a pool whose MCP_MAX_*_JOBS limit is "
-        "0 is disabled (cloud is by default). scenario_name (a "
-        "scenario's exact name, from describe_feature) and releases are "
-        "optional filters onto the feature's Examples rows. install_from "
-        "controls where ubuntu-pro-client is installed from (defaults to "
-        "'local'; set to 'proposed' to test the -proposed pocket). Call "
-        "wait_for_scenario_completion to wait for completion."
+        "Start one unit -- one scenario on one release and one machine "
+        "type -- through tox in the background, and return a job_id "
+        "immediately. feature_file must be a path returned by "
+        "list_features, and scenario_name a scenario's exact name from "
+        "describe_feature that covers release and machine_type. A "
+        "selection that matches no unit, or more than one, is refused. The "
+        "machine type draws on the lxd, cloud or wsl pool, and a pool "
+        "whose MCP_MAX_*_JOBS limit is 0 is disabled (cloud is by "
+        "default). install_from controls where ubuntu-pro-client is "
+        "installed from (defaults to 'local'; set to 'proposed' to test "
+        "the -proposed pocket). Call wait_for_scenario_completion to wait "
+        "for completion."
     )
 )
 def start_scenario(
     feature_file: Annotated[
         str, Field(description="A path returned by list_features.")
     ],
-    machine_types: Annotated[
-        list[str],
+    scenario_name: Annotated[
+        str,
+        Field(description="A scenario's exact name, from describe_feature."),
+    ],
+    release: Annotated[
+        str, Field(description="One release the scenario covers.")
+    ],
+    machine_type: Annotated[
+        str,
         Field(
             description=(
-                "Required. lxd-container and lxd-vm use the lxd pool, "
-                "aws.*/gcp.*/azure.* the cloud pool, wsl the wsl pool."
+                "One machine type the scenario covers. lxd-container and "
+                "lxd-vm use the lxd pool, aws.*/gcp.*/azure.* the cloud "
+                "pool, wsl the wsl pool."
             )
         ),
     ],
-    scenario_name: Annotated[
-        str,
-        Field(
-            default="",
-            description=(
-                "Optional exact scenario name, to run only that "
-                "scenario's Examples rows within feature_file."
-            ),
-        ),
-    ] = "",
-    releases: Annotated[
-        list[str] | None,
-        Field(
-            default=None,
-            description=(
-                "Optional filter to only run Examples rows for these "
-                "releases. Defaults to every release the scenario covers."
-            ),
-        ),
-    ] = None,
     repo_root: RepoRoot = "",
     install_from: InstallFromArg = InstallFrom.LOCAL,
 ) -> StartScenarioResult:
     return _service.start_scenario(
         feature_file,
-        machine_types,
         scenario_name,
-        releases,
+        release,
+        machine_type,
         repo_root,
         install_from,
     )

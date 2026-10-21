@@ -3,7 +3,7 @@
 import re
 from enum import Enum
 from pathlib import Path
-from typing import Mapping, NamedTuple
+from typing import Collection, Iterable, Mapping, NamedTuple
 
 from behave_mcp.domain.pools import POOL_LIMIT_ENV_VARS, POOL_OF, Pool
 from behave_mcp.messages import JobRecord, RunStatus
@@ -36,39 +36,60 @@ DEFAULT_INSTALL_FROM = (
 )  # the pro client-defined default.
 
 
-def validate_machine_types(
-    machine_types: list[str], pool_limits: Mapping[Pool, int]
+def validate_machine_type(
+    machine_type: str, pool_limits: Mapping[Pool, int]
 ) -> str | None:
-    allowed = ",".join(sorted(POOL_OF))
-    if not machine_types:
-        return f"machine_types is required. Allowed values: {allowed}"
-
-    invalid_machine_types = sorted(
-        machine_type
-        for machine_type in machine_types
-        if machine_type not in POOL_OF
-    )
-    if invalid_machine_types:
+    if machine_type not in POOL_OF:
+        allowed = ",".join(sorted(POOL_OF))
         return (
-            "Unsupported machine_types: "
-            f"{','.join(invalid_machine_types)}. "
+            f"Unsupported machine_type: {machine_type}. "
             f"Allowed values: {allowed}"
         )
-
-    for pool in Pool:
-        disabled = sorted(
-            machine_type
-            for machine_type in machine_types
-            if POOL_OF[machine_type] == pool and not pool_limits.get(pool)
+    pool = POOL_OF[machine_type]
+    if not pool_limits.get(pool):
+        return (
+            f"{pool} machine types are disabled on this server. Set "
+            f"{POOL_LIMIT_ENV_VARS[pool]} to a positive integer to allow "
+            f"{machine_type}."
         )
-        if disabled:
-            return (
-                f"{pool} machine_types are disabled on this server. Set "
-                f"{POOL_LIMIT_ENV_VARS[pool]} to a positive integer to "
-                f"allow: {','.join(disabled)}"
-            )
-
     return None
+
+
+class UnitMatch(str, Enum):
+    """How a requested unit matches the scenarios of one feature file."""
+
+    FOUND = "found"
+    NO_SCENARIO = "no_scenario"
+    NOT_ON_COMBO = "not_on_combo"
+    AMBIGUOUS = "ambiguous"
+
+
+# One scenario as unit matching sees it: its name and the
+# (release, machine_type) pairs its Examples rows cover.
+ScenarioCombos = tuple[str, Collection[tuple[str, str]]]
+
+
+def match_unit(
+    scenarios: Iterable[ScenarioCombos],
+    scenario_name: str,
+    release: str,
+    machine_type: str,
+) -> UnitMatch:
+    """Whether exactly one scenario runs this name on this combo.
+
+    Two scenarios may share a name when they cover different combos; only
+    a combo both cover makes the unit ambiguous, because behave would run
+    them both.
+    """
+    named = [combos for name, combos in scenarios if name == scenario_name]
+    if not named:
+        return UnitMatch.NO_SCENARIO
+    covering = sum(1 for combos in named if (release, machine_type) in combos)
+    if covering == 0:
+        return UnitMatch.NOT_ON_COMBO
+    if covering > 1:
+        return UnitMatch.AMBIGUOUS
+    return UnitMatch.FOUND
 
 
 def validate_install_from(install_from: str) -> str | None:
@@ -164,17 +185,16 @@ def exact_name_pattern(scenario_name: str) -> str:
 
 def build_command(
     feature_file: str,
-    machine_types: list[str],
     scenario_name: str,
-    releases: list[str] | None,
+    release: str,
+    machine_type: str,
     json_report_path: Path,
 ) -> list[str]:
+    """The behave run for exactly one unit."""
     command = ["tox", "-e", "behave", "--", feature_file]
-    if scenario_name:
-        command.extend(["--name", exact_name_pattern(scenario_name)])
-    if releases:
-        command.extend(["-D", f"releases={','.join(releases)}"])
-    command.extend(["-D", f"machine_types={','.join(machine_types)}"])
+    command.extend(["--name", exact_name_pattern(scenario_name)])
+    command.extend(["-D", f"releases={release}"])
+    command.extend(["-D", f"machine_types={machine_type}"])
     command.extend(["-f", "json", "-o", str(json_report_path)])
     command.extend(["-f", "plain"])
     return command
@@ -201,8 +221,8 @@ def job_matches_result_filters(
     if scenario_name is not None:
         if scenario_name.lower() not in record.scenario_name.lower():
             return False
-    if release is not None and release not in record.releases:
+    if release is not None and release != record.release:
         return False
-    if machine_type is not None and machine_type not in record.machine_types:
+    if machine_type is not None and machine_type != record.machine_type:
         return False
     return True

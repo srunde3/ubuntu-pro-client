@@ -28,6 +28,31 @@ Feature: Example feature
 """
 
 
+# Two outlines with one name. The second's row decides whether they collide.
+SHARED_NAME_FEATURE = """Feature: Shared names
+
+  Scenario Outline: Shared
+    Given a `<release>` `<machine_type>` machine
+
+    Examples: ubuntu release
+      | release | machine_type  |
+      | jammy   | lxd-container |
+
+  Scenario Outline: Shared
+    Given a `<release>` `<machine_type>` machine
+
+    Examples: ubuntu release
+      | release | machine_type  |
+      | {second_row} |
+"""
+
+
+def write_feature(repo_root, text):
+    features = repo_root / "features"
+    features.mkdir()
+    (features / "shared.feature").write_text(text)
+
+
 @pytest.fixture
 def repo(tmp_path):
     features = tmp_path / "features"
@@ -113,6 +138,48 @@ class TestDiscoverUnits:
         message = str(error.value)
         assert "did you mean: features/example7.feature" in message
         assert "features/example1.feature" not in message
+
+    def test_a_shared_name_on_a_shared_combo_is_refused(self, tmp_path):
+        # Both outlines run "Shared" on jammy lxd-container, so behave would
+        # run them both for that unit.
+        write_feature(
+            tmp_path,
+            SHARED_NAME_FEATURE.format(second_row="jammy   | lxd-container"),
+        )
+
+        with pytest.raises(CampaignError) as error:
+            discover_units(tmp_path, Filters())
+
+        assert "1 unit(s) in scope are run by more than one scenario" in str(
+            error.value
+        )
+        assert "Shared jammy lxd-container" in str(error.value)
+
+    def test_a_shared_name_on_other_combos_is_two_units(self, tmp_path):
+        write_feature(
+            tmp_path,
+            SHARED_NAME_FEATURE.format(second_row="noble   | lxd-vm       "),
+        )
+
+        units = discover_units(tmp_path, Filters())
+
+        assert [(u.release, u.machine_type) for u in units] == [
+            ("jammy", "lxd-container"),
+            ("noble", "lxd-vm"),
+        ]
+
+    def test_a_scope_that_leaves_out_the_collision_is_allowed(self, tmp_path):
+        write_feature(
+            tmp_path,
+            SHARED_NAME_FEATURE.format(second_row="jammy   | lxd-container"),
+        )
+        (tmp_path / "features" / "example.feature").write_text(FEATURE)
+
+        units = discover_units(
+            tmp_path, Filters(feature=("features/example.feature",))
+        )
+
+        assert {u.feature for u in units} == {"features/example.feature"}
 
     def test_repo_without_features_is_rejected(self, tmp_path):
         with pytest.raises(CampaignError, match="no feature files found"):

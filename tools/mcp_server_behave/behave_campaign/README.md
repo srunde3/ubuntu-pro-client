@@ -163,6 +163,9 @@ own campaign with the slice they agreed to run.
 The tool fails loudly instead of guessing:
 
 - A campaign can only be created once; it is not edited afterwards.
+- A scope holding a unit that two scenarios of the same name both cover is
+  rejected, naming the unit: behave would run both, so no job could name
+  exactly one. Rename one of the scenarios, or narrow the scope.
 - An unknown release, machine type, or feature in `create` is rejected rather
   than silently matching nothing.
 - Attempt state must be one of the known states.

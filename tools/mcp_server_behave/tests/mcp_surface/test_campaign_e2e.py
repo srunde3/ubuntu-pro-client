@@ -8,9 +8,10 @@ The point is concurrency. Every other test fakes the lane runner, so nothing
 else proves that several behave subprocesses really do run at once and that
 the sliding window keeps them filled.
 
-``features/_version.feature`` is used because it needs no contract token: its
-scenarios carry ``@uses.config.check_version``, so without that config they
-skip in ``before_scenario``, before any machine is provisioned. A skip is a
+``features/_version.feature``'s attached-version scenario is used because it
+is cheap without a contract token: it carries ``@uses.config.contract_token``,
+so without that config it skips in ``before_scenario``, before any machine is
+provisioned. A skip is a
 perfectly good outcome here -- what is under test is the scheduler, not the
 scenario. On a host with LXD and the config set, the same campaign provisions
 containers and the assertions still hold.
@@ -41,9 +42,9 @@ from behave_mcp.domain.pools import Pool
 from behave_mcp.server import create_service
 
 FEATURE = "features/_version.feature"
-# The feature holds four scenario outlines; naming one keeps the campaign to
-# exactly one unit per release, so the lane arithmetic is unambiguous.
-SCENARIO = "Check pro version"
+# Naming one scenario keeps the campaign to exactly one unit per release, so
+# the lane arithmetic is unambiguous.
+SCENARIO = "Attached show version in a ubuntu machine"
 RELEASES = ["focal", "jammy", "noble"]
 LANES = 3
 CAMPAIGN_ID = "e2e-concurrency"

@@ -85,10 +85,12 @@ def discover_units(repo_root: Path, filters: Filters) -> list[Unit]:
         filters.feature, {detail.path for detail in details}, "feature"
     )
 
-    units: list[Unit] = []
-    seen: set[Unit] = set()
+    # Which scenarios of its feature produce each unit. One scenario may
+    # list a combo twice; two scenarios sharing a name and a combo make the
+    # unit ambiguous, because behave would run them both.
+    sources: dict[Unit, set[int]] = {}
     for detail in details:
-        for scenario in detail.scenarios:
+        for index, scenario in enumerate(detail.scenarios):
             for combo in scenario.combos:
                 unit = Unit(
                     feature=detail.path,
@@ -96,7 +98,24 @@ def discover_units(repo_root: Path, filters: Filters) -> list[Unit]:
                     release=combo.release,
                     machine_type=combo.machine_type,
                 )
-                if unit not in seen and filters.matches_unit(unit):
-                    seen.add(unit)
-                    units.append(unit)
-    return sorted(units)
+                if filters.matches_unit(unit):
+                    sources.setdefault(unit, set()).add(index)
+
+    ambiguous = sorted(
+        unit for unit, found in sources.items() if len(found) > 1
+    )
+    if ambiguous:
+        raise CampaignError(
+            "{} unit(s) in scope are run by more than one scenario of the "
+            "same name, so no job can name exactly one: {}. Rename those "
+            "scenarios, or narrow the scope".format(
+                len(ambiguous),
+                "; ".join(
+                    " ".join(
+                        [u.feature, u.scenario, u.release, u.machine_type]
+                    )
+                    for u in ambiguous
+                ),
+            )
+        )
+    return sorted(sources)

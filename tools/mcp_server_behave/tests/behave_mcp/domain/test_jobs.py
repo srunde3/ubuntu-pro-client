@@ -7,11 +7,13 @@ import pytest
 
 from behave_mcp.domain.jobs import (
     ClassifyReason,
+    UnitMatch,
     build_command,
     classify_job_state,
     exact_name_pattern,
     job_matches_result_filters,
-    validate_machine_types,
+    match_unit,
+    validate_machine_type,
 )
 from behave_mcp.domain.pools import Pool
 from behave_mcp.messages import JobRecord
@@ -20,15 +22,93 @@ from behave_mcp.messages import JobRecord
 def test_build_command_escapes_scenario_name_for_behave_regex(tmp_path):
     command = build_command(
         "features/proxy_config.feature",
-        ["lxd-container"],
         "apt_http(s)_proxy still works",
-        ["bionic"],
+        "bionic",
+        "lxd-container",
         tmp_path / "report.json",
     )
 
     assert command[command.index("--name") + 1] == (
         r"^apt_http\(s\)_proxy\ still\ works(?: -- @.*)?$"
     )
+
+
+def test_build_command_runs_one_release_on_one_machine_type(tmp_path):
+    report = tmp_path / "report.json"
+
+    command = build_command(
+        "features/cli/attach.feature",
+        "Attach command",
+        "jammy",
+        "lxd-vm",
+        report,
+    )
+
+    assert command == [
+        "tox",
+        "-e",
+        "behave",
+        "--",
+        "features/cli/attach.feature",
+        "--name",
+        exact_name_pattern("Attach command"),
+        "-D",
+        "releases=jammy",
+        "-D",
+        "machine_types=lxd-vm",
+        "-f",
+        "json",
+        "-o",
+        str(report),
+        "-f",
+        "plain",
+    ]
+
+
+SCENARIO = "Attach command"
+OTHER_SCENARIO = "Detach command"
+JAMMY_LXD = ("jammy", "lxd-container")
+NOBLE_VM = ("noble", "lxd-vm")
+
+
+UNIT_MATCH_CASES = [
+    pytest.param(
+        [(SCENARIO, {JAMMY_LXD})], UnitMatch.FOUND, id="one-scenario"
+    ),
+    pytest.param(
+        [(SCENARIO, {JAMMY_LXD}), (SCENARIO, {NOBLE_VM})],
+        UnitMatch.FOUND,
+        id="a-shared-name-on-other-combos",
+    ),
+    pytest.param(
+        [(OTHER_SCENARIO, {JAMMY_LXD})],
+        UnitMatch.NO_SCENARIO,
+        id="no-such-name",
+    ),
+    pytest.param(
+        [(SCENARIO, {NOBLE_VM})],
+        UnitMatch.NOT_ON_COMBO,
+        id="not-on-this-combo",
+    ),
+    pytest.param(
+        [(SCENARIO, {JAMMY_LXD}), (SCENARIO, {JAMMY_LXD, NOBLE_VM})],
+        UnitMatch.AMBIGUOUS,
+        id="two-scenarios-on-one-combo",
+    ),
+]
+
+
+def test_every_unit_match_is_reached_by_a_case():
+    assert {case.values[1] for case in UNIT_MATCH_CASES} == set(UnitMatch)
+
+
+@pytest.mark.parametrize("scenarios, expected", UNIT_MATCH_CASES)
+def test_match_unit(scenarios, expected):
+    release, machine_type = JAMMY_LXD
+
+    match = match_unit(scenarios, SCENARIO, release, machine_type)
+
+    assert match == expected
 
 
 @pytest.mark.integration
@@ -247,7 +327,7 @@ def test_job_matches_result_filters_by_scenario_name_substring():
 
 
 def test_job_matches_result_filters_by_release_and_machine_type():
-    metadata = JobRecord(releases=["jammy"], machine_types=["lxd-container"])
+    metadata = JobRecord(release="jammy", machine_type="lxd-container")
     assert job_matches_result_filters(
         metadata,
         job_id="job1",
@@ -268,14 +348,27 @@ def test_job_matches_result_filters_by_release_and_machine_type():
     )
 
 
-def test_machine_type_errors_list_every_allowed_machine_type():
+def test_an_unknown_machine_type_lists_every_allowed_one():
     limits = {pool: 1 for pool in Pool}
 
-    missing = validate_machine_types([], limits)
-    unknown = validate_machine_types(["lxd-ctr"], limits)
+    message = validate_machine_type("lxd-ctr", limits)
 
-    for message in (missing, unknown):
-        assert message is not None
-        assert "aws.pro-fips" in message
-        assert "lxd-vm" in message
-        assert "wsl" in message
+    assert message is not None
+    assert "aws.pro-fips" in message
+    assert "lxd-vm" in message
+    assert "wsl" in message
+
+
+def test_a_machine_type_in_a_disabled_pool_names_the_setting():
+    limits = {Pool.LXD: 1, Pool.CLOUD: 0, Pool.WSL: 1}
+
+    message = validate_machine_type("aws.generic", limits)
+
+    assert message is not None
+    assert "MCP_MAX_CLOUD_JOBS" in message
+
+
+def test_a_machine_type_in_an_enabled_pool_is_allowed():
+    limits = {pool: 1 for pool in Pool}
+
+    assert validate_machine_type("lxd-vm", limits) is None

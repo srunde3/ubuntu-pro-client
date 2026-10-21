@@ -14,7 +14,9 @@ Each tool's description says how to call it and what it returns.
 
 1. `list_dimensions` for the exact release and `machine_type` values;
    `list_features` or `find_scenarios` to pick what to run.
-2. `start_scenario`, then `wait_for_scenario_completion`.
+2. `start_scenario` for one unit -- a scenario's exact name, one release and
+   one machine type it covers -- then `wait_for_scenario_completion`. Start
+   one job per unit; there is no multi-release or multi-machine-type job.
 3. For more than a handful of scenarios, use the campaign tools instead; see
    [run-sru-test-suite](../run-sru-test-suite/SKILL.md).
 

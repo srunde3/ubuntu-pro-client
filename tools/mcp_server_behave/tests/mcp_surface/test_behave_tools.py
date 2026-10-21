@@ -7,6 +7,7 @@ import behave_mcp.adapters as adapters_module
 import behave_mcp.server as server_module
 from behave_mcp.server import mcp
 from tests.conftest import (
+    UNIT_SCENARIO,
     FakeProcess,
     make_repo_with_feature,
     result_error_text,
@@ -134,6 +135,11 @@ async def test_mcp_find_scenarios_matches_by_text(monkeypatch):
     )
 
 
+# A scenario of the real features/cli/attach.feature with a jammy
+# lxd-container row.
+REAL_UNIT_SCENARIO = "Attach command with json output"
+
+
 @pytest.mark.asyncio
 async def test_mcp_start_wait_and_log_flow(monkeypatch, tmp_path):
     monkeypatch.setenv("UBUNTU_PRO_CLIENT_REPO", str(_REPO_ROOT))
@@ -153,8 +159,9 @@ async def test_mcp_start_wait_and_log_flow(monkeypatch, tmp_path):
             "start_scenario",
             {
                 "feature_file": "features/cli/attach.feature",
-                "machine_types": ["lxd-container"],
-                "releases": ["noble"],
+                "scenario_name": REAL_UNIT_SCENARIO,
+                "release": "jammy",
+                "machine_type": "lxd-container",
             },
         )
         start_payload = result_json(start_result)
@@ -204,23 +211,23 @@ async def test_mcp_start_wait_and_log_flow(monkeypatch, tmp_path):
         assert result["summary"]["steps"]["passed"] == 1
         assert result["failures"] == []
         # One shape for one job's outcome, however it is asked for.
-        for key in ("status", "ok", "summary", "failures", "releases"):
+        for key in ("status", "ok", "summary", "failures", "release"):
             assert result[key] == completed_payload[key]
 
 
 @pytest.mark.asyncio
-async def test_mcp_start_requires_machine_types():
+async def test_mcp_start_requires_a_whole_unit():
     async with create_connected_server_and_client_session(mcp) as client:
         result = await client.call_tool(
             "start_scenario",
             {
                 "feature_file": "features/cli/attach.feature",
-                "machine_types": [],
+                "scenario_name": UNIT_SCENARIO,
+                "release": "jammy",
             },
         )
 
-    error_text = result_error_text(result)
-    assert "machine_types is required" in error_text
+    assert "machine_type" in result_error_text(result)
 
 
 @pytest.mark.asyncio
@@ -230,7 +237,9 @@ async def test_mcp_start_rejects_unlisted_feature():
             "start_scenario",
             {
                 "feature_file": "features/cli/does-not-exist.feature",
-                "machine_types": ["lxd-container"],
+                "scenario_name": UNIT_SCENARIO,
+                "release": "jammy",
+                "machine_type": "lxd-container",
             },
         )
 
@@ -251,7 +260,9 @@ async def test_mcp_start_rejects_cloud_machine_types():
             "start_scenario",
             {
                 "feature_file": "features/cli/attach.feature",
-                "machine_types": ["azure.generic"],
+                "scenario_name": UNIT_SCENARIO,
+                "release": "jammy",
+                "machine_type": "azure.generic",
             },
         )
 

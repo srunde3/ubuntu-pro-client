@@ -1,15 +1,14 @@
-from behave_mcp.domain.pools import Pool, pools_of
+from behave_mcp.domain.pools import POOL_OF, Pool
 
 
 class TestPools:
-    def test_pools_of_collects_each_pool_once(self):
-        assert pools_of(["lxd-vm", "lxd-container", "wsl"]) == {
-            Pool.LXD,
-            Pool.WSL,
+    def test_pro_fips_types_are_cloud(self):
+        assert {POOL_OF["aws.pro-fips"], POOL_OF["gcp.pro-fips"]} == {
+            Pool.CLOUD
         }
 
-    def test_pro_fips_types_are_cloud(self):
-        assert pools_of(["aws.pro-fips", "gcp.pro-fips"]) == {Pool.CLOUD}
+    def test_lxd_types_share_one_pool(self):
+        assert {POOL_OF["lxd-vm"], POOL_OF["lxd-container"]} == {Pool.LXD}
 
     def test_pool_reads_as_its_value(self):
         assert str(Pool.WSL) == "wsl"

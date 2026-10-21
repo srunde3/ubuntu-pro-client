@@ -414,9 +414,9 @@ class ServiceLaneRunner:
     def start(self, unit: Unit, *, repo_root: Path, install_from: str) -> str:
         result = self._service.start_scenario(
             feature_file=unit.feature,
-            machine_types=[unit.machine_type],
             scenario_name=unit.scenario,
-            releases=[unit.release],
+            release=unit.release,
+            machine_type=unit.machine_type,
             repo_root=str(repo_root),
             install_from=install_from,
         )

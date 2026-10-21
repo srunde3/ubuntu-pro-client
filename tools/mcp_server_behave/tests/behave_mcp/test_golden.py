@@ -33,10 +33,10 @@ def test_write_record_byte_shape(tmp_path):
         '  "feature_file": "",\n'
         '  "install_from": "",\n'
         '  "job_id": "jobshape",\n'
-        '  "machine_types": [],\n'
+        '  "machine_type": "",\n'
         '  "ok": null,\n'
         '  "pid": null,\n'
-        '  "releases": [],\n'
+        '  "release": "",\n'
         '  "repo_root": "",\n'
         '  "repo_state": null,\n'
         '  "returncode": null,\n'
@@ -134,8 +134,8 @@ def test_completed_with_summary_key_order(tmp_path):
         "ok",
         "feature_file",
         "scenario_name",
-        "machine_types",
-        "releases",
+        "release",
+        "machine_type",
         "summary",
         "failures",
         "returncode",
@@ -165,8 +165,8 @@ def test_completed_fallback_key_order(tmp_path):
         "ok",
         "feature_file",
         "scenario_name",
-        "machine_types",
-        "releases",
+        "release",
+        "machine_type",
         "summary",
         "failures",
         "returncode",

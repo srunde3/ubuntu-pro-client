@@ -9,11 +9,14 @@ from behave_mcp.config import Settings
 from behave_mcp.domain.jobs import (
     DEFAULT_INSTALL_FROM,
     INSTALL_FROM_ENV_VAR,
+    ScenarioCombos,
+    UnitMatch,
     build_command,
     classify_job_state,
     job_matches_result_filters,
+    match_unit,
     validate_install_from,
-    validate_machine_types,
+    validate_machine_type,
 )
 from behave_mcp.domain.limits import (
     DEFAULT_FIND_LIMIT,
@@ -31,7 +34,7 @@ from behave_mcp.domain.limits import (
     MAX_RESULTS_LIMIT,
 )
 from behave_mcp.domain.logs import digest_log, select_log_lines
-from behave_mcp.domain.pools import POOL_LIMIT_ENV_VARS, pools_of
+from behave_mcp.domain.pools import POOL_LIMIT_ENV_VARS, POOL_OF
 from behave_mcp.domain.report import summarize_report
 from behave_mcp.messages import (
     ArtifactsResponse,
@@ -312,12 +315,15 @@ class BehaveService:
     def start_scenario(
         self,
         feature_file: str,
-        machine_types: list[str],
-        scenario_name: str = "",
-        releases: list[str] | None = None,
+        scenario_name: str,
+        release: str,
+        machine_type: str,
         repo_root: str = "",
         install_from: str = DEFAULT_INSTALL_FROM,
     ) -> StartScenarioResult:
+        """Start one job for one unit: a scenario on one release and
+        machine type. A selection that matches no unit, or more than one,
+        is refused before anything starts."""
         try:
             resolved_repo_root = self._workspace.resolve_repo_root(
                 repo_root or None
@@ -333,20 +339,18 @@ class BehaveService:
             raise BehaveServiceError(
                 f"Feature is not listed by list_features: {feature_file}"
             )
-        if scenario_name and scenario_name not in self._scenario_names(
-            resolved_repo_root, normalized
-        ):
-            raise BehaveServiceError(
-                f"No scenario named {scenario_name!r} in {feature_file}. "
-                "scenario_name must be a scenario's exact name, as "
-                "describe_feature lists it."
-            )
-
-        machine_type_error = validate_machine_types(
-            machine_types, self._settings.pool_limits
+        machine_type_error = validate_machine_type(
+            machine_type, self._settings.pool_limits
         )
         if machine_type_error:
             raise BehaveServiceError(machine_type_error)
+        self._check_unit(
+            resolved_repo_root,
+            normalized,
+            scenario_name,
+            release,
+            machine_type,
+        )
 
         install_from_error = validate_install_from(install_from)
         if install_from_error:
@@ -359,7 +363,7 @@ class BehaveService:
         job_id = self._new_job_id()
         write_targets = results.write_targets(job_id)
 
-        pools = pools_of(machine_types)
+        pools = frozenset({POOL_OF[machine_type]})
         reserved_job = Job(
             job_id=job_id,
             process_handle=None,
@@ -392,9 +396,9 @@ class BehaveService:
 
         command = build_command(
             feature_file,
-            machine_types,
             scenario_name,
-            releases,
+            release,
+            machine_type,
             write_targets.json_report,
         )
         env = self._workspace.subprocess_env()
@@ -440,8 +444,8 @@ class BehaveService:
                 started_at=self._now_utc(),
                 feature_file=feature_file,
                 scenario_name=scenario_name,
-                machine_types=machine_types,
-                releases=releases or [],
+                release=release,
+                machine_type=machine_type,
                 install_from=install_from,
                 command=command,
                 repo_root=str(resolved_repo_root),
@@ -457,8 +461,8 @@ class BehaveService:
                 "job_id": job_id,
                 "feature_file": feature_file,
                 "scenario_name": scenario_name,
-                "machine_types": machine_types,
-                "releases": releases or [],
+                "release": release,
+                "machine_type": machine_type,
                 "install_from": install_from,
                 "repo_state": repo_state.model_dump(mode="json"),
                 "artifacts": artifacts_dict,
@@ -472,11 +476,47 @@ class BehaveService:
             repo_state=repo_state,
         )
 
-    def _scenario_names(self, repo_root: Path, feature_file: str) -> set[str]:
+    def _check_unit(
+        self,
+        repo_root: Path,
+        feature_file: str,
+        scenario_name: str,
+        release: str,
+        machine_type: str,
+    ) -> None:
+        scenarios: list[ScenarioCombos] = []
         for detail in self._feature_reader.discover_feature_details(repo_root):
             if detail.path == feature_file:
-                return {scenario.name for scenario in detail.scenarios}
-        return set()
+                scenarios = [
+                    (
+                        scenario.name,
+                        {
+                            (combo.release, combo.machine_type)
+                            for combo in scenario.combos
+                        },
+                    )
+                    for scenario in detail.scenarios
+                ]
+        match = match_unit(scenarios, scenario_name, release, machine_type)
+        if match == UnitMatch.FOUND:
+            return
+        unit = f"{scenario_name!r} on {release} {machine_type}"
+        refusals = {
+            UnitMatch.NO_SCENARIO: (
+                f"No scenario named {scenario_name!r} in {feature_file}. "
+                "scenario_name must be a scenario's exact name, as "
+                "describe_feature lists it."
+            ),
+            UnitMatch.NOT_ON_COMBO: (
+                f"{feature_file} does not run {unit}. describe_feature "
+                "lists the releases and machine types each scenario covers."
+            ),
+            UnitMatch.AMBIGUOUS: (
+                f"More than one scenario in {feature_file} runs {unit}, so "
+                "a job cannot name exactly one. Rename one of them."
+            ),
+        }
+        raise BehaveServiceError(refusals[match])
 
     def kill_job(self, job_id: str, repo_root: str = "") -> KillJobResponse:
         """Terminate a running job.
@@ -852,8 +892,8 @@ class BehaveService:
             ok=summary.ok,
             feature_file=summary.feature_file,
             scenario_name=summary.scenario_name,
-            machine_types=summary.machine_types,
-            releases=summary.releases,
+            release=summary.release,
+            machine_type=summary.machine_type,
             summary=None if report is None else report.summary,
             failures=[] if report is None else report.failures,
         )
@@ -903,8 +943,8 @@ class BehaveService:
             returncode=returncode,
             feature_file=record.feature_file,
             scenario_name=record.scenario_name,
-            machine_types=record.machine_types,
-            releases=record.releases,
+            release=record.release,
+            machine_type=record.machine_type,
             started_at=record.started_at,
             completed_at=record.completed_at,
             artifacts=results.artifacts(job_id),
@@ -988,8 +1028,8 @@ class BehaveService:
             artifacts=artifacts,
             feature_file=record.feature_file,
             scenario_name=record.scenario_name,
-            machine_types=record.machine_types,
-            releases=record.releases,
+            release=record.release,
+            machine_type=record.machine_type,
             summary=None if report is None else report.summary,
             failures=[] if report is None else report.failures,
             recent_output=(

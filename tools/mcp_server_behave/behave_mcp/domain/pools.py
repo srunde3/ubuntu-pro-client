@@ -4,7 +4,6 @@ The machine types are copied from ``features/machine_types.py``; add new
 ones here by hand.
 """
 
-from collections.abc import Iterable
 from enum import Enum
 
 
@@ -41,11 +40,6 @@ POOL_OF: dict[str, Pool] = {
 
 # WSL jobs share one Windows host and cannot run side by side.
 MAX_WSL_JOBS = 1
-
-
-def pools_of(machine_types: Iterable[str]) -> frozenset[Pool]:
-    """The pools a job on these machine types draws on."""
-    return frozenset(POOL_OF[machine_type] for machine_type in machine_types)
 
 
 POOL_LIMIT_ENV_VARS: dict[Pool, str] = {

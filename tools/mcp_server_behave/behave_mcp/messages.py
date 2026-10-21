@@ -122,8 +122,8 @@ class JobRecord(BaseModel):
     completed_at: str | None = None
     feature_file: str = ""
     scenario_name: str = ""
-    machine_types: list[str] = []
-    releases: list[str] = []
+    release: str = ""
+    machine_type: str = ""
     install_from: str = ""
     command: list[str] = []
     repo_root: str = ""
@@ -246,8 +246,8 @@ class JobResult(BaseModel):
     ok: bool | None = None
     feature_file: str = ""
     scenario_name: str = ""
-    machine_types: list[str] = []
-    releases: list[str] = []
+    release: str = ""
+    machine_type: str = ""
     summary: dict[str, dict[str, int]] | None = None
     failures: list[Failure] = []
 
@@ -366,8 +366,8 @@ class JobSummary(BaseModel):
     returncode: int | None = None
     feature_file: str = ""
     scenario_name: str = ""
-    machine_types: list[str] = []
-    releases: list[str] = []
+    release: str = ""
+    machine_type: str = ""
     started_at: str | None = None
     completed_at: str | None = None
     artifacts: Artifacts | None = None
