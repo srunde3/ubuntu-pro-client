@@ -1,10 +1,10 @@
-"""A real campaign running real behave jobs, with nothing driving it.
+"""A real campaign running real behave jobs.
 
 Everything below the campaign is genuine: tox starts, behave runs against the
 actual feature corpus, a JSON report lands on disk, and each job's own
-process reconciles when it ends: it records the outcome and queues the next
-unit. After ``run`` the test only reads, so the campaign finishing proves
-that no long-lived driver is needed.
+process starts the next queued job when it ends. While it waits, the test
+reconciles every half second, as the MCP server's timer does, which records
+outcomes and queues the campaign's next units.
 
 ``features/_version.feature``'s attached-version scenario is used because it
 is cheap without a contract token: it carries ``@uses.config.contract_token``,
@@ -62,11 +62,12 @@ def campaigns_over(service, store):
     )
 
 
-def _wait_for(predicate, timeout, what):
+def _wait_for(predicate, timeout, what, meanwhile=lambda: None):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if predicate():
             return
+        meanwhile()
         time.sleep(SAMPLE_INTERVAL_SECONDS)
     raise AssertionError(
         "timed out after {}s waiting for {}".format(timeout, what)
@@ -87,7 +88,7 @@ def _most_at_once(spans):
 
 @pytest.mark.e2e
 @pytest.mark.long_running
-def test_a_campaign_finishes_with_nothing_driving_it(monkeypatch, tmp_path):
+def test_a_campaign_runs_its_jobs_side_by_side(monkeypatch, tmp_path):
     repo_root = Path(__file__).resolve().parents[4]
     monkeypatch.setenv("UBUNTU_PRO_CLIENT_REPO", str(repo_root))
     monkeypatch.setenv("MCP_STATE_DIR", str(tmp_path / "state"))
@@ -109,12 +110,12 @@ def test_a_campaign_finishes_with_nothing_driving_it(monkeypatch, tmp_path):
     assert created.campaign.total_units == len(RELEASES)
 
     campaigns.run(campaign_id=CAMPAIGN_ID)
-    # Only reads from here: every reconcile is a job process's own.
     _wait_for(
         lambda: state_of(store.read_records(CAMPAIGN_ID))
         == CampaignState.COMPLETE,
         CAMPAIGN_TIMEOUT_SECONDS,
         "the campaign to complete",
+        meanwhile=campaigns.reconcile,
     )
 
     records = store.read_records(CAMPAIGN_ID)
@@ -208,7 +209,12 @@ def test_pause_with_kill_stops_a_real_job_and_run_redoes_it(
         )
 
         campaigns.run(campaign_id=KILL_CAMPAIGN_ID)
-        _wait_for(complete, CAMPAIGN_TIMEOUT_SECONDS, "the campaign to end")
+        _wait_for(
+            complete,
+            CAMPAIGN_TIMEOUT_SECONDS,
+            "the campaign to end",
+            meanwhile=campaigns.reconcile,
+        )
     finally:
         # A job that outlives the test holds a lane.
         for status in reduce_units(store.read_records(KILL_CAMPAIGN_ID)):

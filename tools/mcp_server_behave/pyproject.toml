@@ -76,15 +76,11 @@ root_packages = ["behave_mcp", "behave_campaign"]
 include_external_packages = true
 
 [[tool.importlinter.contracts]]
-name = "behave_mcp imports behave_campaign only in its entry points: the server and the job process"
+name = "behave_mcp imports behave_campaign only in the server.py tool handlers"
 type = "forbidden"
 source_modules = ["behave_mcp"]
 forbidden_modules = ["behave_campaign"]
-ignore_imports = [
-  "behave_mcp.server -> behave_campaign.**",
-  # A job's process reconciles campaigns when its job ends.
-  "behave_mcp.job_process -> behave_campaign.**",
-]
+ignore_imports = ["behave_mcp.server -> behave_campaign.**"]
 
 [[tool.importlinter.contracts]]
 name = "behave_campaign uses only parser, domain.pools and domain.layout from behave_mcp; its CLI also builds the job service"

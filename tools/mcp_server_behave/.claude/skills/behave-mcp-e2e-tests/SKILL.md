@@ -11,7 +11,7 @@ Each e2e test carries `@pytest.mark.e2e` and `@pytest.mark.long_running`, so the
 
 | Test | Needs | Proves |
 | --- | --- | --- |
-| `tests/mcp_surface/test_campaign_e2e.py` | tox; no LXD, no token | a campaign finishes with nothing driving it, its jobs really ran side by side, every unit is recorded, reports exist, the event stream is dense; pause with kill stops a real job |
+| `tests/mcp_surface/test_campaign_e2e.py` | tox; no LXD, no token | a campaign runs to completion, its jobs really ran side by side, every unit is recorded, reports exist, the event stream is dense; pause with kill stops a real job |
 | `tests/mcp_surface/test_jobs_e2e.py` | tox; no LXD, no token | another process sees and kills a running job; two jobs on one lane run back to back with nobody calling |
 | `tests/mcp_surface/test_e2e.py` | LXD and `UACLIENT_BEHAVE_CONTRACT_TOKEN`; skips without the token | one real attach job through the MCP protocol: start, list, wait, logs, artifacts, results |
 

@@ -86,9 +86,9 @@ its intent -- what the caller last asked for: `never_run`, `run` or `hold` --
 plus its progress, read off its units. `control_campaign` takes two actions:
 
 - `run` sets the intent to run, and queues up to the campaign's `max_jobs`
-  behave jobs in each pool. When a job ends, its own process records the
-  outcome and queues the next unit, so no further calls are needed to keep
-  the campaign moving.
+  behave jobs in each pool. The server's reconcile, every 5 seconds and
+  after every tool call, records each outcome and queues the next unit, so
+  no further calls are needed to keep the campaign moving.
 - `pause` sets the intent to hold. No new job starts, and jobs in flight
   finish and are recorded. With `kill: true` the jobs in flight are killed
   instead: their attempts are recorded as interrupted, and their units run
@@ -194,11 +194,10 @@ uv run pytest -q -m "e2e and long_running"
 `tests/mcp_surface/test_campaign_e2e.py` holds the e2e tests that need no
 contract token and no LXD. They run real campaigns over
 `features/_version.feature`'s attached-version scenario, which skips for want
-of `contract_token` config. One runs a campaign to completion with nothing
-driving it after `run` -- each job's own process records it and queues the
-next -- and checks, from the jobs' own start and end times, that three ran at
-once. The other pauses with kill on a real job and runs the campaign to
-completion. They finish in seconds.
+of `contract_token` config, reconciling while they wait as the server's
+timer does. One runs a campaign to completion and checks, from the jobs' own
+start and end times, that three ran at once. The other pauses with kill on a
+real job and runs the campaign to completion. They finish in seconds.
 
 ## Linting and type checking
 
@@ -303,9 +302,7 @@ and campaign lives in the server's state directory.
 
 A job is queued first: `start_scenario` writes its `request.json` and then
 reconciles. **Reconcile** is one short step, run under `reconcile.lock` by
-whichever process calls it. First it brings every campaign up to date:
-records the jobs that ended, and queues each running campaign's queueable
-units up to its max jobs. Then it reads the config and every job's files, and
+whichever process calls it: it reads the config and every job's files, and
 starts the oldest queued jobs in each pool on that pool's free lanes. Pools
 are independent, so a full LXD pool never holds back a WSL job.
 
@@ -314,8 +311,14 @@ Nothing long-lived drives the queue. Reconcile runs:
 - after every MCP tool call, and every 5 seconds in the server;
 - after every `behave-campaign` command;
 - in a job's own process, after it records its exit and lets go of its lane,
-  so its campaign records the outcome and the next queued job takes that lane
-  at once.
+  so the next queued job takes that lane at once.
+
+The server and the CLI first bring every campaign up to date, in the same
+hold of the lock: they record the campaign jobs that ended, and queue each
+running campaign's next units up to its max jobs. A job's own process does
+not: it knows only jobs. So with no server running and nobody using the
+CLI, queued jobs still run to the end, but a campaign waits after its
+current batch until the next call.
 
 Any number of servers and CLIs may share one state directory: they
 coordinate through the lock and the files, and they all read the same

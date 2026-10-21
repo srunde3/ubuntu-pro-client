@@ -228,9 +228,10 @@ checkout whose feature files define the scope and whose jobs run.
   at `problems_limit` (50 over MCP; the CLI lists all) with `problems_total`
   alongside. Individual units are `unit_history`'s job.
 - `control_campaign` -- `run` or `pause`, from any state. `run` sets the
-  intent to run and queues what the campaign's max jobs allow at once; each
-  job's own process records its outcome when it ends and queues the next
-  unit, so no further calls are needed to keep it moving.
+  intent to run and queues what the campaign's max jobs allow at once; the
+  server's reconcile, every 5 seconds and after every tool call, records
+  each outcome and queues the next unit, so no further calls are needed to
+  keep it moving.
   `pause` sets the intent to hold; with `kill: true` it also kills the jobs
   in flight. See [States](#states).
 - `await_campaign_events` -- wait for news, with a cursor.
@@ -353,8 +354,9 @@ says who asked and when.
 Any number of campaigns may run at once, alongside one-off jobs. Nothing
 long-lived drives them: `CampaignService.reconcile` brings every campaign up
 to date and then starts queued jobs, and it runs after every MCP tool call,
-every 5 seconds in the server, after every CLI command, and in each job's
-own process when its job ends. It decides from files alone, under the state
+every 5 seconds in the server, and after every CLI command. A job's own
+process starts the next queued job when it ends, but it knows nothing of
+campaigns. Reconcile decides from files alone, under the state
 directory's one `reconcile.lock`, which `run`, `pause`, `retry_units` and
 `create` take too. A restart therefore changes nothing: a new process reads
 the same files and carries on.
