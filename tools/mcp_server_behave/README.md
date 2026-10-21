@@ -275,10 +275,6 @@ and campaign lives in the server's state directory.
 - Cloud machine types are blocked by default and require setting `MCP_MAX_CLOUD_JOBS`.
 - Concurrent jobs are capped per pool: one LXD job and one WSL job by default.
 
-## TODOs
-
-- Improve the job recovery mechanism; it's a little verbose on logs.
-
 ## How a job runs
 
 Each job runs under its own job process, `python -m behave_mcp.job_process`,
@@ -302,15 +298,10 @@ nothing it did counts.
 tox gets a parent-death signal, so it cannot outlive its job process.
 `kill_job` sends SIGTERM to the job process, which passes it to tox's process
 group and waits for it, so pycloudlib can delete what it made; the exit is
-recorded with `killed: true`. A hard kill or a reboot can leave an instance behind: cleaning
-those up is pycloudlib's business, not this tool's.
+recorded with `killed: true`. A hard kill or a reboot can leave an instance
+behind: cleaning those up is pycloudlib's business, not this tool's.
+
+## TODOs
 
 - Some sort of API config endpoint and tool - can expose to the agent any relevant and non-secret config values. For secret config values like the token and cloud creds, we can indicate if they're set so that the agent can at least correlate skipped tests with missing required config.
 - Take a second look at the response shapes on each endpoint. See if we can reduce the default response size and add flags for more verbose info. It would be great to have a clean integration between the MCP results and the test tracker inputs. Cutting down on response size also reduces token usage.
-- See if there are instructions or API changes that can fix the problem of an agent waiting around for *every* single test in the batch to finish (i.e., `wait_for_scenario_completion` finishes) before launching a new batch. It means the slowest item in the batch dictates the iteration interval. It might be as simple as requesting subagent execution for each item in the batch instead of main loop execution - this would be a skill change only.
-
-### Introduce test campaign APIs
-
-Natively integrate the test campaign into the MCP - the MCP will allow the agent to create and launch test campaigns and can run them under concurrency. The agent consumes a stream of events that it might need to react to (especially failures). Results are automatically updated internally without the agent needing to do any translation.
-
-The agent becomes solely responsible for deciding if a campaign should continue, or if it's doomed due to infra instability, missing config, etc. The agent decides what to retry, and when.

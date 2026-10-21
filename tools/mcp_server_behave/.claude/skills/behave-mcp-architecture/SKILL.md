@@ -12,7 +12,7 @@ description: Architecture and design rules for tools/mcp_server_behave, the beha
 
 ## Dependency direction
 
-`behave_campaign` may import `behave_mcp.parser`, `behave_mcp.domain.pools` and `behave_mcp.domain.layout`. Nothing in `behave_mcp` imports `behave_campaign`, except the tool wrappers in `behave_mcp/server.py`. Keep it that way, so the module graph stays acyclic and `behave_campaign` can be extracted.
+`behave_campaign` may import `behave_mcp.parser`, `behave_mcp.domain.pools` and `behave_mcp.domain.layout`. Nothing in `behave_mcp` imports `behave_campaign`, except the tool handlers in `behave_mcp/server.py`. Keep it that way, so the module graph stays acyclic and `behave_campaign` can be extracted.
 
 `uv run lint-imports` enforces these rules and the layer table below, using the contracts under `[tool.importlinter]` in `pyproject.toml`. If a change breaks a contract, first move the code to the layer it belongs in. Change a contract only when the architecture itself changes, in the same commit, with the reason in the commit message.
 
