@@ -11,11 +11,11 @@ A **test unit** is one behave scenario for one release on one `machine_type`.
 ## Storage
 
 One directory per campaign, `campaigns/<id>/`. `campaign.json` holds the
-header and the units in scope, written once at creation; `events.jsonl` holds
+campaign record and the units in scope, written once at creation; `records.jsonl` holds
 every later record, appended. The two are replayed in full to get the current
 state, and they are the only thing stored: every event a watcher hears is
 derived from them. A crash mid-append can leave part of a line at the end of
-`events.jsonl`; reading ignores it and the next append cuts it off. Nine
+`records.jsonl`; reading ignores it and the next append cuts it off. Nine
 record types:
 
 | type | written when | says |
@@ -23,8 +23,8 @@ record types:
 | `campaign` | once, in `campaign.json` | how the campaign was built: scope, checkout, install source, lanes |
 | `plan` | once per unit, in `campaign.json` | this unit is in scope |
 | `started` | a lane opens | a job began for this unit, and what it installs from |
-| `finished` | that job ends | what it established: `passed`, `failed`, `skipped` or `error`; the first failing steps; and, for a result that could not be classified, the `problem` |
-| `interrupted` | a pause with kill stops the job | the job ended without an outcome, and why |
+| `finished` | that job ends | what it established: `passed`, `failed`, `skipped` or `error`; the first failing steps; and, for a result that could not be classified, the `reason` |
+| `interrupted` | the job is killed, or its process dies | the job ended without an outcome, and why: `killed` or `died` |
 | `intent` | `run`, `pause` or `retry_units` | what the caller asked the campaign to do: `run` or `hold` |
 | `retry` | `retry_units` | someone asked for another go at a unit |
 | `starved` | a lane is refused for want of capacity | which pool, and why; once per episode, until a lane next opens in that pool |
@@ -244,17 +244,17 @@ is how a watcher hears about it promptly.
 | Family | Kinds |
 | --- | --- |
 | `campaign.*` | `created`, `running`, `finishing`, `complete`, `pausing`, `paused` |
-| `lane.*` | `started`, `overdue` |
+| `job.*` | `started`, `overdue` |
 | `unit.*` | `passed`, `failed`, `skipped`, `errored`, `unclassifiable`, `interrupted`, `retried` |
 
 A `campaign.<state>` event is emitted each time the campaign's named state
 changes, and only then. Its data says the state it came `from`, the `intent`
 and `progress` now, the `cause` (`run`, `pause`, `retry` or `scheduler`) and
 the `counts` by unit state.
-| `anomaly.*` | `repeated_scenario_failure`, `repeated_skips`, `capacity_starved` |
+| `anomaly.*` | `repeated_scenario_failure`, `repeated_skips`, `starved` |
 
 Subscribe by exact kind, by family (`unit.*`), or by preset: `actionable`
-is every non-passing outcome, `anomaly.*`, `lane.overdue` and `campaign.*`
+is every non-passing outcome, `anomaly.*`, `job.overdue` and `campaign.*`
 -- what a watcher has to react to, with progress left to the counts on
 every response -- and `*` is everything. The MCP tool defaults to
 `actionable`; the CLI to everything. An unknown kind or family is rejected
@@ -267,8 +267,8 @@ shortens the messages on read for a caller that only wants to skim. A
 `unit.unclassifiable` event carries the reason the result could not be read.
 
 Events are not stored. Each read derives them from the campaign's records,
-one pass over the log: a record announces what it says (`lane.started`,
-`unit.failed`, `unit.retried`, `anomaly.capacity_starved`, `lane.overdue` and
+one pass over the log: a record announces what it says (`job.started`,
+`unit.failed`, `unit.retried`, `anomaly.starved`, `job.overdue` and
 so on), and any change of the campaign's state it causes. `seq` is an event's
 position in that feed, so it is dense, and appending records never renumbers
 an earlier event: a cursor survives a restart, and two readers in different
@@ -276,7 +276,7 @@ processes see the same numbers. Pass `next_seq` from one response as the next
 `since_seq`. A reader waiting with a timeout is woken by the server's own
 appends at once, and notices another process's within a second.
 
-`anomaly.*` and `lane.overdue` are derived: nothing acts on them. A run of
+`anomaly.*` and `job.overdue` are derived: nothing acts on them. A run of
 skips usually means a config the host does not have, and one scenario failing
 across every release usually means a real defect rather than flake -- but
 which of those it is, and what to do about it, is not for an unattended loop
@@ -323,8 +323,8 @@ The commands:
   are recorded, so the campaign is `pausing` until they do. With `kill`, each
   job in flight is killed and its attempt is recorded as `interrupted` at
   once, so the campaign is paused at once and those units run again on the
-  next `run`. A job whose process cannot be reached is named in
-  `unsignalled`.
+  next `run`. The response lists those units in `killed`, and names a job
+  whose process cannot be reached in `not_killed`.
 - `retry_units` requests another attempt at the selected units and sets the
   intent to run, in any state.
 

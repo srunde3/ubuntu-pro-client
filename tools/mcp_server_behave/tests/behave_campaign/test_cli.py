@@ -6,11 +6,11 @@ import pytest
 from behave_campaign.adapters import CampaignDirStore
 from behave_campaign.cli import main
 from behave_campaign.domain.records import (
-    AttemptFinished,
-    AttemptStarted,
     Cause,
+    FinishedRecord,
     Intent,
     IntentRecord,
+    StartedRecord,
     Unit,
 )
 
@@ -49,10 +49,10 @@ def attempt(unit, outcome, job_id):
     """One completed try: its start and its finish."""
     tried = Unit(*unit)
     return [
-        AttemptStarted(
+        StartedRecord(
             unit=tried, job_id=job_id, install_from="proposed", at=AT
         ),
-        AttemptFinished(unit=tried, job_id=job_id, outcome=outcome, at=AT),
+        FinishedRecord(unit=tried, job_id=job_id, outcome=outcome, at=AT),
     ]
 
 
@@ -439,7 +439,7 @@ class TestEvents:
         assert [e["kind"] for e in result["events"]] == [
             "campaign.created",
             "campaign.running",
-            "lane.started",
+            "job.started",
             "unit.failed",
         ]
         assert result["events"][3]["data"]["job_id"] == "job-1"
@@ -559,7 +559,7 @@ class TestExport:
         assert "1234567/SUMMARY.md" in names
         assert "1234567/jobs/j1/stdout.log" in names
         assert "1234567/audit/campaign.json" in names
-        assert "1234567/audit/events.jsonl" in names
+        assert "1234567/audit/records.jsonl" in names
 
     def test_an_existing_output_is_refused(
         self, finished, run, repo, tmp_path

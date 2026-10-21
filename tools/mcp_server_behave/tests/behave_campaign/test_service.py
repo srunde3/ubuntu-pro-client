@@ -2,15 +2,16 @@ import pytest
 
 from behave_campaign.adapters import JsonlCampaignStore
 from behave_campaign.domain.records import (
-    AttemptFinished,
-    AttemptStarted,
     CampaignError,
     Cause,
     Failure,
     Filters,
+    FinishedRecord,
     Intent,
     IntentRecord,
     RepoState,
+    Scope,
+    StartedRecord,
     Unit,
 )
 from behave_campaign.service import CampaignService
@@ -118,7 +119,7 @@ class TestCreateCampaign:
             scenarios=["A"],
         )
 
-        assert features.seen_filters == Filters(
+        assert features.seen_scope == Scope(
             feature=("features/a.feature",),
             scenario=("A",),
             release=("jammy",),
@@ -128,7 +129,9 @@ class TestCreateCampaign:
     def test_it_starts_nothing(self, service, store):
         create(service)
 
-        kinds = [type(record).__name__ for record in store.replay("1234567")]
+        kinds = [
+            type(record).__name__ for record in store.read_records("1234567")
+        ]
 
         assert "AttemptRecord" not in kinds
 
@@ -211,7 +214,7 @@ class TestListUnits:
         store.append(
             "1234567",
             [
-                AttemptFinished(
+                FinishedRecord(
                     unit=UNITS[0], job_id="job1", outcome="failed", at=AT
                 )
             ],
@@ -300,13 +303,13 @@ class TestCampaignStatus:
         store.append(
             "1234567",
             [
-                AttemptStarted(
+                StartedRecord(
                     unit=UNITS[0],
                     job_id="job1",
                     install_from="proposed",
                     at=AT,
                 ),
-                AttemptFinished(
+                FinishedRecord(
                     unit=UNITS[1], job_id="job2", outcome="failed", at=AT
                 ),
             ],
@@ -330,7 +333,7 @@ class TestCampaignStatus:
         store.append(
             "1234567",
             [
-                AttemptStarted(
+                StartedRecord(
                     unit=MIXED_UNITS[-1],
                     job_id="job1",
                     install_from="proposed",
@@ -341,7 +344,7 @@ class TestCampaignStatus:
 
         status = service.campaign_status(campaign_id="1234567")
 
-        assert status.lanes_busy_by_pool == {"lxd": 0, "cloud": 0, "wsl": 1}
+        assert status.in_flight_by_pool == {"lxd": 0, "cloud": 0, "wsl": 1}
 
     def test_problems_can_be_grouped_by_scenario(self, service, store):
         create(service)
@@ -349,13 +352,13 @@ class TestCampaignStatus:
         store.append(
             "1234567",
             [
-                AttemptFinished(
+                FinishedRecord(
                     unit=UNITS[0], job_id="job1", outcome="failed", at=AT
                 ),
-                AttemptFinished(
+                FinishedRecord(
                     unit=UNITS[1], job_id="job2", outcome="error", at=AT
                 ),
-                AttemptFinished(
+                FinishedRecord(
                     unit=UNITS[2], job_id="job3", outcome="passed", at=AT
                 ),
             ],
@@ -388,7 +391,7 @@ class TestCampaignStatus:
         store.append(
             "1234567",
             [
-                AttemptFinished(
+                FinishedRecord(
                     unit=unit, job_id="job%d" % i, outcome="failed", at=AT
                 )
                 for i, unit in enumerate(UNITS)
@@ -428,7 +431,7 @@ class TestCampaignStatus:
         store.append(
             "1234567",
             [
-                AttemptFinished(
+                FinishedRecord(
                     unit=UNITS[0], job_id="job1", outcome="passed", at=AT
                 )
             ],
@@ -512,10 +515,10 @@ class TestAwaitEvents:
         store.append(
             "1234567",
             [
-                AttemptStarted(
+                StartedRecord(
                     unit=UNITS[0], job_id="job1", install_from="local", at=AT
                 ),
-                AttemptFinished(
+                FinishedRecord(
                     unit=UNITS[0],
                     job_id="job1",
                     outcome="failed",
@@ -570,7 +573,7 @@ class TestAwaitEvents:
         assert result.state == "created"
         assert result.intent == "never_run"
         assert result.progress == "untouched"
-        assert result.lanes_busy == 0
+        assert result.in_flight == 0
 
     def test_a_filter_selects_kinds(self, service):
         create(service)
@@ -597,10 +600,10 @@ def finish(store, unit, job_id, outcome):
     store.append(
         "1234567",
         [
-            AttemptStarted(
+            StartedRecord(
                 unit=unit, job_id=job_id, install_from="proposed", at=AT
             ),
-            AttemptFinished(unit=unit, job_id=job_id, outcome=outcome, at=AT),
+            FinishedRecord(unit=unit, job_id=job_id, outcome=outcome, at=AT),
         ],
     )
 
@@ -645,7 +648,7 @@ class TestExportCampaign:
         store.append(
             "1234567",
             [
-                AttemptStarted(
+                StartedRecord(
                     unit=UNITS[0], job_id="a1", install_from="local", at=AT
                 )
             ],
@@ -670,8 +673,8 @@ class TestExportCampaign:
             ):
                 assert "jobs/{}/{}".format(job_id, name) in writer.entries
         assert "audit/campaign.json" in writer.entries
-        assert "audit/events.jsonl" in writer.entries
-        for name in ("SUMMARY.md", "campaign.json", "units.csv"):
+        assert "audit/records.jsonl" in writer.entries
+        for name in ("SUMMARY.md", "export.json", "units.csv"):
             assert writer.entries[name].data
 
     def test_summary_shows_each_unit_once_in_its_final_state(

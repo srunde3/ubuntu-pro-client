@@ -169,7 +169,7 @@ FINISHED_FIELDS = (
     "job_id",
     "outcome",
     "at",
-    "problem",
+    "reason",
     "failures",
 )
 
@@ -199,7 +199,7 @@ CAMPAIGN_FIELDS = (
     "at",
     "campaign_id",
     "repo",
-    "filters",
+    "scope",
     "install_from",
     "lanes",
 )
@@ -262,7 +262,7 @@ class PlanRecord:
 
 
 @dataclass(frozen=True)
-class AttemptStarted:
+class StartedRecord:
     """A job began for this unit. Written as the lane opens."""
 
     unit: Unit
@@ -288,10 +288,10 @@ class Failure:
 
 
 @dataclass(frozen=True)
-class AttemptFinished:
+class FinishedRecord:
     """That job ended, and what it established.
 
-    ``problem`` says why a result could not be classified, which makes the
+    ``reason`` says why a result could not be classified, which makes the
     outcome ``error``. ``failures`` carries the first failing steps, so a
     failure can be judged without the job's report.
     """
@@ -300,12 +300,12 @@ class AttemptFinished:
     job_id: str
     outcome: Outcome
     at: str = ""
-    problem: str = ""
+    reason: str = ""
     failures: tuple[Failure, ...] = ()
 
 
 @dataclass(frozen=True)
-class AttemptInterrupted:
+class InterruptedRecord:
     """That job ended without an outcome; the unit may be queued again."""
 
     unit: Unit
@@ -315,7 +315,7 @@ class AttemptInterrupted:
 
 
 @dataclass(frozen=True)
-class Starved:
+class StarvedRecord:
     """A unit could not get a lane in its pool. Once per episode: until a
     lane next opens in that pool."""
 
@@ -326,7 +326,7 @@ class Starved:
 
 
 @dataclass(frozen=True)
-class Overdue:
+class OverdueRecord:
     """A job has run longer than the scheduler expects. Once per job."""
 
     unit: Unit
@@ -367,7 +367,7 @@ class Attempt:
 
 
 @dataclass(frozen=True)
-class UnitStatus:
+class UnitHistory:
     unit: Unit
     state: str
     job_id: str | None
@@ -408,12 +408,13 @@ class UnitStatus:
 
 
 @dataclass(frozen=True)
-class Filters:
+class Scope:
+    """The units a campaign was created over. Empty means unrestricted."""
+
     feature: tuple[str, ...] = ()
     scenario: tuple[str, ...] = ()
     release: tuple[str, ...] = ()
     machine_type: tuple[str, ...] = ()
-    state: tuple[str, ...] = ()
 
     def matches_unit(self, unit: Unit) -> bool:
         return (
@@ -425,12 +426,7 @@ class Filters:
             )
         )
 
-    def matches(self, status: UnitStatus) -> bool:
-        return self.matches_unit(status.unit) and (
-            not self.state or status.state in self.state
-        )
-
-    def scope_as_dict(self) -> dict[str, list[str]]:
+    def as_dict(self) -> dict[str, list[str]]:
         return {
             "feature": list(self.feature),
             "scenario": list(self.scenario),
@@ -440,13 +436,25 @@ class Filters:
 
 
 @dataclass(frozen=True)
-class CampaignHeader:
+class Filters(Scope):
+    """What a list query narrows units by: a scope, and unit states."""
+
+    state: tuple[str, ...] = ()
+
+    def matches(self, status: UnitHistory) -> bool:
+        return self.matches_unit(status.unit) and (
+            not self.state or status.state in self.state
+        )
+
+
+@dataclass(frozen=True)
+class CampaignRecord:
     """How a campaign was created, so it can be recreated and audited."""
 
     at: str = ""
     campaign_id: str | None = None
     repo: RepoState = RepoState()
-    filters: Filters = Filters()
+    scope: Scope = Scope()
     # The install source every job runs with, and how many lanes a runner
     # may fill in each pool. Each attempt still records the source its own
     # job actually used, which is what a verification rests on.
@@ -477,15 +485,15 @@ class IntentRecord:
 
 
 Record = (
-    CampaignHeader
+    CampaignRecord
     | PlanRecord
-    | AttemptStarted
-    | AttemptFinished
-    | AttemptInterrupted
+    | StartedRecord
+    | FinishedRecord
+    | InterruptedRecord
     | IntentRecord
     | RetryRecord
-    | Starved
-    | Overdue
+    | StarvedRecord
+    | OverdueRecord
 )
 
 
@@ -568,9 +576,9 @@ def validate_install_from(value: str) -> str:
     return value
 
 
-def _parse_started(body: dict[str, Any]) -> AttemptStarted:
+def _parse_started(body: dict[str, Any]) -> StartedRecord:
     require_fields(body, STARTED_FIELDS, "started")
-    return AttemptStarted(
+    return StartedRecord(
         unit=_unit_from(body, "started"),
         job_id=text_field(body, "job_id", "started"),
         install_from=validate_install_from(
@@ -580,7 +588,7 @@ def _parse_started(body: dict[str, Any]) -> AttemptStarted:
     )
 
 
-def _parse_finished(body: dict[str, Any]) -> AttemptFinished:
+def _parse_finished(body: dict[str, Any]) -> FinishedRecord:
     require_fields(body, FINISHED_FIELDS, "finished")
     failures = body["failures"]
     if not isinstance(failures, list):
@@ -591,24 +599,24 @@ def _parse_finished(body: dict[str, Any]) -> AttemptFinished:
         if not all(isinstance(failure[f], str) for f in FAILURE_FIELDS):
             raise CampaignError("failure fields must be strings")
         parsed.append(Failure(**failure))
-    return AttemptFinished(
+    return FinishedRecord(
         unit=_unit_from(body, "finished"),
         job_id=text_field(body, "job_id", "finished"),
         outcome=validate_outcome(body["outcome"]),
         at=text_field(body, "at", "finished"),
-        problem=_string_field(body, "problem", "finished"),
+        reason=_string_field(body, "reason", "finished"),
         failures=tuple(parsed),
     )
 
 
-def _parse_starved(body: dict[str, Any]) -> Starved:
+def _parse_starved(body: dict[str, Any]) -> StarvedRecord:
     require_fields(body, STARVED_FIELDS, "starved")
     pool = body["pool"]
     if pool not in POOLS:
         raise CampaignError(
             "starved pool must be one of: {}".format(", ".join(POOLS))
         )
-    return Starved(
+    return StarvedRecord(
         unit=_unit_from(body, "starved"),
         pool=Pool(pool),
         reason=_string_field(body, "reason", "starved"),
@@ -616,12 +624,12 @@ def _parse_starved(body: dict[str, Any]) -> Starved:
     )
 
 
-def _parse_overdue(body: dict[str, Any]) -> Overdue:
+def _parse_overdue(body: dict[str, Any]) -> OverdueRecord:
     require_fields(body, OVERDUE_FIELDS, "overdue")
     elapsed = body["elapsed_seconds"]
     if isinstance(elapsed, bool) or not isinstance(elapsed, int):
         raise CampaignError("overdue field 'elapsed_seconds' must be an int")
-    return Overdue(
+    return OverdueRecord(
         unit=_unit_from(body, "overdue"),
         job_id=text_field(body, "job_id", "overdue"),
         elapsed_seconds=elapsed,
@@ -629,9 +637,9 @@ def _parse_overdue(body: dict[str, Any]) -> Overdue:
     )
 
 
-def _parse_interrupted(body: dict[str, Any]) -> AttemptInterrupted:
+def _parse_interrupted(body: dict[str, Any]) -> InterruptedRecord:
     require_fields(body, INTERRUPTED_FIELDS, "interrupted")
-    return AttemptInterrupted(
+    return InterruptedRecord(
         unit=_unit_from(body, "interrupted"),
         job_id=text_field(body, "job_id", "interrupted"),
         at=text_field(body, "at", "interrupted"),
@@ -652,10 +660,10 @@ def _string_field(body: dict[str, Any], key: str, label: str) -> str:
     return value
 
 
-def _parse_campaign(body: dict[str, Any]) -> CampaignHeader:
+def _parse_campaign(body: dict[str, Any]) -> CampaignRecord:
     require_fields(body, CAMPAIGN_FIELDS, "campaign")
     repo = require_fields(body["repo"], REPO_FIELDS, "campaign repo")
-    scope = require_fields(body["filters"], SCOPE_FIELDS, "campaign filters")
+    scope = require_fields(body["scope"], SCOPE_FIELDS, "campaign scope")
 
     campaign_id = body["campaign_id"]
     if campaign_id is not None and not isinstance(campaign_id, str):
@@ -676,7 +684,7 @@ def _parse_campaign(body: dict[str, Any]) -> CampaignHeader:
             isinstance(item, str) for item in scope[name]
         ):
             raise CampaignError(
-                "campaign filter '{}' must be a list of strings".format(name)
+                "campaign scope '{}' must be a list of strings".format(name)
             )
         values[name] = tuple(scope[name])
 
@@ -696,7 +704,7 @@ def _parse_campaign(body: dict[str, Any]) -> CampaignHeader:
             )
         _check_lane_count(Pool(pool), count)
 
-    return CampaignHeader(
+    return CampaignRecord(
         at=text_field(body, "at", "campaign"),
         campaign_id=campaign_id,
         repo=RepoState(
@@ -705,7 +713,7 @@ def _parse_campaign(body: dict[str, Any]) -> CampaignHeader:
             branch=repo["branch"],
             dirty=repo["dirty"],
         ),
-        filters=Filters(**values),
+        scope=Scope(**values),
         install_from=install_from,
         lanes={Pool(pool): count for pool, count in lanes.items()},
     )
@@ -805,13 +813,13 @@ def parse_record(raw: Any) -> Record:
 
 
 def encode_record(record: Record) -> dict[str, Any]:
-    if isinstance(record, CampaignHeader):
+    if isinstance(record, CampaignRecord):
         return {
             "type": RecordType.CAMPAIGN,
             "at": record.at,
             "campaign_id": record.campaign_id,
             "repo": record.repo.as_dict(),
-            "filters": record.filters.scope_as_dict(),
+            "scope": record.scope.as_dict(),
             "install_from": record.install_from,
             "lanes": lanes_as_dict(record.lanes),
         }
@@ -833,29 +841,29 @@ def encode_record(record: Record) -> dict[str, Any]:
 
     data: dict[str, Any] = record.unit.as_dict()
     data["at"] = record.at
-    if isinstance(record, AttemptStarted):
+    if isinstance(record, StartedRecord):
         data["type"] = RecordType.STARTED
         data["job_id"] = record.job_id
         data["install_from"] = record.install_from
         return data
-    if isinstance(record, AttemptFinished):
+    if isinstance(record, FinishedRecord):
         data["type"] = RecordType.FINISHED
         data["job_id"] = record.job_id
         data["outcome"] = record.outcome
-        data["problem"] = record.problem
+        data["reason"] = record.reason
         data["failures"] = [failure.as_dict() for failure in record.failures]
         return data
-    if isinstance(record, Starved):
+    if isinstance(record, StarvedRecord):
         data["type"] = RecordType.STARVED
         data["pool"] = record.pool.value
         data["reason"] = record.reason
         return data
-    if isinstance(record, Overdue):
+    if isinstance(record, OverdueRecord):
         data["type"] = RecordType.OVERDUE
         data["job_id"] = record.job_id
         data["elapsed_seconds"] = record.elapsed_seconds
         return data
-    if isinstance(record, AttemptInterrupted):
+    if isinstance(record, InterruptedRecord):
         data["type"] = RecordType.INTERRUPTED
         data["job_id"] = record.job_id
         data["reason"] = record.reason

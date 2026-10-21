@@ -21,21 +21,21 @@ from typing import Callable, Sequence
 from behave_campaign.domain.classify import KILLED
 from behave_campaign.domain.records import (
     PROBLEM_OUTCOMES,
-    AttemptFinished,
-    AttemptInterrupted,
-    AttemptStarted,
     CampaignError,
-    CampaignHeader,
+    CampaignRecord,
     CampaignState,
     Cause,
     Filters,
+    FinishedRecord,
     Intent,
     IntentRecord,
+    InterruptedRecord,
     Record,
     RetryRecord,
-    Starved,
+    StartedRecord,
+    StarvedRecord,
     Unit,
-    UnitStatus,
+    UnitHistory,
 )
 from behave_campaign.domain.schedule import Lane, plan_tick
 from behave_campaign.domain.signals import (
@@ -158,7 +158,7 @@ class CampaignRunner:
     def run(self, campaign_id: str) -> CampaignControlResponse:
         """Set intent to run, and schedule while there is work."""
         with self._guard:
-            records = self._store.replay(campaign_id)
+            records = self._store.read_records(campaign_id)
             self._check_not_blocked(campaign_id, records)
             self._commit(
                 campaign_id,
@@ -176,22 +176,22 @@ class CampaignRunner:
         unit is queueable again whatever the job does next.
         """
         with self._guard:
-            records = self._store.replay(campaign_id)
+            records = self._store.read_records(campaign_id)
             self._store.append(
                 campaign_id,
                 self._intent_change(records, Intent.HOLD, Cause.PAUSE),
             )
-            interrupted: list[UnitStatus] = []
-            unsignalled: list[str] = []
+            interrupted: list[UnitHistory] = []
+            not_killed: list[str] = []
             if kill:
                 interrupted = in_flight(reduce_units(records))
-                unsignalled = self._kill(campaign_id, interrupted)
+                not_killed = self._kill(campaign_id, interrupted)
                 self._store.append(
                     campaign_id, self._interruptions(interrupted)
                 )
             response = self._control_response(campaign_id)
-            response.interrupted = [unit_view(s) for s in interrupted]
-            response.unsignalled = unsignalled
+            response.killed = [unit_view(s) for s in interrupted]
+            response.not_killed = not_killed
             idle = response.state in IDLE_STATES
         # Joining the ticker happens outside the guard: a tick that is
         # already in flight must be able to finish without waiting on it.
@@ -216,7 +216,7 @@ class CampaignRunner:
         already being attempted.
         """
         with self._guard:
-            records = self._store.replay(campaign_id)
+            records = self._store.read_records(campaign_id)
             selected = self._select_for_retry(records, filters)
             if not selected:
                 raise CampaignError("no units matched; nothing was re-queued")
@@ -238,7 +238,7 @@ class CampaignRunner:
             )
             return RetryUnitsResponse(
                 **self._summary(campaign_id).model_dump(),
-                requeued=len(selected),
+                retried=len(selected),
                 units=[unit_view(status) for status in selected],
             )
 
@@ -254,7 +254,7 @@ class CampaignRunner:
             return self._tick_locked(campaign_id)
 
     def _tick_locked(self, campaign_id: str) -> TickReport:
-        records = self._store.replay(campaign_id)
+        records = self._store.read_records(campaign_id)
         header = _header_of(records)
         lanes = self._read_lanes(records)
         at = self._now()
@@ -264,9 +264,9 @@ class CampaignRunner:
         )
         self._store.append(campaign_id, plan.record)
         problems = [
-            item.problem
+            item.reason
             for item in plan.record
-            if isinstance(item, AttemptFinished) and item.problem
+            if isinstance(item, FinishedRecord) and item.reason
         ]
 
         started, refused = self._open_lanes(
@@ -292,7 +292,7 @@ class CampaignRunner:
             state=current,
             recorded=len(plan.record),
             started=len(started),
-            lanes_busy=replayed.in_flight,
+            in_flight=replayed.in_flight,
             problems=problems,
             finished=current in IDLE_STATES,
         )
@@ -366,27 +366,27 @@ class CampaignRunner:
             self._start_ticker(campaign_id)
 
     def _kill(
-        self, campaign_id: str, statuses: Sequence[UnitStatus]
+        self, campaign_id: str, statuses: Sequence[UnitHistory]
     ) -> list[str]:
-        """Signal each job; return the ids of those that could not be."""
-        unsignalled = []
+        """Kill each job; return the ids of those that could not be."""
+        not_killed = []
         for status in statuses:
             job_id = status.job_id or ""
             if not self._lanes.kill(job_id):
                 logger.warning(
-                    "campaign %s: job %s could not be signalled",
+                    "campaign %s: job %s could not be killed",
                     campaign_id,
                     job_id,
                 )
-                unsignalled.append(job_id)
-        return unsignalled
+                not_killed.append(job_id)
+        return not_killed
 
     def _interruptions(
-        self, statuses: Sequence[UnitStatus]
-    ) -> list[AttemptInterrupted]:
+        self, statuses: Sequence[UnitHistory]
+    ) -> list[InterruptedRecord]:
         at = self._now()
         return [
-            AttemptInterrupted(
+            InterruptedRecord(
                 unit=status.unit,
                 job_id=status.job_id or "",
                 at=at,
@@ -398,16 +398,16 @@ class CampaignRunner:
     def _open_lanes(
         self,
         campaign_id: str,
-        header: CampaignHeader,
+        header: CampaignRecord,
         units: Sequence[Unit],
         problems: list[str],
-    ) -> tuple[list[AttemptStarted], list[Starved]]:
+    ) -> tuple[list[StartedRecord], list[StarvedRecord]]:
         """Start a job for each unit; return what started and what was
         refused, one refusal per pool."""
         repo_root = Path(header.repo.root)
         install_from = header.install_from
-        started: list[AttemptStarted] = []
-        refused: dict[Pool, Starved] = {}
+        started: list[StartedRecord] = []
+        refused: dict[Pool, StarvedRecord] = {}
         for unit in units:
             if unit.pool in refused:
                 continue
@@ -420,7 +420,7 @@ class CampaignRunner:
                 # later tick picks it up, and say why. A full pool only
                 # stops that pool; anything else stops the tick.
                 problems.append(str(error))
-                refused[unit.pool] = Starved(
+                refused[unit.pool] = StarvedRecord(
                     unit=unit,
                     pool=unit.pool,
                     reason=str(error),
@@ -430,7 +430,7 @@ class CampaignRunner:
                     break
                 continue
             started.append(
-                AttemptStarted(
+                StartedRecord(
                     unit=unit,
                     job_id=job_id,
                     install_from=install_from,
@@ -445,7 +445,7 @@ class CampaignRunner:
     @staticmethod
     def _select_for_retry(
         records: Sequence[Record], filters: Filters
-    ) -> list[UnitStatus]:
+    ) -> list[UnitHistory]:
         wanted = filters.state or PROBLEM_OUTCOMES
         return [
             status
@@ -475,7 +475,9 @@ class CampaignRunner:
         return lanes
 
     def _summary(self, campaign_id: str) -> CampaignSummary:
-        return campaign_summary(campaign_id, self._store.replay(campaign_id))
+        return campaign_summary(
+            campaign_id, self._store.read_records(campaign_id)
+        )
 
     def _control_response(self, campaign_id: str) -> CampaignControlResponse:
         return CampaignControlResponse(
@@ -501,8 +503,8 @@ class CampaignRunner:
             self._active = None
 
 
-def _header_of(records: Sequence[Record]) -> CampaignHeader:
+def _header_of(records: Sequence[Record]) -> CampaignRecord:
     for record in records:
-        if isinstance(record, CampaignHeader):
+        if isinstance(record, CampaignRecord):
             return record
     raise CampaignError("campaign has no header; it was never created")

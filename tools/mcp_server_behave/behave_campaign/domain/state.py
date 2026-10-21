@@ -8,25 +8,25 @@ from behave_campaign.domain.records import (
     PROBLEM_OUTCOMES,
     STATES,
     Attempt,
-    AttemptFinished,
-    AttemptInterrupted,
-    AttemptStarted,
     CampaignError,
-    CampaignHeader,
+    CampaignRecord,
     CampaignState,
+    FinishedRecord,
     Intent,
     IntentRecord,
+    InterruptedRecord,
     Outcome,
-    Overdue,
+    OverdueRecord,
     PlanRecord,
     Progress,
     Record,
     RetryRecord,
-    Starved,
+    StartedRecord,
+    StarvedRecord,
     StringEnum,
     Unit,
+    UnitHistory,
     UnitState,
-    UnitStatus,
 )
 from behave_mcp.domain.pools import Pool
 
@@ -71,9 +71,9 @@ class Replay:
     """
 
     def __init__(self) -> None:
-        self.header: CampaignHeader | None = None
+        self.header: CampaignRecord | None = None
         self.intent = Intent.NEVER_RUN
-        self._planned: dict[Unit, UnitStatus] = {}
+        self._planned: dict[Unit, UnitHistory] = {}
         self._attempts: dict[Unit, list[Attempt]] = {}
         self._open: dict[tuple[Unit, str], int] = {}
         # A retry asks for another go; the next start answers it. Reading
@@ -84,13 +84,13 @@ class Replay:
         self._in_flight = 0
         self._counts = {state: 0 for state in STATES}
         # Starvation is reported once per episode: from a refusal until a
-        # lane next opens in that pool. Overdue is reported once per job.
+        # lane next opens in that pool. OverdueRecord is reported once per job.
         self.starved_pools: set[Pool] = set()
         self.overdue_jobs: set[str] = set()
 
-    def apply(self, record: Record) -> UnitStatus | None:
+    def apply(self, record: Record) -> UnitHistory | None:
         """Apply one record; return the new status of the unit it changed."""
-        if isinstance(record, CampaignHeader):
+        if isinstance(record, CampaignRecord):
             self.header = record
             return None
         if isinstance(record, IntentRecord):
@@ -102,15 +102,15 @@ class Replay:
             self._planned[record.unit] = self._status_of(record.unit)
             self._count(self._planned[record.unit], 1)
             return self._planned[record.unit]
-        if isinstance(record, Starved):
+        if isinstance(record, StarvedRecord):
             self.starved_pools.add(record.pool)
             return None
-        if isinstance(record, Overdue):
+        if isinstance(record, OverdueRecord):
             self.overdue_jobs.add(record.job_id)
             return None
         if isinstance(record, RetryRecord):
             self._pending[record.unit] = True
-        elif isinstance(record, AttemptStarted):
+        elif isinstance(record, StartedRecord):
             self.starved_pools.discard(record.unit.pool)
             started = self._attempts.setdefault(record.unit, [])
             self._open[(record.unit, record.job_id)] = len(started)
@@ -122,7 +122,7 @@ class Replay:
                 )
             )
             self._pending[record.unit] = False
-        elif isinstance(record, AttemptFinished):
+        elif isinstance(record, FinishedRecord):
             self._close(
                 record.unit,
                 record.job_id,
@@ -130,7 +130,7 @@ class Replay:
                 outcome=record.outcome,
             )
             self._pending[record.unit] = False
-        elif isinstance(record, AttemptInterrupted):
+        elif isinstance(record, InterruptedRecord):
             if (record.unit, record.job_id) not in self._open:
                 return None
             self._close(record.unit, record.job_id, record.at, outcome=None)
@@ -138,10 +138,10 @@ class Replay:
             return None
         return self._refresh(record.unit)
 
-    def status(self, unit: Unit) -> UnitStatus | None:
+    def status(self, unit: Unit) -> UnitHistory | None:
         return self._planned.get(unit)
 
-    def statuses(self) -> list[UnitStatus]:
+    def statuses(self) -> list[UnitHistory]:
         return [self._planned[unit] for unit in sorted(self._planned)]
 
     def counts(self) -> dict[str, int]:
@@ -195,7 +195,7 @@ class Replay:
             interrupted=outcome is None,
         )
 
-    def _refresh(self, unit: Unit) -> UnitStatus | None:
+    def _refresh(self, unit: Unit) -> UnitHistory | None:
         old = self._planned.get(unit)
         if old is None:
             return None
@@ -205,10 +205,10 @@ class Replay:
         self._planned[unit] = new
         return new
 
-    def _status_of(self, unit: Unit) -> UnitStatus:
+    def _status_of(self, unit: Unit) -> UnitHistory:
         attempts = tuple(self._attempts.get(unit, ()))
         state, job_id = _unit_state(attempts)
-        return UnitStatus(
+        return UnitHistory(
             unit=unit,
             state=state,
             job_id=job_id,
@@ -216,7 +216,7 @@ class Replay:
             retry_pending=self._pending.get(unit, False),
         )
 
-    def _count(self, status: UnitStatus, sign: int) -> None:
+    def _count(self, status: UnitHistory, sign: int) -> None:
         self._counts[status.state] += sign
         self._attempted += sign if status.attempts else 0
         self._queueable += sign if status.queueable else 0
@@ -230,12 +230,12 @@ def replay(records: Iterable[Record]) -> Replay:
     return replayed
 
 
-def reduce_units(records: Iterable[Record]) -> list[UnitStatus]:
+def reduce_units(records: Iterable[Record]) -> list[UnitHistory]:
     """One current status per planned unit, in unit order."""
     return replay(records).statuses()
 
 
-def busy_by_pool(statuses: Iterable[UnitStatus]) -> dict[Pool, int]:
+def in_flight_by_pool(statuses: Iterable[UnitHistory]) -> dict[Pool, int]:
     counts: dict[Pool, int] = {}
     for status in statuses:
         if status.in_flight:
@@ -244,14 +244,14 @@ def busy_by_pool(statuses: Iterable[UnitStatus]) -> dict[Pool, int]:
     return counts
 
 
-def count_states(statuses: Iterable[UnitStatus]) -> dict[str, int]:
+def count_states(statuses: Iterable[UnitHistory]) -> dict[str, int]:
     counts = {state: 0 for state in STATES}
     for status in statuses:
         counts[status.state] += 1
     return counts
 
 
-def problems(statuses: Iterable[UnitStatus]) -> list[UnitStatus]:
+def problems(statuses: Iterable[UnitHistory]) -> list[UnitHistory]:
     return [s for s in statuses if s.state in PROBLEM_OUTCOMES]
 
 
@@ -266,21 +266,21 @@ GROUPINGS = tuple(group.value for group in GroupBy)
 
 
 def group_by_scenario(
-    statuses: Iterable[UnitStatus],
-) -> list[tuple[tuple[str, str], list[UnitStatus]]]:
+    statuses: Iterable[UnitHistory],
+) -> list[tuple[tuple[str, str], list[UnitHistory]]]:
     """Units bucketed by ``(feature, scenario)``, first seen first.
 
     One row per scenario is the shape a flaky-or-real judgement wants: the
     same scenario down on every release says defect, on one says flake.
     """
-    grouped: dict[tuple[str, str], list[UnitStatus]] = {}
+    grouped: dict[tuple[str, str], list[UnitHistory]] = {}
     for status in statuses:
         key = (status.unit.feature, status.unit.scenario)
         grouped.setdefault(key, []).append(status)
     return list(grouped.items())
 
 
-def in_flight(statuses: Iterable[UnitStatus]) -> list[UnitStatus]:
+def in_flight(statuses: Iterable[UnitHistory]) -> list[UnitHistory]:
     return [s for s in statuses if s.in_flight]
 
 
@@ -293,7 +293,7 @@ def intent(records: Iterable[Record]) -> Intent:
     return current
 
 
-def progress(statuses: Sequence[UnitStatus]) -> Progress:
+def progress(statuses: Sequence[UnitHistory]) -> Progress:
     """How much work is left, read off the units."""
     return _progress(
         units=len(statuses),

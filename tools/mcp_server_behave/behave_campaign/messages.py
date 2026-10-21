@@ -106,7 +106,7 @@ class CampaignSummary(BaseModel):
     state: str = ""
     intent: str = ""
     progress: str = ""
-    lanes_busy: int = 0
+    in_flight: int = 0
     counts: StateCounts = StateCounts()
 
 
@@ -155,7 +155,7 @@ class CampaignStatusResponse(BaseModel):
 
     campaign: CampaignHeader = CampaignHeader()
     summary: CampaignSummary = CampaignSummary()
-    lanes_busy_by_pool: dict[str, int] = {}
+    in_flight_by_pool: dict[str, int] = {}
     in_flight: list[UnitView] = []
     problems: list[UnitView] | None = None
     problem_scenarios: list[ScenarioProblems] | None = None
@@ -217,13 +217,13 @@ class CampaignControlResponse(CampaignSummary):
     """State of a campaign after run or pause.
 
     After a pause, ``state`` is pausing while jobs drain and paused once
-    they are recorded. A pause with kill lists the units it ``interrupted``;
-    ``unsignalled`` names their jobs this server could not signal, which
-    may still be running.
+    they are recorded. A pause with kill lists the units whose jobs it
+    ``killed``; ``not_killed`` names the jobs whose process could not be
+    reached, which may still be running.
     """
 
-    interrupted: list[UnitView] = []
-    unsignalled: list[str] = []
+    killed: list[UnitView] = []
+    not_killed: list[str] = []
 
 
 class TickReport(BaseModel):
@@ -237,7 +237,7 @@ class TickReport(BaseModel):
     state: str = ""
     recorded: int = 0
     started: int = 0
-    lanes_busy: int = 0
+    in_flight: int = 0
     problems: list[str] = []
     finished: bool = False
 
@@ -268,7 +268,7 @@ class AwaitEventsResponse(CampaignSummary):
 class RetryUnitsResponse(CampaignSummary):
     """Which units were re-queued. A retry always sets intent to run."""
 
-    requeued: int = 0
+    retried: int = 0
     units: list[UnitView] = []
 
 

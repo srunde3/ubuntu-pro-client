@@ -8,14 +8,18 @@ from __future__ import annotations
 
 from typing import Sequence
 
-from behave_campaign.domain.records import CampaignHeader as HeaderRecord
-from behave_campaign.domain.records import Record, UnitStatus, lanes_as_dict
+from behave_campaign.domain.records import (
+    CampaignRecord,
+    Record,
+    UnitHistory,
+    lanes_as_dict,
+)
 from behave_campaign.domain.state import (
-    busy_by_pool,
     campaign_state,
     count_states,
     group_by_scenario,
     in_flight,
+    in_flight_by_pool,
     intent,
     progress,
     reduce_units,
@@ -36,14 +40,14 @@ from behave_campaign.messages import (
 )
 
 
-def header_of(records: Sequence[Record]) -> HeaderRecord | None:
+def header_of(records: Sequence[Record]) -> CampaignRecord | None:
     for record in records:
-        if isinstance(record, HeaderRecord):
+        if isinstance(record, CampaignRecord):
             return record
     return None
 
 
-def unit_view(status: UnitStatus) -> UnitView:
+def unit_view(status: UnitHistory) -> UnitView:
     return UnitView(
         feature=status.unit.feature,
         scenario=status.unit.scenario,
@@ -55,7 +59,7 @@ def unit_view(status: UnitStatus) -> UnitView:
     )
 
 
-def unit_history_view(status: UnitStatus) -> UnitHistoryView:
+def unit_history_view(status: UnitHistory) -> UnitHistoryView:
     return UnitHistoryView(
         **unit_view(status).model_dump(),
         attempts=[
@@ -67,7 +71,7 @@ def unit_history_view(status: UnitStatus) -> UnitHistoryView:
 def campaign_header(
     campaign_id: str, records: Sequence[Record]
 ) -> CampaignHeader:
-    header = header_of(records) or HeaderRecord()
+    header = header_of(records) or CampaignRecord()
     return CampaignHeader(
         campaign_id=campaign_id,
         created_at=header.at,
@@ -75,18 +79,18 @@ def campaign_header(
         lanes=lanes_as_dict(header.lanes),
         total_units=len(reduce_units(records)),
         repo=RepoState(**header.repo.as_dict()),
-        scope=CampaignScope(**header.filters.scope_as_dict()),
+        scope=CampaignScope(**header.scope.as_dict()),
     )
 
 
 def campaign_summary(
     campaign_id: str,
     records: Sequence[Record],
-    counted: Sequence[UnitStatus] | None = None,
+    counted: Sequence[UnitHistory] | None = None,
 ) -> CampaignSummary:
     """The campaign's summary; ``counted`` narrows the counts to a selection.
 
-    The state, intent, progress and ``lanes_busy`` are facts about the
+    The state, intent, progress and ``in_flight`` are facts about the
     whole campaign and never narrow.
     """
     statuses = reduce_units(records)
@@ -98,25 +102,25 @@ def campaign_summary(
         state=campaign_state(wanted, left, bool(busy)),
         intent=wanted,
         progress=left,
-        lanes_busy=len(busy),
+        in_flight=len(busy),
         counts=StateCounts(
             **count_states(statuses if counted is None else counted)
         ),
     )
 
 
-def lanes_busy_by_pool(records: Sequence[Record]) -> dict[str, int]:
-    """Lanes in flight for each pool the campaign has lanes in."""
-    header = header_of(records) or HeaderRecord()
-    busy = busy_by_pool(reduce_units(records))
+def in_flight_view(records: Sequence[Record]) -> dict[str, int]:
+    """Jobs in flight for each pool the campaign has lanes in."""
+    header = header_of(records) or CampaignRecord()
+    busy = in_flight_by_pool(reduce_units(records))
     return {pool.value: busy.get(pool, 0) for pool in header.lanes}
 
 
 def campaign_listing(
     campaign_id: str, records: Sequence[Record]
 ) -> CampaignListing:
-    header = header_of(records) or HeaderRecord()
-    scope = header.filters
+    header = header_of(records) or CampaignRecord()
+    scope = header.scope
     return CampaignListing(
         **campaign_summary(campaign_id, records).model_dump(),
         created_at=header.at,
@@ -133,7 +137,7 @@ def campaign_listing(
 
 
 def scenario_problems(
-    statuses: Sequence[UnitStatus],
+    statuses: Sequence[UnitHistory],
 ) -> list[ScenarioProblems]:
     rows = []
     for (feature, scenario), units in group_by_scenario(statuses):

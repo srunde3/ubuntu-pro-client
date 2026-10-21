@@ -111,7 +111,7 @@ counts by unit state -- so an empty batch is still informative. Each change of
 state is announced as `campaign.<state>`. Events are filtered by kind (`unit.failed`) or family
 (`unit.*`), and a `unit.failed` event carries the failing steps so a failure
 can be judged without fetching the job's report. `anomaly.*` events and
-`lane.overdue` are derived signals offered for judgement -- repeated skips,
+`job.overdue` are derived signals offered for judgement -- repeated skips,
 one scenario failing across every release, a refused lane, a job running far
 too long -- and nothing acts on them automatically.
 

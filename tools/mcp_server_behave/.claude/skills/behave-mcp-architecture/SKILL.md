@@ -63,7 +63,7 @@ Everything the server writes lives under its own checkout's `.mcp_server_behave/
 | `jobs/<job_id>/stdout.log` | combined stdout and stderr of the job | the behave subprocess |
 | `jobs/<job_id>/report.json` | behave's JSON report | the behave subprocess |
 | `campaigns/<id>/campaign.json` | the header and the units in scope, written once | `CampaignService` (create) |
-| `campaigns/<id>/events.jsonl` | every later record, append only; a torn last line is ignored and cut off by the next append | `CampaignRunner` |
+| `campaigns/<id>/records.jsonl` | every later record, append only; a torn last line is ignored and cut off by the next append | `CampaignRunner` |
 | `campaigns/<id>/campaign.lock` | the run lock (`flock`) while a campaign schedules | `FileCampaignRunLock` |
 | `exports/<id>.tar.gz` | the evidence bundle | CLI `export` |
 

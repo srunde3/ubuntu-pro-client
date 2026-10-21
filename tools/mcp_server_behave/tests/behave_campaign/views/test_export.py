@@ -6,11 +6,11 @@ import json
 
 from behave_campaign.domain.records import (
     Attempt,
-    CampaignHeader,
-    Filters,
+    CampaignRecord,
     RepoState,
+    Scope,
     Unit,
-    UnitStatus,
+    UnitHistory,
 )
 from behave_campaign.views.export import (
     render_campaign_json,
@@ -19,11 +19,11 @@ from behave_campaign.views.export import (
 )
 from behave_mcp.domain.pools import Pool
 
-HEADER = CampaignHeader(
+HEADER = CampaignRecord(
     at="2026-10-06T00:00:00Z",
     campaign_id="LP-1",
     repo=RepoState(root="/repo", commit="abc123", branch="main", dirty=True),
-    filters=Filters(release=("noble", "jammy")),
+    scope=Scope(release=("noble", "jammy")),
     install_from="proposed",
     lanes={Pool.LXD: 2},
 )
@@ -33,7 +33,7 @@ def status(unit, *attempts):
     """A unit's status the way reduce_units settles it."""
     passed = [a for a in attempts if a.outcome == "passed"]
     current = passed[0] if passed else attempts[-1]
-    return UnitStatus(
+    return UnitHistory(
         unit=unit,
         state=current.outcome,
         job_id=current.job_id,

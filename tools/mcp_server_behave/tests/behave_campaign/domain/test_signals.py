@@ -1,8 +1,8 @@
-"""Overdue lanes, and the clock arithmetic behind them."""
+"""OverdueRecord lanes, and the clock arithmetic behind them."""
 
 import pytest
 
-from behave_campaign.domain.records import Overdue, Unit
+from behave_campaign.domain.records import OverdueRecord, Unit
 from behave_campaign.domain.schedule import Lane
 from behave_campaign.domain.signals import elapsed_seconds, overdue_lanes
 
@@ -35,7 +35,7 @@ class TestOverdueLanes:
         )
 
         assert found == [
-            Overdue(
+            OverdueRecord(
                 unit=UNIT_A,
                 job_id=JOB_ID,
                 elapsed_seconds=ONE_HOUR,

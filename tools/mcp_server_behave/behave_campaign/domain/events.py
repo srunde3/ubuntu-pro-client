@@ -17,7 +17,7 @@ class EventFamily(StringEnum):
     """The groups a subscriber can ask for wholesale, as ``unit.*``."""
 
     CAMPAIGN = "campaign"
-    LANE = "lane"
+    JOB = "job"
     UNIT = "unit"
     ANOMALY = "anomaly"
 
@@ -36,8 +36,8 @@ class EventKind(StringEnum):
     CAMPAIGN_COMPLETE = "campaign.complete"
     CAMPAIGN_PAUSING = "campaign.pausing"
     CAMPAIGN_PAUSED = "campaign.paused"
-    LANE_STARTED = "lane.started"
-    LANE_OVERDUE = "lane.overdue"
+    JOB_STARTED = "job.started"
+    JOB_OVERDUE = "job.overdue"
     UNIT_PASSED = "unit.passed"
     UNIT_FAILED = "unit.failed"
     UNIT_SKIPPED = "unit.skipped"
@@ -47,7 +47,7 @@ class EventKind(StringEnum):
     UNIT_RETRIED = "unit.retried"
     ANOMALY_REPEATED_SCENARIO_FAILURE = "anomaly.repeated_scenario_failure"
     ANOMALY_REPEATED_SKIPS = "anomaly.repeated_skips"
-    ANOMALY_CAPACITY_STARVED = "anomaly.capacity_starved"
+    ANOMALY_STARVED = "anomaly.starved"
 
     @property
     def family(self) -> EventFamily:
@@ -77,7 +77,7 @@ ACTIONABLE_KINDS = (
     EventKind.UNIT_UNCLASSIFIABLE.value,
     EventKind.UNIT_INTERRUPTED.value,
     EventFamily.ANOMALY.value + ".*",
-    EventKind.LANE_OVERDUE.value,
+    EventKind.JOB_OVERDUE.value,
     EventFamily.CAMPAIGN.value + ".*",
 )
 

@@ -65,7 +65,7 @@ complete picture, not a green one.
 - `unit.unclassifiable` is a finding to report, not an error to work around.
 - `anomaly.repeated_scenario_failure` usually means a shared dependency
   or a host issue rather than a release bug.
-- `lane.overdue`: decide whether to `kill_job` it.
+- `job.overdue`: decide whether to `kill_job` it.
 - Before retrying a unit a second time, check `unit_history`; a unit that
   erred the same way twice is not a flake.
 - If one cause is failing every lane, pause, fix it, then `retry_units` in

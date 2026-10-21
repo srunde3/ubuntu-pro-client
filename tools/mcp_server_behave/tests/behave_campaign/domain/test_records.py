@@ -6,24 +6,24 @@ import pytest
 
 from behave_campaign.domain.records import (
     WRITABLE_INTENTS,
-    AttemptFinished,
-    AttemptInterrupted,
-    AttemptStarted,
     CampaignError,
-    CampaignHeader,
+    CampaignRecord,
     CampaignState,
     Cause,
     Failure,
-    Filters,
+    FinishedRecord,
     Intent,
     IntentRecord,
+    InterruptedRecord,
     Outcome,
-    Overdue,
+    OverdueRecord,
     PlanRecord,
     RecordType,
     RepoState,
     RetryRecord,
-    Starved,
+    Scope,
+    StartedRecord,
+    StarvedRecord,
     Unit,
     UnitState,
     encode_record,
@@ -39,36 +39,38 @@ AT = "2026-09-10T12:00:00Z"
 
 # One record of every type, with every optional field set.
 RECORD_OF_TYPE = {
-    RecordType.CAMPAIGN: CampaignHeader(
+    RecordType.CAMPAIGN: CampaignRecord(
         at=AT,
         campaign_id="1234567",
         repo=RepoState(
             root="/repo", commit="abc123", branch="main", dirty=False
         ),
-        filters=Filters(release=("jammy",)),
+        scope=Scope(release=("jammy",)),
     ),
     RecordType.PLAN: PlanRecord(UNIT_A, at=AT),
-    RecordType.STARTED: AttemptStarted(
+    RecordType.STARTED: StartedRecord(
         UNIT_A, "job-1", install_from="proposed", at=AT
     ),
-    RecordType.FINISHED: AttemptFinished(
+    RecordType.FINISHED: FinishedRecord(
         UNIT_A,
         "job-1",
         Outcome.FAILED,
         at=AT,
         failures=(Failure("Then it works", "failed", "it did not"),),
     ),
-    RecordType.INTERRUPTED: AttemptInterrupted(
+    RecordType.INTERRUPTED: InterruptedRecord(
         UNIT_A, "job-2", at=AT, reason="killed"
     ),
     RecordType.INTENT: IntentRecord(
         intent=Intent.HOLD, cause=Cause.PAUSE, at=AT
     ),
     RecordType.RETRY: RetryRecord(UNIT_A, at=AT, reason="looked flaky"),
-    RecordType.STARVED: Starved(
+    RecordType.STARVED: StarvedRecord(
         UNIT_A, Pool.LXD, reason="pool is full", at=AT
     ),
-    RecordType.OVERDUE: Overdue(UNIT_A, "job-1", elapsed_seconds=3600, at=AT),
+    RecordType.OVERDUE: OverdueRecord(
+        UNIT_A, "job-1", elapsed_seconds=3600, at=AT
+    ),
 }
 
 
@@ -85,11 +87,11 @@ def test_each_record_type_survives_encoding(kind, record):
 
 
 def test_an_unclassifiable_finish_keeps_its_problem():
-    finished = AttemptFinished(
-        UNIT_A, "job-1", Outcome.ERROR, at=AT, problem="cannot classify"
+    finished = FinishedRecord(
+        UNIT_A, "job-1", Outcome.ERROR, at=AT, reason="cannot classify"
     )
 
-    assert parse_record(encode_record(finished)).problem == "cannot classify"
+    assert parse_record(encode_record(finished)).reason == "cannot classify"
 
 
 def test_an_intent_needs_a_command_as_its_cause():
@@ -102,13 +104,13 @@ def test_an_intent_needs_a_command_as_its_cause():
 
 class TestRecordRoundTrip:
     def test_campaign_without_an_id_survives_encoding(self):
-        campaign = CampaignHeader(at=AT, repo=RepoState(root="/repo"))
+        campaign = CampaignRecord(at=AT, repo=RepoState(root="/repo"))
 
         assert parse_record(encode_record(campaign)) == campaign
 
     def test_unknown_install_source_is_rejected(self):
         raw = encode_record(
-            AttemptStarted(UNIT_A, "job-1", install_from="proposed", at=AT)
+            StartedRecord(UNIT_A, "job-1", install_from="proposed", at=AT)
         )
         raw["install_from"] = "somewhere"
 
@@ -125,7 +127,7 @@ class TestRecordRoundTrip:
             parse_record(raw)
 
     def test_unknown_outcome_is_rejected(self):
-        raw = encode_record(AttemptFinished(UNIT_A, "job-1", "failed", at=AT))
+        raw = encode_record(FinishedRecord(UNIT_A, "job-1", "failed", at=AT))
         raw["outcome"] = "exploded"
 
         with pytest.raises(CampaignError, match="outcome must be one of"):

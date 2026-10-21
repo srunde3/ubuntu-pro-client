@@ -3,14 +3,14 @@
 import pytest
 
 from behave_campaign.domain.records import (
-    AttemptFinished,
-    AttemptStarted,
-    CampaignHeader,
+    CampaignRecord,
     CampaignState,
     Cause,
+    FinishedRecord,
     Intent,
     IntentRecord,
     PlanRecord,
+    StartedRecord,
     Unit,
 )
 from behave_campaign.domain.schedule import Lane, plan_tick
@@ -42,7 +42,7 @@ def lxd(lanes):
 
 
 def plan(*units):
-    return [CampaignHeader(at=AT), *(PlanRecord(unit=u, at=AT) for u in units)]
+    return [CampaignRecord(at=AT), *(PlanRecord(unit=u, at=AT) for u in units)]
 
 
 def attempt(unit, outcome, job_id="job1"):
@@ -54,10 +54,10 @@ def attempt(unit, outcome, job_id="job1"):
     go through the runner or the service.
     """
     if outcome == "running":
-        return AttemptStarted(
+        return StartedRecord(
             unit=unit, job_id=job_id, install_from="proposed", at=AT
         )
-    return AttemptFinished(unit=unit, job_id=job_id, outcome=outcome, at=AT)
+    return FinishedRecord(unit=unit, job_id=job_id, outcome=outcome, at=AT)
 
 
 def completed(
@@ -276,7 +276,7 @@ class TestPlanTick:
             records=records, lanes=lanes, lane_limits=lxd(2), at=AT
         )
 
-        assert tick.record[0].problem
+        assert tick.record[0].reason
         # UNIT_A was just recorded as error. It must not be re-queued: only
         # the untouched unit is started.
         assert tick.start == (UNIT_B,)

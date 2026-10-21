@@ -4,21 +4,21 @@ import pytest
 
 from behave_campaign.domain.feed import derive_feed
 from behave_campaign.domain.records import (
-    AttemptFinished,
-    AttemptInterrupted,
-    AttemptStarted,
-    CampaignHeader,
+    CampaignRecord,
     Cause,
     Failure,
-    Filters,
+    FinishedRecord,
     Intent,
     IntentRecord,
+    InterruptedRecord,
     Outcome,
-    Overdue,
+    OverdueRecord,
     PlanRecord,
     RecordType,
     RetryRecord,
-    Starved,
+    Scope,
+    StartedRecord,
+    StarvedRecord,
     Unit,
 )
 from behave_mcp.domain.pools import Pool
@@ -42,10 +42,10 @@ JOB_A = "job-a"
 JOB_B = "job-b"
 
 
-HEADER = CampaignHeader(
+HEADER = CampaignRecord(
     at=AT,
     campaign_id=CAMPAIGN,
-    filters=Filters(release=("jammy", "noble")),
+    scope=Scope(release=("jammy", "noble")),
     install_from="proposed",
     lanes={Pool.LXD: 2},
 )
@@ -64,11 +64,11 @@ def hold():
 
 
 def start(unit, job_id):
-    return AttemptStarted(unit, job_id, install_from="proposed", at=AT)
+    return StartedRecord(unit, job_id, install_from="proposed", at=AT)
 
 
 def finish(unit, job_id, outcome, **extra):
-    return AttemptFinished(unit, job_id, outcome, at=AT, **extra)
+    return FinishedRecord(unit, job_id, outcome, at=AT, **extra)
 
 
 def kinds(records, family=""):
@@ -88,24 +88,24 @@ RUNNING = [*created(UNIT_A, UNIT_B), run(), start(UNIT_A, JOB_A)]
 # change of the campaign's state it causes. The header and plan are
 # announced together as campaign.created.
 OWN_EVENTS = {
-    RecordType.STARTED: (start(UNIT_B, JOB_B), ["lane.started"]),
+    RecordType.STARTED: (start(UNIT_B, JOB_B), ["job.started"]),
     RecordType.FINISHED: (
         finish(UNIT_A, JOB_A, Outcome.FAILED),
         ["unit.failed"],
     ),
     RecordType.INTERRUPTED: (
-        AttemptInterrupted(UNIT_A, JOB_A, at=AT, reason="killed"),
+        InterruptedRecord(UNIT_A, JOB_A, at=AT, reason="killed"),
         ["unit.interrupted"],
     ),
     RecordType.INTENT: (hold(), []),
     RecordType.RETRY: (RetryRecord(UNIT_B, at=AT), ["unit.retried"]),
     RecordType.STARVED: (
-        Starved(UNIT_B, Pool.LXD, reason="pool is full", at=AT),
-        ["anomaly.capacity_starved"],
+        StarvedRecord(UNIT_B, Pool.LXD, reason="pool is full", at=AT),
+        ["anomaly.starved"],
     ),
     RecordType.OVERDUE: (
-        Overdue(UNIT_A, JOB_A, elapsed_seconds=3600, at=AT),
-        ["lane.overdue"],
+        OverdueRecord(UNIT_A, JOB_A, elapsed_seconds=3600, at=AT),
+        ["job.overdue"],
     ),
 }
 
@@ -137,7 +137,7 @@ def test_creation_is_announced_with_the_scope():
         "total_units": 2,
         "install_from": "proposed",
         "lanes": {"lxd": 2},
-        "scope": HEADER.filters.scope_as_dict(),
+        "scope": HEADER.scope.as_dict(),
     }
 
 
@@ -175,7 +175,7 @@ def test_a_failure_carries_its_failing_steps():
 def test_an_unclassifiable_finish_has_its_own_kind_and_reason():
     records = [
         *RUNNING,
-        finish(UNIT_A, JOB_A, Outcome.ERROR, problem="cannot classify"),
+        finish(UNIT_A, JOB_A, Outcome.ERROR, reason="cannot classify"),
     ]
 
     (event,) = [
@@ -184,7 +184,7 @@ def test_an_unclassifiable_finish_has_its_own_kind_and_reason():
         if e.kind == "unit.unclassifiable"
     ]
 
-    assert event.data["problem"] == "cannot classify"
+    assert event.data["reason"] == "cannot classify"
 
 
 def test_a_retry_says_what_the_unit_was():

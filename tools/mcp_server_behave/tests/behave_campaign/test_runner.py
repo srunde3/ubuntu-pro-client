@@ -16,18 +16,19 @@ from behave_campaign.domain.classify import KILLED
 from behave_campaign.domain.events import event_matches
 from behave_campaign.domain.feed import derive_feed
 from behave_campaign.domain.records import (
-    AttemptFinished,
-    AttemptStarted,
     CampaignError,
-    CampaignHeader,
+    CampaignRecord,
     CampaignState,
     Cause,
     Filters,
+    FinishedRecord,
     Intent,
     IntentRecord,
     PlanRecord,
     RepoState,
     RetryRecord,
+    Scope,
+    StartedRecord,
     Unit,
     UnitState,
 )
@@ -69,7 +70,7 @@ WSL_UNITS = [
 def written_intents(store, campaign_id=CAMPAIGN):
     return [
         record.intent
-        for record in store.replay(campaign_id)
+        for record in store.read_records(campaign_id)
         if isinstance(record, IntentRecord)
     ]
 
@@ -81,7 +82,7 @@ class Feed:
         self._store = store
 
     def read(self, campaign_id, since_seq=0, kinds=(), limit=100):
-        feed = derive_feed(campaign_id, self._store.replay(campaign_id))
+        feed = derive_feed(campaign_id, self._store.read_records(campaign_id))
         return [
             event
             for event in feed
@@ -138,11 +139,11 @@ def make_runner(store, lanes=None, lock=None, **kwargs):
 
 def create(store, campaign_id=CAMPAIGN, units=None, lxd_lanes=2, lanes=None):
     units = UNITS if units is None else units
-    header = CampaignHeader(
+    header = CampaignRecord(
         at=AT,
         campaign_id=campaign_id,
         repo=RepoState(root="/repo"),
-        filters=Filters(),
+        scope=Scope(),
         install_from="proposed",
         lanes=lanes if lanes is not None else {Pool.LXD: lxd_lanes},
     )
@@ -153,7 +154,7 @@ def create(store, campaign_id=CAMPAIGN, units=None, lxd_lanes=2, lanes=None):
 
 
 def state(store, campaign_id=CAMPAIGN):
-    return state_of(store.replay(campaign_id))
+    return state_of(store.read_records(campaign_id))
 
 
 class TestRun:
@@ -266,7 +267,7 @@ class TestTick:
 
         assert len(lanes.started) == 2
         assert report.started == 2
-        assert report.lanes_busy == 2
+        assert report.in_flight == 2
 
     def test_it_records_an_attempt_in_flight_for_each_lane(
         self, runner, store, lanes
@@ -275,7 +276,7 @@ class TestTick:
         runner.run(CAMPAIGN)
         runner.tick(CAMPAIGN)
 
-        statuses = reduce_units(store.replay(CAMPAIGN))
+        statuses = reduce_units(store.read_records(CAMPAIGN))
         busy = [s for s in statuses if s.state == UnitState.IN_FLIGHT]
 
         assert {s.job_id for s in busy} == {"job1", "job2"}
@@ -326,7 +327,7 @@ class TestTick:
 
         report = runner.tick(CAMPAIGN)
 
-        statuses = reduce_units(store.replay(CAMPAIGN))
+        statuses = reduce_units(store.read_records(CAMPAIGN))
         assert [s.state for s in statuses if s.unit == UNITS[0]] == ["failed"]
         assert report.started == 1
 
@@ -365,7 +366,7 @@ class TestTick:
 
         assert report.problems
         assert report.recorded == 1
-        statuses = reduce_units(store.replay(CAMPAIGN))
+        statuses = reduce_units(store.read_records(CAMPAIGN))
         assert statuses[0].state == "error"
 
     def test_a_refused_lane_leaves_the_unit_for_a_later_tick(self, store):
@@ -377,7 +378,7 @@ class TestTick:
 
         assert report.started == 1
         assert report.problems
-        statuses = reduce_units(store.replay(CAMPAIGN))
+        statuses = reduce_units(store.read_records(CAMPAIGN))
         assert sum(1 for s in statuses if s.state == "unattempted") == 2
 
     def test_each_pool_fills_its_own_lanes(self, runner, store, lanes):
@@ -430,7 +431,7 @@ class TestTick:
         starved = events.read(
             CAMPAIGN,
             since_seq=0,
-            kinds=["anomaly.capacity_starved"],
+            kinds=["anomaly.starved"],
             limit=10,
         )
         assert [event.data["pool"] for event in starved] == ["wsl"]
@@ -447,7 +448,7 @@ class TestTick:
 
         assert report.state == CampaignState.COMPLETE
         assert report.finished
-        assert report.lanes_busy == 0
+        assert report.in_flight == 0
         # Complete is derived; nothing but the caller's intent is written.
         assert written_intents(store) == [Intent.RUN]
 
@@ -471,7 +472,7 @@ class TestTick:
 
         report = runner.tick(CAMPAIGN)
 
-        (status,) = reduce_units(store.replay(CAMPAIGN))
+        (status,) = reduce_units(store.read_records(CAMPAIGN))
         assert status.attempts[0].interrupted
         assert report.started == 1
         assert lanes.started_units == [UNITS[0], UNITS[0]]
@@ -509,7 +510,7 @@ class TestPause:
         response = runner.pause(CAMPAIGN)
 
         assert response.state == CampaignState.PAUSING
-        assert response.lanes_busy == 1
+        assert response.in_flight == 1
 
     def test_a_pausing_campaign_drains_then_is_paused(
         self, runner, store, lanes, lock
@@ -589,9 +590,9 @@ class TestPauseWithKill:
 
         response = runner.pause(CAMPAIGN, kill=True)
 
-        statuses = reduce_units(store.replay(CAMPAIGN))
+        statuses = reduce_units(store.read_records(CAMPAIGN))
         killed = [s for s in statuses if s.attempts]
-        assert [u.job_id for u in response.interrupted] == ["job1", "job2"]
+        assert [u.job_id for u in response.killed] == ["job1", "job2"]
         assert all(s.attempts[-1].interrupted for s in killed)
         assert all(s.queueable for s in killed)
 
@@ -618,7 +619,9 @@ class TestPauseWithKill:
 
         assert report.recorded == 0
         finished = [
-            r for r in store.replay(CAMPAIGN) if isinstance(r, AttemptFinished)
+            r
+            for r in store.read_records(CAMPAIGN)
+            if isinstance(r, FinishedRecord)
         ]
         assert finished == []
 
@@ -631,7 +634,7 @@ class TestPauseWithKill:
 
         response = runner.pause(CAMPAIGN, kill=True)
 
-        assert response.unsignalled == ["job1"]
+        assert response.not_killed == ["job1"]
 
     def test_running_again_reruns_the_interrupted_units(
         self, runner, store, lanes
@@ -672,7 +675,7 @@ class TestTheWholeLoop:
         # finished it, so the two are not simultaneous.
         _wait_until(lambda: runner.active_campaign() is None)
 
-        statuses = reduce_units(store.replay(CAMPAIGN))
+        statuses = reduce_units(store.read_records(CAMPAIGN))
 
         assert state(store) == CampaignState.COMPLETE
         assert len(lanes.started) == 12
@@ -831,7 +834,7 @@ class TestEvents:
         runner.tick(CAMPAIGN)
 
         opened = events.read(
-            CAMPAIGN, since_seq=0, kinds=["lane.started"], limit=10
+            CAMPAIGN, since_seq=0, kinds=["job.started"], limit=10
         )
 
         assert len(opened) == 1
@@ -902,7 +905,7 @@ class TestEvents:
         )
 
         assert len(odd) == 1
-        assert odd[0].data["problem"]
+        assert odd[0].data["reason"]
 
 
 class TestRetryUnits:
@@ -923,7 +926,7 @@ class TestRetryUnits:
 
         response = runner.retry_units(CAMPAIGN)
 
-        assert response.requeued == 1
+        assert response.retried == 1
         assert response.state == CampaignState.RUNNING
         assert runner.active_campaign() == CAMPAIGN
 
@@ -963,7 +966,7 @@ class TestRetryUnits:
         runner.retry_units(CAMPAIGN)
         self._finish(runner, lanes, "job2")
 
-        statuses = reduce_units(store.replay(CAMPAIGN))
+        statuses = reduce_units(store.read_records(CAMPAIGN))
 
         assert statuses[0].state == "passed"
         assert not statuses[0].retry_pending
@@ -978,7 +981,9 @@ class TestRetryUnits:
         runner.retry_units(CAMPAIGN, reason="looked flaky")
 
         retries = [
-            r for r in store.replay(CAMPAIGN) if isinstance(r, RetryRecord)
+            r
+            for r in store.read_records(CAMPAIGN)
+            if isinstance(r, RetryRecord)
         ]
         assert retries[-1].reason == "looked flaky"
 
@@ -994,7 +999,7 @@ class TestRetryUnits:
         response = runner.retry_units(CAMPAIGN)
 
         # The passing unit is left alone.
-        assert response.requeued == 2
+        assert response.retried == 2
         assert all(u.state == "failed" for u in response.units)
 
     def test_a_passing_unit_can_be_retried_when_named(
@@ -1008,7 +1013,7 @@ class TestRetryUnits:
             CAMPAIGN, filters=Filters(state=("passed",))
         )
 
-        assert response.requeued == 1
+        assert response.retried == 1
 
     def test_filters_narrow_the_selection(self, runner, store, lanes):
         create(store, lxd_lanes=3)
@@ -1076,7 +1081,7 @@ class TestSignals:
         runner.tick(CAMPAIGN)
 
         overdue = events.read(
-            CAMPAIGN, since_seq=0, kinds=["lane.overdue"], limit=10
+            CAMPAIGN, since_seq=0, kinds=["job.overdue"], limit=10
         )
 
         assert len(overdue) == 1
@@ -1093,7 +1098,7 @@ class TestSignals:
         starved = events.read(
             CAMPAIGN,
             since_seq=0,
-            kinds=["anomaly.capacity_starved"],
+            kinds=["anomaly.starved"],
             limit=10,
         )
 
@@ -1110,7 +1115,7 @@ class TestSignals:
             return events.read(
                 campaign_id,
                 since_seq=0,
-                kinds=["anomaly.capacity_starved"],
+                kinds=["anomaly.starved"],
                 limit=10,
             )
 
@@ -1140,7 +1145,7 @@ class TestSignals:
 
         make_runner(store, lanes=lanes).tick(CAMPAIGN)
 
-        starved = events.read(CAMPAIGN, kinds=["anomaly.capacity_starved"])
+        starved = events.read(CAMPAIGN, kinds=["anomaly.starved"])
         assert len(starved) == 1
 
     def test_a_restarted_runner_does_not_repeat_an_overdue_lane(
@@ -1165,7 +1170,7 @@ class TestSignals:
             now=lambda: "2026-09-12T14:00:00Z",
         ).tick(CAMPAIGN)
 
-        assert len(events.read(CAMPAIGN, kinds=["lane.overdue"])) == 1
+        assert len(events.read(CAMPAIGN, kinds=["job.overdue"])) == 1
 
     def test_a_tick_waits_for_a_control_verb_in_progress(self, runner, store):
         create(store)
@@ -1300,15 +1305,13 @@ DONE_JOB = "job-done"
 
 
 def _start(unit, job_id):
-    return AttemptStarted(
-        unit=unit, job_id=job_id, install_from="local", at=AT
-    )
+    return StartedRecord(unit=unit, job_id=job_id, install_from="local", at=AT)
 
 
 def _tried(unit, job_id, outcome):
     return [
         _start(unit, job_id),
-        AttemptFinished(unit=unit, job_id=job_id, outcome=outcome, at=AT),
+        FinishedRecord(unit=unit, job_id=job_id, outcome=outcome, at=AT),
     ]
 
 

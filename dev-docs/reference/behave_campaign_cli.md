@@ -191,7 +191,7 @@ uv run behave-campaign history --campaign-id 1234567 \
 
 Read the events the campaign's records announce. Events are derived from the
 record on every read, so they need no server and number the same way
-everywhere. Each response carries the campaign's `state`, `intent`, `progress`, `lanes_busy`
+everywhere. Each response carries the campaign's `state`, `intent`, `progress`, `in_flight`
 and `counts` as well as the events.
 
 Required arguments:
@@ -216,7 +216,7 @@ Optional arguments:
 * `--interval SECONDS`: Poll interval with `--follow`. Defaults to `5`.
 
 Families: `campaign`, `lane`, `unit`, `anomaly`. Presets: `actionable`
-(every non-passing outcome, `anomaly.*`, `lane.overdue`, `campaign.*`) and
+(every non-passing outcome, `anomaly.*`, `job.overdue`, `campaign.*`) and
 `*` (everything).
 
 ```bash
@@ -255,7 +255,7 @@ The bundle unpacks to one directory named after the campaign:
 | `units.csv` | One row per unit: `feature, scenario, release, machine_type, state, job_id, finished_at` |
 | `jobs/<job_id>/` | `job.json`, `exit.json`, `report.json`, `stdout.log` for every attempt, including superseded ones |
 | `audit/campaign.json` | The campaign's header and units, as stored |
-| `audit/events.jsonl` | The campaign's record log, as stored |
+| `audit/records.jsonl` | The campaign's record log, as stored |
 
 Each unit appears once, in the state its attempts ended in; the summary never
 shows attempt counts. Repo state is left out of the review files, because
@@ -278,10 +278,10 @@ Each campaign is one directory, `campaigns/<id>/`:
 | File                          | Written by            | Contents                                   |
 | ----------------------------- | --------------------- | ------------------------------------------ |
 | `campaign.json`               | `create`, once        | The header and the units in scope          |
-| `events.jsonl`                | the server            | Every later record, append-only            |
+| `records.jsonl`                | the server            | Every later record, append-only            |
 | `campaign.lock`               | the server            | Advisory lock while the campaign schedules |
 | `../../exports/<id>.tar.gz`   | `export`              | The evidence bundle, by default            |
 
-A crash mid-append can leave part of a line at the end of `events.jsonl`.
+A crash mid-append can leave part of a line at the end of `records.jsonl`.
 Reading ignores it, and the next append cuts it off.
 

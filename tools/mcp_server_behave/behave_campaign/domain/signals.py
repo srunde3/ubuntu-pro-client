@@ -11,7 +11,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Iterable, Sequence
 
-from behave_campaign.domain.records import Overdue
+from behave_campaign.domain.records import OverdueRecord
 from behave_campaign.domain.schedule import Lane
 
 DEFAULT_OVERDUE_SECONDS = 3600.0
@@ -46,7 +46,7 @@ def overdue_lanes(
     at: str,
     overdue_seconds: float,
     reported: Iterable[str],
-) -> list[Overdue]:
+) -> list[OverdueRecord]:
     """Records for lanes running past ``overdue_seconds`` and not yet
     reported."""
     already = set(reported)
@@ -58,7 +58,7 @@ def overdue_lanes(
         if age is None or age < overdue_seconds:
             continue
         found.append(
-            Overdue(
+            OverdueRecord(
                 unit=lane.unit,
                 job_id=lane.job_id,
                 elapsed_seconds=int(age),

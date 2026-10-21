@@ -11,7 +11,7 @@ import difflib
 from pathlib import Path
 from typing import Any, Iterable
 
-from behave_campaign.domain.records import CampaignError, Filters, Unit
+from behave_campaign.domain.records import CampaignError, Scope, Unit
 from behave_mcp import parser
 
 # Above this many values, suggest close matches instead of listing them all.
@@ -66,23 +66,23 @@ def _reject_unknown(
     )
 
 
-def discover_units(repo_root: Path, filters: Filters) -> list[Unit]:
-    """Return every unit in the feature files matching the filters."""
+def discover_units(repo_root: Path, scope: Scope) -> list[Unit]:
+    """Return every unit in the feature files in the scope."""
     details = _feature_details(repo_root)
 
     dimensions = parser.aggregate_dimensions(details)
     _reject_unknown(
-        filters.release,
+        scope.release,
         {value.name for value in dimensions.releases},
         "release",
     )
     _reject_unknown(
-        filters.machine_type,
+        scope.machine_type,
         {value.name for value in dimensions.machine_types},
         "machine_type",
     )
     _reject_unknown(
-        filters.feature, {detail.path for detail in details}, "feature"
+        scope.feature, {detail.path for detail in details}, "feature"
     )
 
     # Which scenarios of its feature produce each unit. One scenario may
@@ -98,7 +98,7 @@ def discover_units(repo_root: Path, filters: Filters) -> list[Unit]:
                     release=combo.release,
                     machine_type=combo.machine_type,
                 )
-                if filters.matches_unit(unit):
+                if scope.matches_unit(unit):
                     sources.setdefault(unit, set()).add(index)
 
     ambiguous = sorted(

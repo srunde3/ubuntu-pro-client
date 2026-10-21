@@ -8,9 +8,9 @@ import json
 from typing import Iterable, Sequence
 
 from behave_campaign.domain.records import (
-    CampaignHeader,
+    CampaignRecord,
+    UnitHistory,
     UnitState,
-    UnitStatus,
     lanes_as_dict,
 )
 from behave_campaign.domain.state import count_states
@@ -35,7 +35,7 @@ def ordered_releases(
     return first + sorted(present - set(first))
 
 
-def finished_at(statuses: Sequence[UnitStatus]) -> str:
+def finished_at(statuses: Sequence[UnitHistory]) -> str:
     """When the last attempt finished."""
     return max(
         (
@@ -48,14 +48,14 @@ def finished_at(statuses: Sequence[UnitStatus]) -> str:
     )
 
 
-def _final_attempt_finished_at(status: UnitStatus) -> str:
+def _final_attempt_finished_at(status: UnitHistory) -> str:
     for attempt in status.attempts:
         if attempt.job_id == status.job_id:
             return attempt.finished_at
     return ""
 
 
-def render_units_csv(statuses: Sequence[UnitStatus]) -> str:
+def render_units_csv(statuses: Sequence[UnitHistory]) -> str:
     stream = io.StringIO()
     writer = csv.DictWriter(
         stream, fieldnames=UNITS_CSV_COLUMNS, lineterminator="\n"
@@ -75,9 +75,9 @@ def render_units_csv(statuses: Sequence[UnitStatus]) -> str:
 
 def render_campaign_json(
     campaign_id: str,
-    header: CampaignHeader,
+    header: CampaignRecord,
     state: str,
-    statuses: Sequence[UnitStatus],
+    statuses: Sequence[UnitHistory],
 ) -> str:
     """Scope and outcome; no repo state, as no commit pins the jobs."""
     document = {
@@ -87,16 +87,18 @@ def render_campaign_json(
         "state": state,
         "install_from": header.install_from,
         "lanes": lanes_as_dict(header.lanes),
-        "scope": header.filters.scope_as_dict(),
+        "scope": header.scope.as_dict(),
         "total_units": len(statuses),
         "counts": count_states(statuses),
     }
     return json.dumps(document, indent=2, sort_keys=True) + "\n"
 
 
-def _scope_line(header: CampaignHeader, statuses: Sequence[UnitStatus]) -> str:
+def _scope_line(
+    header: CampaignRecord, statuses: Sequence[UnitHistory]
+) -> str:
     releases = ordered_releases(
-        {s.unit.release for s in statuses}, header.filters.release
+        {s.unit.release for s in statuses}, header.scope.release
     )
     machine_types = sorted({s.unit.machine_type for s in statuses})
     features = sorted({s.unit.feature for s in statuses})
@@ -111,7 +113,7 @@ def _scope_line(header: CampaignHeader, statuses: Sequence[UnitStatus]) -> str:
     )
 
 
-def _counts_line(statuses: Sequence[UnitStatus]) -> str:
+def _counts_line(statuses: Sequence[UnitHistory]) -> str:
     counts = count_states(statuses)
     return "Units: {}. passed {}, failed {}, error {}, skipped {}".format(
         len(statuses),
@@ -123,13 +125,13 @@ def _counts_line(statuses: Sequence[UnitStatus]) -> str:
 
 
 def _unit_lines(
-    statuses: Sequence[UnitStatus],
+    statuses: Sequence[UnitHistory],
     release_order: Sequence[str],
     missing_jobs: set[str],
     with_state: bool,
 ) -> list[str]:
     """Feature, then scenario, then one line per release."""
-    grouped: dict[str, dict[str, dict[str, list[UnitStatus]]]] = {}
+    grouped: dict[str, dict[str, dict[str, list[UnitHistory]]]] = {}
     for status in statuses:
         unit = status.unit
         grouped.setdefault(unit.feature, {}).setdefault(
@@ -165,12 +167,12 @@ def _unit_lines(
 
 def render_summary(
     campaign_id: str,
-    header: CampaignHeader,
-    statuses: Sequence[UnitStatus],
+    header: CampaignRecord,
+    statuses: Sequence[UnitHistory],
     missing_jobs: Iterable[str] = (),
 ) -> str:
     """SUMMARY.md: what ran and what passed."""
-    release_order = header.filters.release
+    release_order = header.scope.release
     missing = set(missing_jobs)
     passed = [s for s in statuses if s.state == UnitState.PASSED]
     not_passed = [s for s in statuses if s.state != UnitState.PASSED]

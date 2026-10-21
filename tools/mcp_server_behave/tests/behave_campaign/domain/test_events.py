@@ -31,7 +31,7 @@ class TestEventMatching:
     def test_a_family_matches_its_kinds(self):
         assert event_matches("unit.failed", ["unit.*"])
         assert event_matches("unit.passed", ["unit.*"])
-        assert not event_matches("lane.started", ["unit.*"])
+        assert not event_matches("job.started", ["unit.*"])
 
     def test_patterns_are_a_union(self):
         patterns = ["unit.*", "campaign.complete"]
@@ -113,8 +113,8 @@ ACTIONABLE = {
     EventKind.CAMPAIGN_COMPLETE: True,
     EventKind.CAMPAIGN_PAUSING: True,
     EventKind.CAMPAIGN_PAUSED: True,
-    EventKind.LANE_STARTED: False,
-    EventKind.LANE_OVERDUE: True,
+    EventKind.JOB_STARTED: False,
+    EventKind.JOB_OVERDUE: True,
     EventKind.UNIT_PASSED: False,
     EventKind.UNIT_FAILED: True,
     EventKind.UNIT_SKIPPED: True,
@@ -124,7 +124,7 @@ ACTIONABLE = {
     EventKind.UNIT_RETRIED: False,
     EventKind.ANOMALY_REPEATED_SCENARIO_FAILURE: True,
     EventKind.ANOMALY_REPEATED_SKIPS: True,
-    EventKind.ANOMALY_CAPACITY_STARVED: True,
+    EventKind.ANOMALY_STARVED: True,
 }
 
 

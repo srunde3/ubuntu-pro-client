@@ -6,10 +6,10 @@ from typing import Any
 
 from behave_campaign.domain.events import failure_details
 from behave_campaign.domain.records import (
-    AttemptFinished,
-    AttemptInterrupted,
     CampaignError,
     Failure,
+    FinishedRecord,
+    InterruptedRecord,
     Outcome,
     Unit,
     text_field,
@@ -78,7 +78,7 @@ def _completed_outcome(result: dict[str, Any]) -> Outcome:
     )
 
 
-def finished_from_mcp(unit: Unit, result: Any) -> AttemptFinished:
+def finished_from_mcp(unit: Unit, result: Any) -> FinishedRecord:
     """Map one completed MCP job payload onto a finished attempt.
 
     Only a finished job has an outcome. Handing a job still in flight here
@@ -96,7 +96,7 @@ def finished_from_mcp(unit: Unit, result: Any) -> AttemptFinished:
     if "job_id" not in result:
         raise CampaignError("MCP result is missing 'job_id'")
 
-    return AttemptFinished(
+    return FinishedRecord(
         unit=unit,
         job_id=text_field(result, "job_id", "MCP result"),
         outcome=_completed_outcome(result),
@@ -105,18 +105,18 @@ def finished_from_mcp(unit: Unit, result: Any) -> AttemptFinished:
 
 def classify_result(
     unit: Unit, result: Any, at: str = ""
-) -> AttemptFinished | AttemptInterrupted:
+) -> FinishedRecord | InterruptedRecord:
     """Map an ended MCP job onto the record that closes its attempt.
 
     Never raises. A job that was killed, or whose process died,
     established nothing, so its attempt is interrupted and the unit may be
     queued again. A result that
     cannot be classified is recorded as ``error`` with the reason in
-    ``problem``: a scheduler has nobody to raise at.
+    ``reason``: a scheduler has nobody to raise at.
     """
     if isinstance(result, dict) and result.get("status") == MCP_INTERRUPTED:
         reason = result.get("reason")
-        return AttemptInterrupted(
+        return InterruptedRecord(
             unit=unit,
             job_id=str(result.get("job_id", "")),
             at=at,
@@ -129,14 +129,14 @@ def classify_result(
         if isinstance(result, dict):
             raw_job_id = result.get("job_id")
             job_id = raw_job_id if isinstance(raw_job_id, str) else ""
-        return AttemptFinished(
+        return FinishedRecord(
             unit=unit,
             job_id=job_id,
             outcome=Outcome.ERROR,
             at=at,
-            problem=str(error),
+            reason=str(error),
         )
-    return AttemptFinished(
+    return FinishedRecord(
         unit=finished.unit,
         job_id=finished.job_id,
         outcome=finished.outcome,

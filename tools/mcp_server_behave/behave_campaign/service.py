@@ -18,7 +18,7 @@ from typing import Callable, Mapping, Sequence
 from behave_campaign.domain.bundle import (
     AUDIT_DIR,
     AUDIT_FILES,
-    CAMPAIGN_JSON_NAME,
+    EXPORT_JSON_NAME,
     JOB_FILES,
     JOBS_DIR,
     SUMMARY_NAME,
@@ -36,13 +36,14 @@ from behave_campaign.domain.feed import derive_feed
 from behave_campaign.domain.records import (
     DEFAULT_INSTALL_FROM,
     CampaignError,
-    CampaignHeader,
+    CampaignRecord,
     CampaignState,
     Filters,
     PlanRecord,
     Record,
     RepoState,
-    UnitStatus,
+    Scope,
+    UnitHistory,
     resolve_lanes,
     validate_campaign_id,
     validate_install_from,
@@ -88,7 +89,7 @@ from behave_campaign.views.responses import (
     campaign_listing,
     campaign_summary,
     header_of,
-    lanes_busy_by_pool,
+    in_flight_view,
     scenario_problems,
     unit_history_view,
     unit_view,
@@ -146,24 +147,24 @@ class CampaignService:
         validate_campaign_id(campaign_id)
         validate_install_from(install_from)
 
-        filters = Filters(
+        scope = Scope(
             feature=tuple(feature_files),
             scenario=tuple(scenarios),
             release=tuple(releases),
             machine_type=tuple(machine_types),
         )
-        units = self._features.discover_units(repo_root, filters)
+        units = self._features.discover_units(repo_root, scope)
         if not units:
             raise CampaignError("no test units matched the requested filters")
         resolved_lanes = resolve_lanes(units, lanes or {})
         self._check_lane_ceiling(resolved_lanes)
 
         at = self._now()
-        header = CampaignHeader(
+        header = CampaignRecord(
             at=at,
             campaign_id=campaign_id,
             repo=self._repo_state(repo_root),
-            filters=filters,
+            scope=scope,
             install_from=install_from,
             lanes=resolved_lanes,
         )
@@ -183,7 +184,9 @@ class CampaignService:
         return ListCampaignsResponse(
             campaign_dir=str(self._store.root),
             campaigns=[
-                campaign_listing(campaign_id, self._store.replay(campaign_id))
+                campaign_listing(
+                    campaign_id, self._store.read_records(campaign_id)
+                )
                 for campaign_id in self._store.list_ids()
             ],
         )
@@ -210,7 +213,7 @@ class CampaignService:
                     group_by, ", ".join(GROUPINGS)
                 )
             )
-        records = self._store.replay(campaign_id)
+        records = self._store.read_records(campaign_id)
         statuses = [
             status
             for status in reduce_units(records)
@@ -223,7 +226,7 @@ class CampaignService:
         return CampaignStatusResponse(
             campaign=campaign_header(campaign_id, records),
             summary=campaign_summary(campaign_id, records, statuses),
-            lanes_busy_by_pool=lanes_busy_by_pool(records),
+            in_flight_by_pool=in_flight_view(records),
             in_flight=[unit_view(status) for status in in_flight(statuses)],
             problems=(
                 [unit_view(status) for status in problem_units[:problems_cap]]
@@ -299,7 +302,7 @@ class CampaignService:
 
         deadline = self._monotonic() + timeout
         while True:
-            records = self._store.replay(campaign_id)
+            records = self._store.read_records(campaign_id)
             feed = derive_feed(campaign_id, records)
             events = [
                 event
@@ -359,7 +362,7 @@ class CampaignService:
         campaign record and event log under ``audit/``. Only a complete
         campaign exports: evidence is a finished record, never a snapshot.
         """
-        records = self._store.replay(campaign_id)
+        records = self._store.read_records(campaign_id)
         current = state_of(records)
         statuses = reduce_units(records)
         if current != CampaignState.COMPLETE:
@@ -380,7 +383,7 @@ class CampaignService:
                     sum(1 for status in statuses if status.queueable),
                 )
             )
-        header = header_of(records) or CampaignHeader()
+        header = header_of(records) or CampaignRecord()
 
         entries: list[BundleEntry] = []
         missing: list[str] = []
@@ -416,7 +419,7 @@ class CampaignService:
                 ).encode(),
             ),
             BundleEntry(
-                name=CAMPAIGN_JSON_NAME,
+                name=EXPORT_JSON_NAME,
                 data=render_campaign_json(
                     campaign_id, header, current, statuses
                 ).encode(),
@@ -450,10 +453,10 @@ class CampaignService:
 
     def _selected(
         self, campaign_id: str, filters: Filters
-    ) -> list[UnitStatus]:
+    ) -> list[UnitHistory]:
         return [
             status
-            for status in reduce_units(self._store.replay(campaign_id))
+            for status in reduce_units(self._store.read_records(campaign_id))
             if filters.matches(status)
         ]
 

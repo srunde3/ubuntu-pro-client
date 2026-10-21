@@ -8,23 +8,23 @@ from typing import Any, Mapping, Sequence
 from behave_campaign.domain.classify import classify_result
 from behave_campaign.domain.records import (
     DEFAULT_INSTALL_FROM,
-    AttemptFinished,
-    AttemptInterrupted,
     CampaignState,
+    FinishedRecord,
     Intent,
+    InterruptedRecord,
     Record,
     StringEnum,
     Unit,
+    UnitHistory,
     UnitState,
-    UnitStatus,
 )
 from behave_campaign.domain.state import replay
 from behave_mcp.domain.pools import Pool
 
 
 def select_schedulable(
-    statuses: Sequence[UnitStatus], free: Mapping[Pool, int]
-) -> list[UnitStatus]:
+    statuses: Sequence[UnitHistory], free: Mapping[Pool, int]
+) -> list[UnitHistory]:
     """The units a scheduler may open lanes for, untouched ones first.
 
     Each pool fills only its own free lanes, so a full pool never holds
@@ -75,13 +75,13 @@ class TickPlan:
     """What one scheduler tick decided to do.
 
     ``record`` holds the finished lanes as finished attempts; one whose
-    result could not be classified carries its ``problem``. ``start`` holds the
+    result could not be classified carries its ``reason``. ``start`` holds the
     units to open new lanes for. Both are empty when there is nothing to do,
     which is the common case. ``state`` is the campaign's named state once
     the finished lanes are recorded.
     """
 
-    record: tuple[AttemptFinished | AttemptInterrupted, ...] = ()
+    record: tuple[FinishedRecord | InterruptedRecord, ...] = ()
     start: tuple[Unit, ...] = ()
     state: CampaignState = CampaignState.CREATED
 

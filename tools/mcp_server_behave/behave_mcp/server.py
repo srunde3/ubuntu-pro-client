@@ -845,8 +845,10 @@ def unit_history(
         "in flight finish and are recorded (pausing), then the campaign is "
         "paused, or complete if nothing is left. With kill=true the jobs "
         "in flight are killed instead: their units are recorded as "
-        "interrupted and run again on the next run.\n"
-        "Returns state, intent, progress, lanes_busy and counts. Follow "
+        "interrupted and run again on the next run; killed lists them, "
+        "and not_killed names any job whose process could not be "
+        "reached.\n"
+        "Returns state, intent, progress, in_flight and counts. Follow "
         "progress with await_campaign_events or campaign_status."
     )
 )
@@ -881,7 +883,7 @@ def control_campaign(
         "next_seq from the previous response as the next since_seq to read "
         "the stream without gaps or repeats. kinds defaults to the "
         "actionable preset; pass ['*'] for everything, or exact kinds and "
-        "families (campaign.*, lane.*, unit.*, anomaly.*). A unit.failed "
+        "families (campaign.*, job.*, unit.*, anomaly.*). A unit.failed "
         "event carries the failing steps, so a failure can be judged "
         "without fetching the job's report."
     )
@@ -904,7 +906,7 @@ def await_campaign_events(
             description=(
                 "Event kinds (unit.failed), families (unit.*), or the "
                 "presets 'actionable' (every non-passing outcome, anomaly.*, "
-                "lane.overdue, campaign.*) and '*' (everything). Defaults to "
+                "job.overdue, campaign.*) and '*' (everything). Defaults to "
                 "actionable; progress is in counts on every response."
             ),
         ),

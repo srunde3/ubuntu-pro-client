@@ -25,7 +25,7 @@ Use the `behave` MCP tools; each tool's description says how to call it.
        expected-vs-got diff
    - `unit.skipped`: note the missing config names; `find_scenarios` with
      the scenario name returns its `requires_config`.
-   - `anomaly.*`, `lane.overdue`, `unit.unclassifiable`: note as findings.
+   - `anomaly.*`, `job.overdue`, `unit.unclassifiable`: note as findings.
 3. Stop and report when any of these holds:
    - `state` is `complete` or `paused`.
    - One cause is hitting every lane.
@@ -37,7 +37,7 @@ Use the `behave` MCP tools; each tool's description says how to call it.
 Return exactly this, and nothing else:
 
 ```markdown
-Campaign <CAMPAIGN_ID>: state <state>, lanes_busy <n>, next_seq <n>
+Campaign <CAMPAIGN_ID>: state <state>, in_flight <n>, next_seq <n>
 Counts: <passed> passed, <failed> failed, <skipped> skipped, <error> error, <in_flight> in flight, <unattempted> unattempted
 
 Failures by class:

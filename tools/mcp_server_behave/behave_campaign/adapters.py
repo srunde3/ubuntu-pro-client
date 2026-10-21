@@ -26,10 +26,10 @@ from behave_campaign.domain.bundle import JOB_FILES, BundleEntry
 from behave_campaign.domain.classify import MCP_ENDED
 from behave_campaign.domain.records import (
     CampaignError,
-    CampaignHeader,
-    Filters,
+    CampaignRecord,
     PlanRecord,
     Record,
+    Scope,
     Unit,
     encode_record,
     parse_record,
@@ -82,7 +82,7 @@ def _write_atomic(path: Path, text: str) -> None:
 
 def _create_campaign(
     paths: layout.CampaignPaths,
-    header: CampaignHeader,
+    header: CampaignRecord,
     plans: Sequence[PlanRecord],
     label: str,
 ) -> None:
@@ -102,7 +102,7 @@ def _create_campaign(
         "units": [plan.unit.as_dict() for plan in plans],
     }
     _write_atomic(
-        paths.record, json.dumps(document, sort_keys=True, indent=2) + "\n"
+        paths.campaign, json.dumps(document, sort_keys=True, indent=2) + "\n"
     )
 
 
@@ -116,7 +116,7 @@ def _append_log(
     """
     if not records:
         return
-    with paths.log.open("a+b") as stream:
+    with paths.records.open("a+b") as stream:
         fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
         try:
             size = stream.seek(0, os.SEEK_END)
@@ -134,24 +134,24 @@ def _append_log(
 
 def _replay_campaign(paths: layout.CampaignPaths) -> list[Record]:
     try:
-        document = json.loads(paths.record.read_text())
+        document = json.loads(paths.campaign.read_text())
         header = parse_record(document["campaign"])
         units = [parse_unit(raw) for raw in document["units"]]
     except (ValueError, KeyError, TypeError) as error:
         raise CampaignError(
-            "invalid campaign record in {}: {}".format(paths.record, error)
+            "invalid campaign record in {}: {}".format(paths.campaign, error)
         ) from error
-    if not isinstance(header, CampaignHeader):
+    if not isinstance(header, CampaignRecord):
         raise CampaignError(
-            "{} does not start with a campaign header".format(paths.record)
+            "{} does not start with a campaign header".format(paths.campaign)
         )
     records: list[Record] = [
         header,
         *(PlanRecord(unit=unit, at=header.at) for unit in units),
     ]
-    if not paths.log.is_file():
+    if not paths.records.is_file():
         return records
-    text = paths.log.read_text()
+    text = paths.records.read_text()
     lines = text.split("\n")
     # Whatever follows the last newline is a torn append, never a record.
     for number, line in enumerate(lines[:-1], 1):
@@ -162,7 +162,7 @@ def _replay_campaign(paths: layout.CampaignPaths) -> list[Record]:
         except ValueError as error:
             raise CampaignError(
                 "invalid campaign record in {} on line {}: {}".format(
-                    paths.log, number, error
+                    paths.records, number, error
                 )
             ) from error
     return records
@@ -214,7 +214,7 @@ class JsonlCampaignStore:
     def create(
         self,
         campaign_id: str,
-        header: CampaignHeader,
+        header: CampaignRecord,
         plans: Sequence[PlanRecord],
     ) -> None:
         _create_campaign(
@@ -229,16 +229,16 @@ class JsonlCampaignStore:
         if records:
             self._changes.appended()
 
-    def replay(self, campaign_id: str) -> list[Record]:
+    def read_records(self, campaign_id: str) -> list[Record]:
         return _replay_campaign(self._existing(campaign_id))
 
     def wait(self, campaign_id: str, seen: int, timeout: float) -> None:
         self._changes.wait(
-            lambda: len(self.replay(campaign_id)), seen, timeout
+            lambda: len(self.read_records(campaign_id)), seen, timeout
         )
 
     def exists(self, campaign_id: str) -> bool:
-        return self._paths(campaign_id).record.is_file()
+        return self._paths(campaign_id).campaign.is_file()
 
     def list_ids(self) -> list[str]:
         if not self._root.is_dir():
@@ -246,7 +246,7 @@ class JsonlCampaignStore:
         return sorted(
             path.parent.name
             for path in self._root.glob(
-                "*/{}".format(layout.CAMPAIGN_RECORD_NAME)
+                "*/{}".format(layout.CAMPAIGN_FILE_NAME)
             )
         )
 
@@ -255,7 +255,7 @@ class JsonlCampaignStore:
 
     def _existing(self, campaign_id: str) -> layout.CampaignPaths:
         paths = self._paths(campaign_id)
-        if not paths.record.is_file():
+        if not paths.campaign.is_file():
             raise CampaignNotFoundError(
                 "no campaign {!r} under {}".format(campaign_id, self._root)
             )
@@ -289,7 +289,7 @@ class CampaignDirStore:
     def create(
         self,
         campaign_id: str,
-        header: CampaignHeader,
+        header: CampaignRecord,
         plans: Sequence[PlanRecord],
     ) -> None:
         _create_campaign(self._paths, header, plans, "this directory")
@@ -299,22 +299,22 @@ class CampaignDirStore:
         if records:
             self._changes.appended()
 
-    def replay(self, campaign_id: str) -> list[Record]:
+    def read_records(self, campaign_id: str) -> list[Record]:
         return _replay_campaign(self._existing())
 
     def wait(self, campaign_id: str, seen: int, timeout: float) -> None:
         self._changes.wait(
-            lambda: len(self.replay(campaign_id)), seen, timeout
+            lambda: len(self.read_records(campaign_id)), seen, timeout
         )
 
     def exists(self, campaign_id: str) -> bool:
-        return self._paths.record.is_file()
+        return self._paths.campaign.is_file()
 
     def list_ids(self) -> list[str]:
-        return [self.campaign_id] if self._paths.record.is_file() else []
+        return [self.campaign_id] if self._paths.campaign.is_file() else []
 
     def _existing(self) -> layout.CampaignPaths:
-        if not self._paths.record.is_file():
+        if not self._paths.campaign.is_file():
             raise CampaignNotFoundError(
                 "no campaign in {}".format(self._paths.campaign_dir)
             )
@@ -324,8 +324,8 @@ class CampaignDirStore:
 class ParserFeatureReader:
     """Reads feature files through ``behave_mcp.parser``."""
 
-    def discover_units(self, repo_root: Path, filters: Filters) -> list[Unit]:
-        return discovery.discover_units(repo_root, filters)
+    def discover_units(self, repo_root: Path, scope: Scope) -> list[Unit]:
+        return discovery.discover_units(repo_root, scope)
 
     def available_dimensions(self, repo_root: Path) -> dict[str, Any]:
         return discovery.available_dimensions(repo_root)

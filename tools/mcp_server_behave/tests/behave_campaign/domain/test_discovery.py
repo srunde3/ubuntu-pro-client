@@ -4,7 +4,7 @@ from behave_campaign.domain.discovery import (
     available_dimensions,
     discover_units,
 )
-from behave_campaign.domain.records import CampaignError, Filters, Unit
+from behave_campaign.domain.records import CampaignError, Scope, Unit
 
 FEATURE = """@uses.config.contract_token
 Feature: Example feature
@@ -63,7 +63,7 @@ def repo(tmp_path):
 
 class TestDiscoverUnits:
     def test_every_combo_becomes_a_unit(self, repo):
-        units = discover_units(repo, Filters())
+        units = discover_units(repo, Scope())
 
         assert units == [
             Unit(
@@ -87,13 +87,13 @@ class TestDiscoverUnits:
         ]
 
     def test_release_filter_selects_a_campaign_slice(self, repo):
-        units = discover_units(repo, Filters(release=("noble",)))
+        units = discover_units(repo, Scope(release=("noble",)))
 
         assert [unit.scenario for unit in units] == ["Runs everywhere"]
         assert units[0].machine_type == "lxd-vm"
 
     def test_machine_type_filter_selects_a_campaign_slice(self, repo):
-        units = discover_units(repo, Filters(machine_type=("lxd-container",)))
+        units = discover_units(repo, Scope(machine_type=("lxd-container",)))
 
         assert {unit.release for unit in units} == {"jammy"}
         assert len(units) == 2
@@ -101,7 +101,7 @@ class TestDiscoverUnits:
     def test_filters_combine(self, repo):
         units = discover_units(
             repo,
-            Filters(
+            Scope(
                 release=("jammy",),
                 scenario=("Runs on containers only",),
             ),
@@ -112,15 +112,15 @@ class TestDiscoverUnits:
 
     def test_unknown_release_is_rejected(self, repo):
         with pytest.raises(CampaignError, match="unknown release: bogus"):
-            discover_units(repo, Filters(release=("bogus",)))
+            discover_units(repo, Scope(release=("bogus",)))
 
     def test_unknown_machine_type_is_rejected(self, repo):
         with pytest.raises(CampaignError, match="unknown machine_type"):
-            discover_units(repo, Filters(machine_type=("lxd-toaster",)))
+            discover_units(repo, Scope(machine_type=("lxd-toaster",)))
 
     def test_unknown_feature_is_rejected(self, repo):
         with pytest.raises(CampaignError, match="unknown feature"):
-            discover_units(repo, Filters(feature=("features/nope.feature",)))
+            discover_units(repo, Scope(feature=("features/nope.feature",)))
 
     def test_mistyped_feature_suggests_close_matches(self, tmp_path):
         features = tmp_path / "features"
@@ -132,7 +132,7 @@ class TestDiscoverUnits:
 
         with pytest.raises(CampaignError) as error:
             discover_units(
-                tmp_path, Filters(feature=("features/example7.featur",))
+                tmp_path, Scope(feature=("features/example7.featur",))
             )
 
         message = str(error.value)
@@ -148,7 +148,7 @@ class TestDiscoverUnits:
         )
 
         with pytest.raises(CampaignError) as error:
-            discover_units(tmp_path, Filters())
+            discover_units(tmp_path, Scope())
 
         assert "1 unit(s) in scope are run by more than one scenario" in str(
             error.value
@@ -161,7 +161,7 @@ class TestDiscoverUnits:
             SHARED_NAME_FEATURE.format(second_row="noble   | lxd-vm       "),
         )
 
-        units = discover_units(tmp_path, Filters())
+        units = discover_units(tmp_path, Scope())
 
         assert [(u.release, u.machine_type) for u in units] == [
             ("jammy", "lxd-container"),
@@ -176,14 +176,14 @@ class TestDiscoverUnits:
         (tmp_path / "features" / "example.feature").write_text(FEATURE)
 
         units = discover_units(
-            tmp_path, Filters(feature=("features/example.feature",))
+            tmp_path, Scope(feature=("features/example.feature",))
         )
 
         assert {u.feature for u in units} == {"features/example.feature"}
 
     def test_repo_without_features_is_rejected(self, tmp_path):
         with pytest.raises(CampaignError, match="no feature files found"):
-            discover_units(tmp_path, Filters())
+            discover_units(tmp_path, Scope())
 
 
 class TestAvailableDimensions:

@@ -14,10 +14,10 @@ from typing import Any, Callable, Mapping, Protocol, Sequence
 from behave_campaign.domain.bundle import BundleEntry
 from behave_campaign.domain.records import (
     CampaignError,
-    CampaignHeader,
-    Filters,
+    CampaignRecord,
     PlanRecord,
     Record,
+    Scope,
     Unit,
 )
 from behave_mcp.domain.pools import Pool
@@ -50,7 +50,7 @@ class CampaignStore(Protocol):
     def create(
         self,
         campaign_id: str,
-        header: CampaignHeader,
+        header: CampaignRecord,
         plans: Sequence[PlanRecord],
     ) -> None:
         """Write the header and every plan record for a new campaign.
@@ -66,7 +66,7 @@ class CampaignStore(Protocol):
         """
         ...
 
-    def replay(self, campaign_id: str) -> list[Record]:
+    def read_records(self, campaign_id: str) -> list[Record]:
         """Return every record for a campaign, in the order written.
 
         Raises CampaignNotFoundError if the campaign does not exist.
@@ -82,7 +82,7 @@ class CampaignStore(Protocol):
         ...
 
     def path_for(self, campaign_id: str) -> Path:
-        """Return the file holding the campaign's records."""
+        """Return the directory holding the campaign's files."""
         ...
 
     def wait(self, campaign_id: str, seen: int, timeout: float) -> None:
@@ -94,8 +94,8 @@ class CampaignStore(Protocol):
 class FeatureReader(Protocol):
     """Reads the behave feature files a campaign draws its units from."""
 
-    def discover_units(self, repo_root: Path, filters: Filters) -> list[Unit]:
-        """Return every unit in the feature files matching ``filters``.
+    def discover_units(self, repo_root: Path, scope: Scope) -> list[Unit]:
+        """Return every unit in the feature files in ``scope``.
 
         Raises CampaignError for an unknown release, machine type, or
         feature rather than silently matching nothing.
@@ -139,10 +139,10 @@ class LaneRunner(Protocol):
         ...
 
     def kill(self, job_id: str) -> bool:
-        """Ask the job to stop, and return whether a signal was sent.
+        """Kill the job, and return whether the kill was sent.
 
-        False means there was nothing to signal: the job had finished, or
-        this process holds no handle on it.
+        False means there was nothing to kill: the job had already ended,
+        or its process could not be reached.
         """
         ...
 
@@ -201,7 +201,7 @@ class JobFiles(Protocol):
     def files(self, job_id: str) -> Mapping[str, Path]:
         """Return the job's files that exist, keyed by their bundle name.
 
-        The names are those in ``export.JOB_FILES``. A file the job never
+        The names are those in ``bundle.JOB_FILES``. A file the job never
         wrote is absent from the mapping rather than an error.
         """
         ...

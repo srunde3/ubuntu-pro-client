@@ -313,7 +313,7 @@ async def test_pause_with_kill_interrupts_the_jobs_in_flight(repo, runner):
     payload = result_json(result)
 
     assert payload["state"] == "paused"
-    assert [u["job_id"] for u in payload["interrupted"]] == ["job1"]
+    assert [u["job_id"] for u in payload["killed"]] == ["job1"]
     assert runner.lanes.killed == ["job1"]
 
 
@@ -558,7 +558,7 @@ async def test_retry_units_requeues_a_failure(repo, runner):
             )
         )
 
-    assert retried["requeued"] == 2
+    assert retried["retried"] == 2
     assert retried["state"] == "running"
     assert retried["intent"] == "run"
 

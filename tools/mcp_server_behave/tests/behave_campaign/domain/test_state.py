@@ -5,19 +5,19 @@ import itertools
 import pytest
 
 from behave_campaign.domain.records import (
-    AttemptFinished,
-    AttemptInterrupted,
-    AttemptStarted,
     CampaignError,
-    CampaignHeader,
+    CampaignRecord,
     CampaignState,
     Cause,
     Filters,
+    FinishedRecord,
     Intent,
     IntentRecord,
+    InterruptedRecord,
     PlanRecord,
     Progress,
     RetryRecord,
+    StartedRecord,
     Unit,
     UnitState,
 )
@@ -51,17 +51,17 @@ THIRD_JOB = "job-3"
 
 
 def plan(*units):
-    return [CampaignHeader(at=AT), *(PlanRecord(unit=u, at=AT) for u in units)]
+    return [CampaignRecord(at=AT), *(PlanRecord(unit=u, at=AT) for u in units)]
 
 
 def start(unit, job_id):
-    return AttemptStarted(
+    return StartedRecord(
         unit=unit, job_id=job_id, install_from="proposed", at=AT
     )
 
 
 def finish(unit, job_id, outcome):
-    return AttemptFinished(unit=unit, job_id=job_id, outcome=outcome, at=AT)
+    return FinishedRecord(unit=unit, job_id=job_id, outcome=outcome, at=AT)
 
 
 def tried(unit, job_id, outcome):
@@ -70,7 +70,7 @@ def tried(unit, job_id, outcome):
 
 
 def interrupt(unit, job_id):
-    return AttemptInterrupted(unit=unit, job_id=job_id, at=AT, reason="kill")
+    return InterruptedRecord(unit=unit, job_id=job_id, at=AT, reason="kill")
 
 
 def retry(unit):

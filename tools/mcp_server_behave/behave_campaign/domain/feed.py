@@ -17,20 +17,20 @@ from behave_campaign.domain.events import (
     unit_event_kind,
 )
 from behave_campaign.domain.records import (
-    AttemptFinished,
-    AttemptInterrupted,
-    AttemptStarted,
-    CampaignHeader,
+    CampaignRecord,
     Cause,
+    FinishedRecord,
     IntentRecord,
+    InterruptedRecord,
     Outcome,
-    Overdue,
+    OverdueRecord,
     PlanRecord,
     Record,
     RetryRecord,
-    Starved,
+    StartedRecord,
+    StarvedRecord,
+    UnitHistory,
     UnitState,
-    UnitStatus,
     lanes_as_dict,
 )
 from behave_campaign.domain.signals import (
@@ -60,7 +60,7 @@ class _Feed:
         # the campaign has a state only once every unit is planned.
         head = 0
         while head < len(records) and isinstance(
-            records[head], (CampaignHeader, PlanRecord)
+            records[head], (CampaignRecord, PlanRecord)
         ):
             self._replay.apply(records[head])
             head += 1
@@ -71,7 +71,7 @@ class _Feed:
             self._apply(record)
         return self._events
 
-    def _created(self, header: CampaignHeader) -> None:
+    def _created(self, header: CampaignRecord) -> None:
         self._emit(
             EventKind.CAMPAIGN_CREATED,
             header.at,
@@ -79,7 +79,7 @@ class _Feed:
                 "total_units": len(self._replay.statuses()),
                 "install_from": header.install_from,
                 "lanes": lanes_as_dict(header.lanes),
-                "scope": header.filters.scope_as_dict(),
+                "scope": header.scope.as_dict(),
             },
         )
 
@@ -113,11 +113,11 @@ class _Feed:
                 },
             )
 
-    def _announce(self, record: Record, previous: UnitStatus | None) -> None:
+    def _announce(self, record: Record, previous: UnitHistory | None) -> None:
         """The event a record stands for, if it stands for one."""
-        if isinstance(record, AttemptStarted):
+        if isinstance(record, StartedRecord):
             self._emit(
-                EventKind.LANE_STARTED,
+                EventKind.JOB_STARTED,
                 record.at,
                 {
                     **record.unit.as_dict(),
@@ -125,21 +125,21 @@ class _Feed:
                     "install_from": record.install_from,
                 },
             )
-        elif isinstance(record, AttemptFinished):
+        elif isinstance(record, FinishedRecord):
             data: dict[str, Any] = {
                 **record.unit.as_dict(),
                 "job_id": record.job_id,
             }
-            if record.problem:
-                data["problem"] = record.problem
+            if record.reason:
+                data["reason"] = record.reason
             if record.outcome == Outcome.FAILED:
                 data["failures"] = [f.as_dict() for f in record.failures]
             self._emit(
-                unit_event_kind(record.outcome, bool(record.problem)),
+                unit_event_kind(record.outcome, bool(record.reason)),
                 record.at,
                 data,
             )
-        elif isinstance(record, AttemptInterrupted):
+        elif isinstance(record, InterruptedRecord):
             self._emit(
                 EventKind.UNIT_INTERRUPTED,
                 record.at,
@@ -161,9 +161,9 @@ class _Feed:
                     "reason": record.reason,
                 },
             )
-        elif isinstance(record, Starved):
+        elif isinstance(record, StarvedRecord):
             self._emit(
-                EventKind.ANOMALY_CAPACITY_STARVED,
+                EventKind.ANOMALY_STARVED,
                 record.at,
                 {
                     **record.unit.as_dict(),
@@ -171,9 +171,9 @@ class _Feed:
                     "reason": record.reason,
                 },
             )
-        elif isinstance(record, Overdue):
+        elif isinstance(record, OverdueRecord):
             self._emit(
-                EventKind.LANE_OVERDUE,
+                EventKind.JOB_OVERDUE,
                 record.at,
                 {
                     **record.unit.as_dict(),
@@ -182,7 +182,7 @@ class _Feed:
                 },
             )
 
-    def _signals(self, previous: UnitStatus | None, now: UnitStatus) -> None:
+    def _signals(self, previous: UnitHistory | None, now: UnitHistory) -> None:
         """Announce a derived signal the first time its condition holds."""
         scenario = (now.unit.feature, now.unit.scenario)
         releases = self._failing.setdefault(scenario, set())

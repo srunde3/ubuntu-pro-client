@@ -33,8 +33,8 @@ JOB_FILE_NAMES = (
 )
 EXPORTS_SUBDIR = "exports"
 # The files in one campaign's directory, ``campaigns/<campaign_id>/``.
-CAMPAIGN_RECORD_NAME = "campaign.json"
-CAMPAIGN_LOG_NAME = "events.jsonl"
+CAMPAIGN_FILE_NAME = "campaign.json"
+CAMPAIGN_RECORDS_NAME = "records.jsonl"
 CAMPAIGN_LOCK_NAME = "campaign.lock"
 
 
@@ -53,13 +53,14 @@ def campaigns_dir(state: Path) -> Path:
 class CampaignPaths(NamedTuple):
     """The directory one campaign owns, and the files in it.
 
-    ``record`` holds the header and plan, written once at creation;
-    ``log`` is every later record, appended; ``lock`` is the run lock.
+    ``campaign`` holds the campaign record and plan, written once at
+    creation; ``records`` is every later record, appended; ``lock`` is the
+    run lock.
     """
 
     campaign_dir: Path
-    record: Path
-    log: Path
+    campaign: Path
+    records: Path
     lock: Path
 
 
@@ -67,8 +68,8 @@ def campaign_paths(campaigns: Path, campaign_id: str) -> CampaignPaths:
     campaign_dir = campaigns / campaign_id
     return CampaignPaths(
         campaign_dir=campaign_dir,
-        record=campaign_dir / CAMPAIGN_RECORD_NAME,
-        log=campaign_dir / CAMPAIGN_LOG_NAME,
+        campaign=campaign_dir / CAMPAIGN_FILE_NAME,
+        records=campaign_dir / CAMPAIGN_RECORDS_NAME,
         lock=campaign_dir / CAMPAIGN_LOCK_NAME,
     )
 

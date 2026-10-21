@@ -399,11 +399,11 @@ class FakeFeatureReader:
 
     def __init__(self, units):
         self.units = list(units)
-        self.seen_filters = None
+        self.seen_scope = None
 
-    def discover_units(self, repo_root, filters):
-        self.seen_filters = filters
-        return [unit for unit in self.units if filters.matches_unit(unit)]
+    def discover_units(self, repo_root, scope):
+        self.seen_scope = scope
+        return [unit for unit in self.units if scope.matches_unit(unit)]
 
     def available_dimensions(self, repo_root):
         def counted(field):

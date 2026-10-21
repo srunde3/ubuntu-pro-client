@@ -9,8 +9,8 @@ from behave_campaign.domain.classify import (
     finished_from_mcp,
 )
 from behave_campaign.domain.records import (
-    AttemptInterrupted,
     CampaignError,
+    InterruptedRecord,
     Outcome,
     Unit,
 )
@@ -83,7 +83,7 @@ def test_classify_result(result, outcome, flagged):
     classified = classify_result(UNIT_A, result, AT)
 
     assert classified.outcome == outcome
-    assert bool(classified.problem) is flagged
+    assert bool(classified.reason) is flagged
 
 
 @pytest.mark.parametrize("reason", INTERRUPTIONS)
@@ -97,7 +97,7 @@ def test_an_interrupted_job_is_an_interrupted_attempt(reason):
 
     closed = classify_result(UNIT_A, result, AT)
 
-    assert closed == AttemptInterrupted(
+    assert closed == InterruptedRecord(
         unit=UNIT_A, job_id="job1", at=AT, reason=reason
     )
 
@@ -123,7 +123,7 @@ def test_an_unclassifiable_result_keeps_the_job_id_and_says_why():
     )
 
     assert classified.job_id == "job-xyz"
-    assert "classify" in classified.problem
+    assert "classify" in classified.reason
 
 
 class TestMcpResultAdapter:

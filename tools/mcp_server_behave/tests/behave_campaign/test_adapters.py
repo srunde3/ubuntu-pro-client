@@ -17,13 +17,13 @@ from behave_campaign.adapters import (
 )
 from behave_campaign.domain.bundle import BundleEntry
 from behave_campaign.domain.records import (
-    AttemptFinished,
-    AttemptStarted,
     CampaignError,
-    CampaignHeader,
-    Filters,
+    CampaignRecord,
+    FinishedRecord,
     PlanRecord,
     RepoState,
+    Scope,
+    StartedRecord,
     Unit,
 )
 from behave_campaign.ports import (
@@ -55,11 +55,11 @@ def header(**overrides):
         "at": AT,
         "campaign_id": "1234567",
         "repo": RepoState(root="/repo", commit="abc", branch="main"),
-        "filters": Filters(release=("jammy",)),
+        "scope": Scope(release=("jammy",)),
         "lanes": {Pool.LXD: 1},
     }
     fields.update(overrides)
-    return CampaignHeader(**fields)
+    return CampaignRecord(**fields)
 
 
 def _stored_header(drop=None, **overrides):
@@ -74,7 +74,7 @@ def _stored_header(drop=None, **overrides):
             "branch": None,
             "dirty": None,
         },
-        "filters": {
+        "scope": {
             "feature": [],
             "scenario": [],
             "release": [],
@@ -90,9 +90,7 @@ def _stored_header(drop=None, **overrides):
 
 
 def started(unit, job_id):
-    return AttemptStarted(
-        unit=unit, job_id=job_id, install_from="local", at=AT
-    )
+    return StartedRecord(unit=unit, job_id=job_id, install_from="local", at=AT)
 
 
 def plans(*units):
@@ -107,7 +105,7 @@ def stored(tmp_path, campaign_id=CAMPAIGN):
     campaign_dir = tmp_path / campaign_id
     return (
         campaign_dir / "campaign.json",
-        campaign_dir / "events.jsonl",
+        campaign_dir / "records.jsonl",
     )
 
 
@@ -125,7 +123,7 @@ class TestJsonlCampaignStore:
         store = JsonlCampaignStore(tmp_path)
         store.create(CAMPAIGN, header(), plans(UNIT_A, UNIT_B))
 
-        records = store.replay(CAMPAIGN)
+        records = store.read_records(CAMPAIGN)
 
         assert records[0] == header()
         assert records[1:] == plans(UNIT_A, UNIT_B)
@@ -162,7 +160,7 @@ class TestJsonlCampaignStore:
     def test_append_adds_records_to_the_log(self, tmp_path):
         store = JsonlCampaignStore(tmp_path)
         store.create(CAMPAIGN, header(), plans(UNIT_A))
-        finished = AttemptFinished(
+        finished = FinishedRecord(
             unit=UNIT_A, job_id="job1", outcome="passed", at=AT
         )
 
@@ -170,7 +168,7 @@ class TestJsonlCampaignStore:
 
         _, log = stored(tmp_path)
         assert len(log.read_text().splitlines()) == 2
-        assert store.replay(CAMPAIGN)[-2:] == [
+        assert store.read_records(CAMPAIGN)[-2:] == [
             started(UNIT_A, "job1"),
             finished,
         ]
@@ -193,7 +191,7 @@ class TestJsonlCampaignStore:
         with log.open("a") as stream:
             stream.write('{"type": "fini')
 
-        records = store.replay(CAMPAIGN)
+        records = store.read_records(CAMPAIGN)
 
         assert records[-1] == started(UNIT_A, "job1")
 
@@ -207,7 +205,7 @@ class TestJsonlCampaignStore:
 
         store.append(CAMPAIGN, [started(UNIT_A, "job2")])
 
-        assert store.replay(CAMPAIGN)[-2:] == [
+        assert store.read_records(CAMPAIGN)[-2:] == [
             started(UNIT_A, "job1"),
             started(UNIT_A, "job2"),
         ]
@@ -215,7 +213,7 @@ class TestJsonlCampaignStore:
 
     def test_replay_of_unknown_campaign_is_rejected(self, tmp_path):
         with pytest.raises(CampaignNotFoundError):
-            JsonlCampaignStore(tmp_path).replay("nope")
+            JsonlCampaignStore(tmp_path).read_records("nope")
 
     def test_append_to_unknown_campaign_is_rejected(self, tmp_path):
         with pytest.raises(CampaignNotFoundError):
@@ -230,9 +228,9 @@ class TestJsonlCampaignStore:
             stream.write('{"type": "plan"}\n')
 
         with pytest.raises(CampaignError) as error:
-            store.replay(CAMPAIGN)
+            store.read_records(CAMPAIGN)
 
-        assert "events.jsonl" in str(error.value)
+        assert "records.jsonl" in str(error.value)
         assert "line 2" in str(error.value)
 
     def test_list_ids_is_sorted_and_needs_a_record(self, tmp_path):
@@ -262,7 +260,7 @@ class TestJsonlCampaignStore:
         write_record(tmp_path, _stored_header(drop="install_from"))
 
         with pytest.raises(CampaignError) as error:
-            JsonlCampaignStore(tmp_path).replay(CAMPAIGN)
+            JsonlCampaignStore(tmp_path).read_records(CAMPAIGN)
 
         assert "install_from" in str(error.value)
 
@@ -270,7 +268,7 @@ class TestJsonlCampaignStore:
         write_record(tmp_path, _stored_header(drop="lanes"))
 
         with pytest.raises(CampaignError) as error:
-            JsonlCampaignStore(tmp_path).replay(CAMPAIGN)
+            JsonlCampaignStore(tmp_path).read_records(CAMPAIGN)
 
         assert "lanes" in str(error.value)
 
@@ -280,7 +278,7 @@ class TestJsonlCampaignStore:
         record.write_text("not json")
 
         with pytest.raises(CampaignError, match="campaign.json"):
-            JsonlCampaignStore(tmp_path).replay(CAMPAIGN)
+            JsonlCampaignStore(tmp_path).read_records(CAMPAIGN)
 
     def test_the_header_round_trips_both_fields(self, tmp_path):
         store = JsonlCampaignStore(tmp_path)
@@ -290,7 +288,7 @@ class TestJsonlCampaignStore:
             plans(UNIT_A),
         )
 
-        replayed = store.replay(CAMPAIGN)[0]
+        replayed = store.read_records(CAMPAIGN)[0]
 
         assert replayed.install_from == "proposed"
         assert replayed.lanes == {Pool.LXD: 8, Pool.WSL: 1}
@@ -319,7 +317,7 @@ class TestJsonlCampaignStore:
         write_record(tmp_path, _stored_header(lanes=lanes))
 
         with pytest.raises(CampaignError, match=message):
-            JsonlCampaignStore(tmp_path).replay(CAMPAIGN)
+            JsonlCampaignStore(tmp_path).read_records(CAMPAIGN)
 
 
 class TestCampaignDirStore:
@@ -336,7 +334,7 @@ class TestCampaignDirStore:
         store = CampaignDirStore(tmp_path / "absent")
 
         with pytest.raises(CampaignNotFoundError, match="absent"):
-            store.replay("")
+            store.read_records("")
         with pytest.raises(CampaignNotFoundError, match="absent"):
             store.append("", [])
 
@@ -506,7 +504,7 @@ class TestStoreWait:
         return store
 
     def test_it_returns_at_once_when_records_were_added(self, store):
-        seen = len(store.replay("c1"))
+        seen = len(store.read_records("c1"))
         store.append("c1", [started(UNIT_A, "job-1")])
 
         began = time.monotonic()
@@ -516,10 +514,10 @@ class TestStoreWait:
 
     def test_it_returns_on_timeout_rather_than_raising(self, store):
         # A quiet campaign is not an error.
-        store.wait("c1", len(store.replay("c1")), timeout=0.05)
+        store.wait("c1", len(store.read_records("c1")), timeout=0.05)
 
     def test_an_append_wakes_a_waiting_reader(self, store):
-        seen = len(store.replay("c1"))
+        seen = len(store.read_records("c1"))
         woke = threading.Event()
 
         def reader():
@@ -539,7 +537,7 @@ class TestStoreWait:
         # A second store object stands for another process: its append
         # cannot wake this one's readers, so they poll.
         monkeypatch.setattr(adapters_module._Changes, "POLL_SECONDS", 0.01)
-        seen = len(store.replay("c1"))
+        seen = len(store.read_records("c1"))
         JsonlCampaignStore(tmp_path).append("c1", [started(UNIT_A, "job-1")])
 
         began = time.monotonic()

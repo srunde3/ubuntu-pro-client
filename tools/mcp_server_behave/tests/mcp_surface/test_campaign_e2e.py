@@ -100,7 +100,7 @@ def test_a_campaign_runs_its_lanes_concurrently(monkeypatch, tmp_path):
         runner.run(CAMPAIGN_ID)
         deadline = time.monotonic() + CAMPAIGN_TIMEOUT_SECONDS
         while time.monotonic() < deadline:
-            statuses = reduce_units(store.replay(CAMPAIGN_ID))
+            statuses = reduce_units(store.read_records(CAMPAIGN_ID))
             peak_lanes = max(
                 peak_lanes,
                 sum(1 for s in statuses if s.state == UnitState.IN_FLIGHT),
@@ -111,7 +111,7 @@ def test_a_campaign_runs_its_lanes_concurrently(monkeypatch, tmp_path):
     finally:
         runner.shutdown()
 
-    records = store.replay(CAMPAIGN_ID)
+    records = store.read_records(CAMPAIGN_ID)
     statuses = reduce_units(records)
     states = {s.unit.release: s.state for s in statuses}
 
@@ -144,13 +144,13 @@ def test_a_campaign_runs_its_lanes_concurrently(monkeypatch, tmp_path):
             assert (job_dir / name).is_file(), job_dir / name
 
     # The stream a watching agent would have seen, from real jobs.
-    stream = derive_feed(CAMPAIGN_ID, store.replay(CAMPAIGN_ID))
+    stream = derive_feed(CAMPAIGN_ID, store.read_records(CAMPAIGN_ID))
     kinds = [event.kind for event in stream]
 
     assert kinds[0] == "campaign.created"
     assert "campaign.running" in kinds
     assert kinds[-1] == "campaign.complete"
-    assert kinds.count("lane.started") == len(RELEASES)
+    assert kinds.count("job.started") == len(RELEASES)
     assert sum(1 for kind in kinds if kind.startswith("unit.")) == len(
         RELEASES
     )
@@ -209,7 +209,7 @@ def test_pause_with_kill_stops_a_real_job_and_run_redoes_it(
     )
 
     def unit():
-        (status,) = reduce_units(store.replay(KILL_CAMPAIGN_ID))
+        (status,) = reduce_units(store.read_records(KILL_CAMPAIGN_ID))
         return status
 
     try:
@@ -224,7 +224,7 @@ def test_pause_with_kill_stops_a_real_job_and_run_redoes_it(
         paused = runner.pause(KILL_CAMPAIGN_ID, kill=True)
 
         assert paused.state == CampaignState.PAUSED
-        assert paused.unsignalled == []
+        assert paused.not_killed == []
         assert unit().attempts[-1].interrupted
         # The job's process group really went away.
         _wait_for(
@@ -243,7 +243,10 @@ def test_pause_with_kill_stops_a_real_job_and_run_redoes_it(
         runner.shutdown()
 
     final = unit()
-    assert state_of(store.replay(KILL_CAMPAIGN_ID)) == CampaignState.COMPLETE
+    assert (
+        state_of(store.read_records(KILL_CAMPAIGN_ID))
+        == CampaignState.COMPLETE
+    )
     assert [a.interrupted for a in final.attempts] == [True, False]
     assert final.attempts[0].job_id == killed_job
     assert final.state in TERMINAL_STATES
