@@ -9,6 +9,7 @@ from behave_campaign.domain.classify import classify_result
 from behave_campaign.domain.records import (
     DEFAULT_INSTALL_SOURCE,
     AttemptFinished,
+    AttemptInterrupted,
     CampaignState,
     Intent,
     Record,
@@ -80,7 +81,7 @@ class TickPlan:
     the finished lanes are recorded.
     """
 
-    record: tuple[AttemptFinished, ...] = ()
+    record: tuple[AttemptFinished | AttemptInterrupted, ...] = ()
     start: tuple[Unit, ...] = ()
     state: CampaignState = CampaignState.CREATED
 

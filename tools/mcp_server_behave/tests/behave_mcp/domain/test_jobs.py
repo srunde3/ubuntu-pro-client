@@ -1,22 +1,22 @@
 """Job rules: the behave command, exact names, job state, result filters."""
 
+import itertools
 import subprocess
 import sys
 
 import pytest
 
 from behave_mcp.domain.jobs import (
-    ClassifyReason,
     UnitMatch,
     build_command,
-    classify_job_state,
     exact_name_pattern,
     job_matches_result_filters,
+    job_state,
     match_unit,
     validate_machine_type,
 )
 from behave_mcp.domain.pools import Pool
-from behave_mcp.messages import JobRecord
+from behave_mcp.messages import JobRecord, RunStatus
 
 
 def test_build_command_escapes_scenario_name_for_behave_regex(tmp_path):
@@ -169,83 +169,32 @@ def test_exact_name_pattern_selects_one_scenario_and_its_rows(tmp_path):
     ]
 
 
-# Any pid: classify_job_state cares only whether one was recorded.
-RECORDED_PID = 4321
+# A job's state for every combination of "an exit is recorded" and "its
+# wrapper holds the job lock". The wrapper writes the exit before letting go
+# of the lock, so an exit decides even while the lock is still held.
+JOB_STATE = {
+    (True, True): RunStatus.COMPLETED,
+    (True, False): RunStatus.COMPLETED,
+    (False, True): RunStatus.RUNNING,
+    (False, False): RunStatus.INTERRUPTED,
+}
 
 
-def _signals(
-    *,
-    live=False,
-    returncode=None,
-    report=None,
-    pid=None,
-    alive=False,
-):
-    """``classify_job_state`` inputs; ``report`` is None, True or False."""
-    return dict(
-        has_live_handle=live,
-        returncode=returncode,
-        report_present=report is not None,
-        report_ok=report,
-        pid=pid,
-        pid_alive=alive,
-    )
+def test_every_combination_has_an_expected_state():
+    assert set(JOB_STATE) == set(itertools.product((True, False), repeat=2))
 
 
-JOB_STATE_CASES = [
-    pytest.param(
-        _signals(live=True, pid=RECORDED_PID, alive=True),
-        ("running", None, ClassifyReason.LIVE_HANDLE_RUNNING),
-        id="live-handle-running",
-    ),
-    pytest.param(
-        _signals(live=True, returncode=0, pid=RECORDED_PID),
-        ("completed", True, ClassifyReason.LIVE_HANDLE_EXITED),
-        id="live-handle-exited-ok",
-    ),
-    pytest.param(
-        _signals(live=True, returncode=1, pid=RECORDED_PID),
-        ("completed", False, ClassifyReason.LIVE_HANDLE_EXITED),
-        id="live-handle-exited-failed",
-    ),
-    pytest.param(
-        _signals(report=True, pid=RECORDED_PID),
-        ("completed", True, ClassifyReason.REPORT_PRESENT),
-        id="recovered-report-ok",
-    ),
-    pytest.param(
-        _signals(report=False, pid=RECORDED_PID, alive=True),
-        ("completed", False, ClassifyReason.REPORT_PRESENT),
-        id="recovered-report-failed",
-    ),
-    pytest.param(
-        _signals(pid=RECORDED_PID, alive=True),
-        ("running", None, ClassifyReason.PID_ALIVE_NO_REPORT),
-        id="recovered-pid-alive",
-    ),
-    pytest.param(
-        _signals(pid=RECORDED_PID),
-        ("unknown", False, ClassifyReason.PID_DEAD_NO_REPORT),
-        id="recovered-pid-dead",
-    ),
-    pytest.param(
-        _signals(),
-        ("unknown", False, ClassifyReason.PID_UNKNOWN_NO_REPORT),
-        id="recovered-pid-unknown",
-    ),
-]
+def test_every_state_is_reached():
+    assert set(JOB_STATE.values()) == set(RunStatus)
 
 
-def test_every_job_state_reason_is_reached_by_a_case():
-    reasons = {case.values[1][2] for case in JOB_STATE_CASES}
-    assert reasons == set(ClassifyReason)
-
-
-@pytest.mark.parametrize("signals, expected", JOB_STATE_CASES)
-def test_classify_job_state(signals, expected):
-    result = classify_job_state(**signals)
-
-    assert (result.status, result.ok, result.reason) == expected
+@pytest.mark.parametrize(
+    "exited, lock_held, expected",
+    [(e, h, want) for (e, h), want in JOB_STATE.items()],
+    ids=str,
+)
+def test_job_state(exited, lock_held, expected):
+    assert job_state(exited=exited, lock_held=lock_held) == expected
 
 
 def test_job_matches_result_filters_no_filters_matches_everything():

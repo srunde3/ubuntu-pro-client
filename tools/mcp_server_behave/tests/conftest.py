@@ -8,15 +8,8 @@ import pytest
 
 import behave_mcp.server as server_module
 from behave_campaign.ports import CampaignLockedError, LaneStartError
-from behave_mcp.messages import RepoState
-from behave_mcp.server import registry
-
-
-@pytest.fixture(autouse=True)
-def clear_jobs():
-    registry.clear()
-    yield
-    registry.clear()
+from behave_mcp.adapters import LocalJobResultStore
+from behave_mcp.messages import JobExit, RepoState
 
 
 @pytest.fixture(autouse=True)
@@ -76,56 +69,117 @@ def make_repo_with_feature(
     return repo_root
 
 
-class FakeProcessHandle:
-    """Fake process handle: doubles as a bare ``subprocess.Popen`` return
-    value (``PopenLauncher`` tests) and as a ``ProcessHandle`` port
-    implementation (``Job.process_handle`` in service/registry tests)."""
+class FakeLease:
+    """A lane taken from a ``FakeLanePool``.
 
-    def __init__(self, returncode=None, pid=4242):
-        self.returncode = returncode
-        self.pid = pid
+    The launcher closes its own hold once a job runs, but the lane stays
+    busy until the job ends, as it does when the wrapper holds the lock.
+    """
+
+    def __init__(self, pool, lanes):
+        self.pool = pool
         self.closed = False
-        self.terminated = False
-
-    def poll(self):
-        return self.returncode
+        self._lanes = lanes
+        self._released = False
 
     def close(self):
         self.closed = True
 
-    def terminate(self):
-        self.terminated = True
+    def release(self):
+        if not self._released:
+            self._released = True
+            self._lanes.held[self.pool] -= 1
 
 
-class FakeLauncher:
-    """A ``ProcessLauncher``-shaped test double usable across test files."""
+class FakeLanePool:
+    """A ``LanePool`` counting held lanes per pool."""
+
+    def __init__(self):
+        self.held = {}
+
+    def take(self, pool, limit):
+        if self.held.get(pool, 0) >= limit:
+            return None
+        self.held[pool] = self.held.get(pool, 0) + 1
+        return FakeLease(pool, self)
+
+    def busy(self, pool, limit):
+        return min(self.held.get(pool, 0), limit)
+
+
+class FakeJobLauncher:
+    """A ``JobLauncher`` whose jobs run until the test ends them.
+
+    ``finish`` writes the exit the way the wrapper does; ``crash`` ends a
+    job without one, as a wrapper killed outright would. With
+    ``finish_on_launch`` (``finish`` keywords), each job ends at once.
+    """
 
     def __init__(
         self,
-        handle: FakeProcessHandle | None = None,
-        error: Exception | None = None,
-        alive_pids: set[int] | None = None,
-    ) -> None:
-        self.calls: list[dict] = []
-        self._handle = handle if handle is not None else FakeProcessHandle()
+        jobs_dir=None,
+        *,
+        error=None,
+        unsignallable=(),
+        finish_on_launch=None,
+    ):
+        self.jobs_dir = jobs_dir
+        self.calls = []
+        self.running = set()
+        self.signalled = []
+        self._leases = {}
         self._error = error
-        self._alive_pids = set(alive_pids) if alive_pids else set()
+        self._unsignallable = set(unsignallable)
+        self._finish_on_launch = finish_on_launch
 
-    def launch(self, command, cwd, env, stdout_log_path):
+    def launch(self, job_id, command, cwd, env, lease):
         self.calls.append(
-            {
-                "command": command,
-                "cwd": cwd,
-                "env": env,
-                "stdout_log_path": stdout_log_path,
-            }
+            {"job_id": job_id, "command": command, "cwd": cwd, "env": env}
         )
+        lease.close()
         if self._error is not None:
+            lease.release()
             raise self._error
-        return self._handle
+        self.running.add(job_id)
+        self._leases[job_id] = lease
+        if self._finish_on_launch is not None:
+            self.finish(job_id, **self._finish_on_launch)
 
-    def is_pid_alive(self, pid: int) -> bool:
-        return pid in self._alive_pids
+    def is_running(self, job_id):
+        return job_id in self.running
+
+    def signal(self, job_id):
+        self.signalled.append(job_id)
+        return job_id in self.running and job_id not in self._unsignallable
+
+    def finish(self, job_id, returncode=0, killed=False, log="", report=None):
+        """End a job: its log, its report, then its exit, in that order."""
+        store = LocalJobResultStore(self.jobs_dir)
+        paths = store.write_targets(job_id)
+        if log:
+            paths.stdout_log.write_text(log, encoding="utf-8")
+        if report is not None:
+            paths.json_report.write_text(json.dumps(report), encoding="utf-8")
+        store.write_exit(
+            job_id,
+            JobExit(
+                completed_at="T1",
+                returncode=returncode,
+                ok=returncode == 0 and not killed,
+                killed=killed,
+            ),
+        )
+        self._end(job_id)
+
+    def crash(self, job_id):
+        """End a job with no exit recorded."""
+        self._end(job_id)
+
+    def _end(self, job_id):
+        self.running.discard(job_id)
+        lease = self._leases.pop(job_id, None)
+        if lease is not None:
+            lease.release()
 
 
 class FakeWorkspace:
@@ -194,47 +248,6 @@ def result_error_text(result):
         if hasattr(block, "text"):
             return block.text
     raise AssertionError("Expected text content block in tool error result")
-
-
-class FakeProcess:
-    """A fake Popen-like handle usable across the MCP protocol test files."""
-
-    def __init__(self, report_path=None, pid=5555):
-        self._report_path = report_path
-        self._poll_count = 0
-        self.returncode = None
-        self.pid = pid
-
-    def poll(self):
-        self._poll_count += 1
-        if (
-            self._report_path is not None
-            and self._poll_count == 2
-            and self.returncode is None
-        ):
-            self._report_path.write_text(
-                json.dumps(
-                    [
-                        {
-                            "name": "attach feature",
-                            "elements": [
-                                {
-                                    "name": "attach scenario",
-                                    "steps": [
-                                        {
-                                            "name": "do attach",
-                                            "result": {"status": "passed"},
-                                        }
-                                    ],
-                                }
-                            ],
-                        }
-                    ]
-                ),
-                encoding="utf-8",
-            )
-            self.returncode = 0
-        return self.returncode
 
 
 def job_result(passed=1, failed=0, job_id="job", failures=()):

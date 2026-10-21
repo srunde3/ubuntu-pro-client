@@ -27,7 +27,7 @@ assert peak_lanes >= LANES, (
 
 Bad: an e2e test for a rule. Classifying a skipped result is a unit test of `classify_result`. Here it costs a tox run and fails for reasons unrelated to the rule.
 
-Good: it chooses work that needs no machine when the machine is not the point. `features/_version.feature` skips without `check_version` config, before anything is provisioned, so the campaign test proves the scheduler on any host with tox.
+Good: it chooses work that needs no machine when the machine is not the point. `features/_version.feature`'s attached-version scenario skips without `contract_token` config, before anything is provisioned, so the campaign and job tests prove the scheduler, the wrapper and the locks on any host with tox.
 
 Bad: it depends on a token or LXD without saying so. Check for the requirement and `pytest.skip` with a reason, as `test_e2e.py` does for the token.
 
@@ -35,10 +35,12 @@ Good: it owns its limits and its state. It builds its service from settings it c
 
 ```python
 settings = load_settings({**os.environ, "MCP_MAX_LXD_JOBS": str(LANES)})
-service = create_service(settings, registry=InMemoryJobRegistry())
+service = create_service(settings)
 ```
 
-Good: it always cleans up. `runner.shutdown()` and terminating a still-running job sit in a `finally` block. A leaked behave process holds an LXD instance or a pool slot after the test ends.
+Good: it always cleans up. `runner.shutdown()` and `kill_job` on a still-running job sit in a `finally` block. A leaked behave process holds an LXD instance or a lane after the test ends.
+
+Good: it proves what crosses a process boundary from another process. Job state and kills are read off locks and files, so a second interpreter, started with `subprocess`, stands in for a restarted server or the CLI.
 
 Bad: it waits a fixed time and then asserts. Real jobs take as long as they take. Sample state against a deadline, and record what you need, such as the peak, while sampling.
 

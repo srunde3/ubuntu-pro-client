@@ -2,8 +2,17 @@
 
 import pytest
 
-from behave_campaign.domain.classify import classify_result, finished_from_mcp
-from behave_campaign.domain.records import CampaignError, Outcome, Unit
+from behave_campaign.domain.classify import (
+    WRAPPER_DIED,
+    classify_result,
+    finished_from_mcp,
+)
+from behave_campaign.domain.records import (
+    AttemptInterrupted,
+    CampaignError,
+    Outcome,
+    Unit,
+)
 
 AT = "2026-09-12T12:00:00Z"
 
@@ -74,6 +83,16 @@ def test_classify_result(result, outcome, flagged):
 
     assert classified.outcome == outcome
     assert bool(classified.problem) is flagged
+
+
+def test_a_job_whose_wrapper_died_is_an_interrupted_attempt():
+    result = {"status": "interrupted", "ok": False, "job_id": "job1"}
+
+    closed = classify_result(UNIT_A, result, AT)
+
+    assert closed == AttemptInterrupted(
+        unit=UNIT_A, job_id="job1", at=AT, reason=WRAPPER_DIED
+    )
 
 
 def test_a_classified_result_keeps_the_job_id_and_time():

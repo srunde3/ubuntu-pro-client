@@ -105,7 +105,7 @@ name = "behave_mcp layers"
 type = "layers"
 containers = ["behave_mcp"]
 layers = [
-  "server",
+  "server | wrapper",
   "service | adapters",
   "ports | config | views",
   "parser",

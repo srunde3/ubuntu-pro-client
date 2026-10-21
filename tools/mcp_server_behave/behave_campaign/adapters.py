@@ -23,6 +23,7 @@ from typing import IO, Any, Callable, Mapping, Sequence
 
 from behave_campaign.domain import discovery
 from behave_campaign.domain.bundle import JOB_FILES, BundleEntry
+from behave_campaign.domain.classify import MCP_ENDED
 from behave_campaign.domain.records import (
     CampaignError,
     CampaignHeader,
@@ -359,7 +360,7 @@ class ServiceLaneRunner:
 
     def poll(self, job_id: str) -> Any | None:
         status = self._service.job_status(job_id)
-        if getattr(status, "status", "") != "completed":
+        if getattr(status, "status", "") not in MCP_ENDED:
             return None
         return status.model_dump()
 

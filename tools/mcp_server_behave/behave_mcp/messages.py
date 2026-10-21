@@ -91,11 +91,12 @@ class RepoState(BaseModel):
 
 
 class RunStatus(str, Enum):
-    """Derived run status of a behave job."""
+    """A behave job's state, read off its files and locks."""
 
     RUNNING = "running"
     COMPLETED = "completed"
-    UNKNOWN = "unknown"
+    # The job ended without recording an exit: its wrapper died.
+    INTERRUPTED = "interrupted"
 
 
 class ScenarioStatus(str, Enum):
@@ -120,16 +121,21 @@ class JobRecord(BaseModel):
     command: list[str] = []
     repo_root: str = ""
     repo_state: RepoState | None = None
-    pid: int | None = None
     artifacts: Artifacts | None = None
 
 
 class JobExit(BaseModel):
-    """How one behave job ended. Written once, when the exit is seen."""
+    """How one behave job ended. Written once, by the job's wrapper.
+
+    ``ok`` is true for a zero exit that nobody killed. ``error`` says why
+    the job never ran, when tox could not be started at all.
+    """
 
     completed_at: str = ""
     returncode: int | None = None
     ok: bool = False
+    killed: bool = False
+    error: str = ""
 
 
 class PoolCapacity(BaseModel):
@@ -241,7 +247,7 @@ class JobResult(BaseModel):
     """
 
     job_id: str = ""
-    status: str = RunStatus.UNKNOWN.value
+    status: str = RunStatus.RUNNING.value
     ok: bool | None = None
     feature_file: str = ""
     scenario_name: str = ""
@@ -262,6 +268,16 @@ class CompletedResponse(JobResult):
     recent_output: str | None = None
 
 
+class InterruptedResponse(JobResult):
+    """A job whose wrapper died before recording an exit: a crash, a hard
+    kill or a reboot. Nothing it did counts."""
+
+    status: Literal["interrupted"] = "interrupted"
+    ok: bool = False
+    artifacts: Artifacts
+    recent_output: str = ""
+
+
 class TimeoutResponse(BaseModel):
     status: Literal["timeout"] = "timeout"
     ok: bool = False
@@ -274,7 +290,7 @@ class TimeoutResponse(BaseModel):
 
 
 WaitForCompletionResult = Annotated[
-    Union[CompletedResponse, TimeoutResponse],
+    Union[CompletedResponse, InterruptedResponse, TimeoutResponse],
     Field(discriminator="status"),
 ]
 
@@ -358,10 +374,10 @@ class ArtifactsResponse(BaseModel):
 
 
 class JobSummary(BaseModel):
-    """One row in a job listing (in-memory or disk-recovered jobs)."""
+    """One row in a job listing."""
 
     job_id: str = ""
-    status: RunStatus = RunStatus.UNKNOWN
+    status: RunStatus = RunStatus.RUNNING
     ok: bool | None = None
     returncode: int | None = None
     feature_file: str = ""

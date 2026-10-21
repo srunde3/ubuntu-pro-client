@@ -36,7 +36,6 @@ from behave_campaign.domain.state import reduce_units, state_of
 from behave_campaign.repo import repo_state
 from behave_campaign.runner import CampaignRunner, ThreadTicker
 from behave_campaign.service import CampaignService
-from behave_mcp.adapters import InMemoryJobRegistry
 from behave_mcp.config import load_settings
 from behave_mcp.domain.pools import Pool
 from behave_mcp.server import create_service
@@ -69,7 +68,7 @@ def test_a_campaign_runs_its_lanes_concurrently(monkeypatch, tmp_path):
     # A service of its own, so the lane limit is this test's rather than
     # whatever the server process was started with.
     settings = load_settings({**os.environ, "MCP_MAX_LXD_JOBS": str(LANES)})
-    service = create_service(settings, registry=InMemoryJobRegistry())
+    service = create_service(settings)
 
     created = CampaignService(
         store=store,
@@ -185,7 +184,7 @@ def test_pause_with_kill_stops_a_real_job_and_run_redoes_it(
     campaign_dir = tmp_path / "state" / "campaigns"
     store = JsonlCampaignStore(campaign_dir)
     settings = load_settings({**os.environ, "MCP_MAX_LXD_JOBS": "1"})
-    service = create_service(settings, registry=InMemoryJobRegistry())
+    service = create_service(settings)
     CampaignService(
         store=store,
         features=ParserFeatureReader(),

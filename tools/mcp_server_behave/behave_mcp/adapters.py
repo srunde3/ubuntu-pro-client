@@ -1,16 +1,16 @@
 """Concrete adapters implementing the ports in ``behave_mcp.ports``."""
 
+import fcntl
 import json
 import logging
 import os
 import signal
 import subprocess
+import sys
 import tempfile
-import threading
 from collections import deque
-from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any, Callable, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
@@ -24,153 +24,171 @@ from behave_mcp.messages import (
     JobRecord,
     RepoState,
 )
-from behave_mcp.ports import (
-    Job,
-    LogFileOpenError,
-    PoolUsage,
-    ProcessStartError,
-    ReservationResult,
-    WriteTargets,
-)
+from behave_mcp.ports import JobStartError, Lease, WriteTargets
 
 logger = logging.getLogger(__name__)
 
 ModelT = TypeVar("ModelT", bound=BaseModel)
 
 
-class SubprocessHandle:
-    """Wraps a Popen process together with its owned stdout log file."""
+def _try_lock(path: Path) -> int | None:
+    """Open ``path`` and take its exclusive lock without waiting.
 
-    def __init__(self, process: Any, log_file: Any) -> None:
-        self._process = process
-        self._log_file = log_file
+    Returns the open descriptor holding the lock, or None if another
+    open file holds it. A lock taken this way lasts until the descriptor
+    and every copy of it are closed -- in this process or a child that
+    inherited it -- which the kernel does however the holder dies.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        os.close(fd)
+        return None
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
 
-    @property
-    def pid(self) -> int:
-        return self._process.pid
 
-    def poll(self) -> int | None:
-        return self._process.poll()
+def _is_locked(path: Path) -> bool:
+    """Whether some open file holds ``path``'s lock right now."""
+    if not path.exists():
+        return False
+    fd = _try_lock(path)
+    if fd is None:
+        return True
+    os.close(fd)
+    return False
+
+
+class FileLease:
+    """A lane held through its lock file's descriptor."""
+
+    def __init__(self, fd: int) -> None:
+        self.fd = fd
 
     def close(self) -> None:
-        if self._log_file is not None and not self._log_file.closed:
-            self._log_file.close()
-
-    def terminate(self) -> None:
-        try:
-            os.killpg(self._process.pid, signal.SIGTERM)
-        except ProcessLookupError:
-            pass
+        if self.fd >= 0:
+            os.close(self.fd)
+            self.fd = -1
 
 
-class PopenLauncher:
-    """Launches behave via ``subprocess.Popen`` writing to a log file."""
+class FileLanePool:
+    """Lanes as lock files, ``lanes/<pool>/<n>.lock`` for n below a limit.
+
+    The kernel arbitrates, so every process on one state directory shares
+    the same lanes without talking to the others.
+    """
+
+    def __init__(self, lanes_dir: Callable[[], Path]) -> None:
+        self._lanes_dir = lanes_dir
+
+    def take(self, pool: Pool, limit: int) -> FileLease | None:
+        for lane in range(limit):
+            fd = _try_lock(self._path(pool, lane))
+            if fd is not None:
+                return FileLease(fd)
+        return None
+
+    def busy(self, pool: Pool, limit: int) -> int:
+        return sum(
+            1 for lane in range(limit) if _is_locked(self._path(pool, lane))
+        )
+
+    def _path(self, pool: Pool, lane: int) -> Path:
+        return layout.lane_path(self._lanes_dir(), pool.value, lane)
+
+
+def _wrapper_command(job_dir: Path, command: list[str]) -> list[str]:
+    return [
+        sys.executable,
+        "-m",
+        "behave_mcp.wrapper",
+        str(job_dir),
+        "--",
+        *command,
+    ]
+
+
+class LockedJobLauncher:
+    """Starts each job under ``behave_mcp.wrapper``, which holds the lane
+    and the job's own lock for its whole life.
+
+    Whether a job is alive is whether its lock is held, which any process
+    can ask. Once the wrapper can take a kill, it writes its PID into the
+    lock file, so any process can also signal it -- trusted only while the
+    lock is held, since a held lock means the wrapper is alive and its PID
+    cannot have been reused.
+    """
+
+    def __init__(self, jobs_dir: Callable[[], Path]) -> None:
+        self._jobs_dir = jobs_dir
 
     def launch(
         self,
+        job_id: str,
         command: list[str],
         cwd: str,
         env: dict[str, str],
-        stdout_log_path: Path,
-    ) -> SubprocessHandle:
+        lease: Lease,
+    ) -> None:
+        paths = layout.job_paths(self._jobs_dir(), job_id)
+        job_fd: int | None = None
         try:
-            log_file = stdout_log_path.open("w", encoding="utf-8")
-        except OSError as exc:
-            raise LogFileOpenError(str(exc)) from exc
+            job_fd = _try_lock(paths.lock)
+            if job_fd is None:
+                raise JobStartError("job {} is already locked".format(job_id))
+            lane_fd = lease.fd if isinstance(lease, FileLease) else None
+            inherited = tuple(fd for fd in (lane_fd, job_fd) if fd is not None)
+            try:
+                subprocess.Popen(
+                    _wrapper_command(paths.job_dir, command),
+                    cwd=cwd,
+                    env=env,
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    # Its own session, so this process's death or a signal
+                    # to its group never reaches the job.
+                    start_new_session=True,
+                    pass_fds=inherited,
+                )
+            except OSError as exc:
+                raise JobStartError(str(exc)) from exc
+        finally:
+            # From here only the wrapper holds the locks.
+            if job_fd is not None:
+                os.close(job_fd)
+            lease.close()
 
-        try:
-            process = subprocess.Popen(
-                command,
-                cwd=cwd,
-                env=env,
-                stdin=subprocess.DEVNULL,
-                stdout=log_file,
-                stderr=subprocess.STDOUT,
-                text=True,
-                start_new_session=True,
-            )
-        except Exception as exc:
-            log_file.close()
-            raise ProcessStartError(str(exc)) from exc
+    def is_running(self, job_id: str) -> bool:
+        return _is_locked(self._paths(job_id).lock)
 
-        return SubprocessHandle(process, log_file)
+    def signal(self, job_id: str) -> bool:
+        """Kill a running job.
 
-    def is_pid_alive(self, pid: int) -> bool:
-        try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
+        The kill is left as a marker first. A wrapper still starting up has
+        not written its PID yet; it reads the marker before it starts the
+        job, so a kill is never lost to the race.
+        """
+        paths = self._paths(job_id)
+        if not _is_locked(paths.lock):
             return False
-        except PermissionError:
-            # Process exists but is owned by another user/uid.
+        paths.kill.touch()
+        try:
+            pid = int(paths.lock.read_text().strip())
+        except ValueError:
             return True
-        except OSError as exc:
-            logger.debug(
-                "Unexpected OSError checking liveness of pid %s: %s", pid, exc
-            )
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
             return False
         return True
 
-
-class InMemoryJobRegistry:
-    """Thread-safe in-memory registry of reserved and running behave jobs."""
-
-    def __init__(self) -> None:
-        self._jobs: dict[str, Job] = {}
-        self._lock = threading.Lock()
-
-    def try_reserve(
-        self, job: Job, limits: Mapping[Pool, int]
-    ) -> ReservationResult:
-        with self._lock:
-            active = self._active_jobs_locked()
-            full = []
-            for pool in sorted(job.pools):
-                running = sum(1 for other in active if pool in other.pools)
-                limit = limits.get(pool, 0)
-                if running >= limit:
-                    full.append(
-                        PoolUsage(pool=pool, limit=limit, running=running)
-                    )
-            if full:
-                return ReservationResult(reserved=False, full=tuple(full))
-            self._jobs[job.job_id] = job
-            return ReservationResult(reserved=True)
-
-    def register(self, job_id: str, job: Job) -> None:
-        with self._lock:
-            self._jobs[job_id] = job
-
-    def release(self, job_id: str) -> None:
-        with self._lock:
-            self._jobs.pop(job_id, None)
-
-    def get(self, job_id: str) -> Job | None:
-        with self._lock:
-            return self._jobs.get(job_id)
-
-    def snapshot(self) -> list[Job]:
-        with self._lock:
-            return list(self._jobs.values())
-
-    def clear(self) -> None:
-        with self._lock:
-            self._jobs.clear()
-
-    def _active_jobs_locked(self) -> list[Job]:
-        active = []
-        for job in self._jobs.values():
-            if job.reserved:
-                active.append(job)
-                continue
-
-            handle = job.process_handle
-            if handle is None:
-                continue
-
-            if handle.poll() is None:
-                active.append(job)
-
-        return active
+    def _paths(self, job_id: str) -> layout.JobPaths:
+        return layout.job_paths(self._jobs_dir(), job_id)
 
 
 class LocalFeatureFileReader:

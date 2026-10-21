@@ -26,7 +26,7 @@ The server exposes these MCP tools:
   - Returns `repo_state`: `repo_root`'s git `commit`, `branch`, and `dirty` flag at launch time (all `null` when `repo_root` isn't a git checkout), so results can be correlated back to the exact code tested. Also persisted on the job record.
 - `list_scenario_jobs` -- lists active jobs plus a bounded window of recently completed ones.
   - No known `job_id` or access to system processes required.
-  - Merges in-memory state with jobs recovered from disk, including jobs still running after a server restart.
+  - Reads every job off disk, so a job started by another server, by the CLI, or before a restart is listed and its state is current.
   - Optional `limit` caps how many completed jobs are returned (most recent first). `total_completed` and `truncated` in the response tell you if older jobs were dropped. `limit` must be positive; values above the server max are silently capped, with `limit_clamped` set when that happens.
 - `get_scenario_results` -- what came of each job: what it ran, `status` and `ok`, behave's own counts, and every failing step with its message.
   - One `JobResult` per job, most recently started first -- the same shape `wait_for_scenario_completion` returns for one job.
@@ -52,6 +52,7 @@ still land here, so one server keeps one set of jobs and campaigns:
 ```
 .mcp_server_behave/
   jobs/        one directory per behave job
+  lanes/       one lock file per lane, held by the job using it
   campaigns/   one directory per campaign: its record and run lock
 ```
 
@@ -60,7 +61,8 @@ still land here, so one server keeps one set of jobs and campaigns:
 For each started job, the server writes artifacts under `jobs/`:
 
 - `<job_id>/job.json`: what the job was asked to do -- unit, command, install source, checkout and its git state, start time, artifact paths. Written once, at launch.
-- `<job_id>/status.json`: how it ended -- `returncode`, `ok`, `completed_at`. Written once, when the server first sees the exit; a job without one has not finished, or finished unseen.
+- `<job_id>/status.json`: how it ended -- `returncode`, `ok`, `killed`, `completed_at`, and the `error` when tox could not start. Written once, by the job's wrapper; a job without one is running, or was interrupted.
+- `<job_id>/job.lock`: held by the job's wrapper for as long as it lives, and holding its PID. See [How a job runs](#how-a-job-runs).
 - `<job_id>/stdout.log`: combined stdout/stderr stream
 - `<job_id>/report.json`: behave JSON formatter output
 
@@ -232,8 +234,11 @@ Each machine type draws on one pool:
 | `cloud` | `aws.*`, `gcp.*`, `azure.*`, including `pro` and `pro-fips` |
 | `wsl` | `wsl` |
 
-A job holds one slot in the pool its `machine_type` draws on. When that pool
-is full, `start_scenario` fails fast with `status: capacity_exceeded` and
+A job holds one lane in the pool its `machine_type` draws on, for as long as
+it runs. Lanes are lock files under `lanes/<pool>/`, so every server and CLI
+on one state directory shares them. Each process reads its own limits: two
+processes with different limits share the lower-numbered lanes, so the
+effective limit is the larger. When the pool is full, `start_scenario` fails fast with `status: capacity_exceeded` and
 `full_pools` naming each full pool with its limit and running count. Starting
 the server with a removed variable (`MCP_MAX_PARALLEL_JOBS`,
 `MCP_ALLOW_CLOUD_MACHINE_TYPES` or `MCP_TRANSPORT`) is an error that says
@@ -274,7 +279,27 @@ and campaign lives in the server's state directory.
 
 - Improve the job recovery mechanism; it's a little verbose on logs.
 
-Known limitation: job liveness after a server restart is determined by checking whether the recorded PID is still alive (`os.kill(pid, 0)`). If that PID has since been reused by an unrelated process, a dead job can be misreported as still running. This is considered an acceptable tradeoff for a local dev tool.
+## How a job runs
+
+Each job runs under its own wrapper process, `python -m behave_mcp.wrapper`,
+in its own session, so the server's death or a signal to it never reaches the
+job. The server starts the wrapper and hands it two locks: the job's lane and
+`jobs/<id>/job.lock`. The wrapper holds both for its whole life, runs tox as
+its child, and when tox exits writes `status.json` and exits.
+
+That is what makes a job's state readable from any process, after any crash:
+
+| `status.json` | `job.lock` held | state |
+| --- | --- | --- |
+| yes | either | `completed` |
+| no | yes | `running` |
+| no | no | `interrupted`: the wrapper died without recording an exit |
+
+tox gets a parent-death signal, so it cannot outlive its wrapper. `kill_job`
+sends SIGTERM to the wrapper, which passes it to tox's process group and waits
+for it, so pycloudlib can delete what it made; the exit is recorded with
+`killed: true`. A hard kill or a reboot can leave an instance behind: cleaning
+those up is pycloudlib's business, not this tool's.
 
 - Some sort of API config endpoint and tool - can expose to the agent any relevant and non-secret config values. For secret config values like the token and cloud creds, we can indicate if they're set so that the agent can at least correlate skipped tests with missing required config.
 - Take a second look at the response shapes on each endpoint. See if we can reduce the default response size and add flags for more verbose info. It would be great to have a clean integration between the MCP results and the test tracker inputs. Cutting down on response size also reduces token usage.

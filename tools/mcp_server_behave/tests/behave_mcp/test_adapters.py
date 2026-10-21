@@ -1,25 +1,22 @@
+import os
+import signal
 import subprocess
+import sys
 import time
 
 import pytest
 
 import behave_mcp.adapters as adapters_module
 from behave_mcp.adapters import (
-    InMemoryJobRegistry,
+    FileLanePool,
     LocalFeatureFileReader,
     LocalJobResultStoreFactory,
     LocalWorkspace,
-    PopenLauncher,
+    LockedJobLauncher,
 )
 from behave_mcp.domain.pools import Pool
 from behave_mcp.messages import JobExit, JobRecord
-from behave_mcp.ports import (
-    Job,
-    LogFileOpenError,
-    PoolUsage,
-    ProcessStartError,
-)
-from tests.conftest import FakeProcessHandle, job_file, make_repo_with_feature
+from tests.conftest import job_file, make_repo_with_feature
 
 # ---- LocalFeatureFileReader ----
 
@@ -345,90 +342,13 @@ def test_repo_state_returns_all_none_outside_a_git_checkout(tmp_path):
     assert state.dirty is None
 
 
-# ---- PopenLauncher ----
+# ---- lanes, job locks and the wrapper: real processes ----
 
 
-def test_launcher_success(tmp_path, monkeypatch):
-    calls = {}
-
-    def fake_popen(
-        command, cwd, env, stdin, stdout, stderr, text, start_new_session
-    ):
-        calls["command"] = command
-        calls["cwd"] = cwd
-        calls["env"] = env
-        calls["stdin"] = stdin
-        calls["stdout"] = stdout
-        calls["stderr"] = stderr
-        calls["text"] = text
-        calls["start_new_session"] = start_new_session
-        return FakeProcessHandle(pid=4321)
-
-    monkeypatch.setattr(adapters_module.subprocess, "Popen", fake_popen)
-    launcher = PopenLauncher()
-    log_path = tmp_path / "out.log"
-
-    handle = launcher.launch(["tox"], str(tmp_path), {"A": "B"}, log_path)
-
-    assert calls["command"] == ["tox"]
-    assert calls["cwd"] == str(tmp_path)
-    assert calls["env"] == {"A": "B"}
-    assert calls["stdin"] == subprocess.DEVNULL
-    assert calls["stderr"] == subprocess.STDOUT
-    assert calls["text"] is True
-    assert calls["start_new_session"] is True
-    assert handle.poll() is None
-    assert handle.pid == 4321
-
-    handle.close()
-    assert calls["stdout"].closed is True
+PATH_ONLY = {"PATH": "/usr/bin:/bin"}
 
 
-def test_launched_job_reads_no_stdin_from_the_server(tmp_path):
-    log_path = tmp_path / "out.log"
-    handle = PopenLauncher().launch(
-        ["sh", "-c", "read line; echo got=$line"],
-        str(tmp_path),
-        {"PATH": "/usr/bin:/bin"},
-        log_path,
-    )
-    assert _eventually(lambda: handle.poll() is not None)
-    handle.close()
-
-    assert log_path.read_text().strip() == "got="
-
-
-def test_terminate_stops_processes_the_job_started(tmp_path):
-    launcher = PopenLauncher()
-    pid_file = tmp_path / "child.pid"
-    handle = launcher.launch(
-        ["sh", "-c", "sleep 30 & echo $! > {}; wait".format(pid_file)],
-        str(tmp_path),
-        {"PATH": "/usr/bin:/bin"},
-        tmp_path / "out.log",
-    )
-    assert _eventually(
-        lambda: pid_file.exists() and pid_file.read_text().strip()
-    )
-    child = int(pid_file.read_text())
-
-    handle.terminate()
-
-    assert _eventually(lambda: not launcher.is_pid_alive(child))
-    handle.close()
-
-
-def test_terminate_after_exit_is_harmless(tmp_path):
-    handle = PopenLauncher().launch(
-        ["true"], str(tmp_path), {"PATH": "/usr/bin:/bin"}, tmp_path / "o"
-    )
-    assert _eventually(lambda: handle.poll() is not None)
-
-    handle.terminate()
-    handle.close()
-
-
-def _eventually(condition, timeout=5.0):
+def _eventually(condition, timeout=10.0):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if condition():
@@ -437,171 +357,225 @@ def _eventually(condition, timeout=5.0):
     return False
 
 
-def test_launcher_log_open_failure(tmp_path):
-    launcher = PopenLauncher()
-    missing_dir = tmp_path / "missing" / "out.log"
-    with pytest.raises(LogFileOpenError):
-        launcher.launch(["tox"], str(tmp_path), {}, missing_dir)
-
-
-def test_launcher_process_start_failure(tmp_path, monkeypatch):
-    def boom(*args, **kwargs):
-        raise OSError("no exec")
-
-    monkeypatch.setattr(adapters_module.subprocess, "Popen", boom)
-    launcher = PopenLauncher()
-    log_path = tmp_path / "out.log"
-
-    with pytest.raises(ProcessStartError):
-        launcher.launch(["tox"], str(tmp_path), {}, log_path)
-
-    assert log_path.exists()
-
-
-def test_is_pid_alive_true_then_false_after_exit():
-    launcher = PopenLauncher()
-    process = subprocess.Popen(["sleep", "5"])
+def _pid_alive(pid):
     try:
-        assert launcher.is_pid_alive(process.pid) is True
-    finally:
-        process.terminate()
-        process.wait(timeout=5)
-    assert launcher.is_pid_alive(process.pid) is False
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
 
 
-def test_is_pid_alive_false_for_nonexistent_pid():
-    launcher = PopenLauncher()
-    # A PID this large should never be in use on Linux.
-    assert launcher.is_pid_alive(2**30) is False
+@pytest.fixture
+def lanes(tmp_path):
+    return FileLanePool(lambda: tmp_path / "lanes")
 
 
-# ---- InMemoryJobRegistry ----
+@pytest.fixture
+def launcher(tmp_path):
+    return LockedJobLauncher(lambda: tmp_path / "jobs")
 
 
-def _job(
-    job_id, tmp_path, handle=None, reserved=False, pools=(Pool.LXD,)
-) -> Job:
-    return Job(
-        job_id=job_id,
-        process_handle=handle,
-        log_dir=tmp_path,
-        reserved=reserved,
-        pools=frozenset(pools),
+def _launch(tmp_path, lanes, launcher, job_id, command):
+    (tmp_path / "jobs" / job_id).mkdir(parents=True)
+    lease = lanes.take(Pool.LXD, 1)
+    assert lease is not None, "no free lane"
+    launcher.launch(job_id, command, str(tmp_path), PATH_ONLY, lease)
+
+
+def _exit(tmp_path, job_id):
+    return (
+        LocalJobResultStoreFactory().bind(tmp_path / "jobs").read_exit(job_id)
     )
 
 
-_ONE_EACH = {Pool.LXD: 1, Pool.CLOUD: 1, Pool.WSL: 1}
+class TestFileLanePool:
+    def test_each_lane_is_taken_once(self, lanes):
+        first = lanes.take(Pool.LXD, 2)
+        second = lanes.take(Pool.LXD, 2)
+
+        third = lanes.take(Pool.LXD, 2)
+
+        assert first is not None and second is not None
+        assert third is None
+        assert lanes.busy(Pool.LXD, 2) == 2
+
+    def test_closing_a_lease_frees_its_lane(self, lanes):
+        lease = lanes.take(Pool.LXD, 1)
+        lease.close()
+
+        assert lanes.busy(Pool.LXD, 1) == 0
+        assert lanes.take(Pool.LXD, 1) is not None
+
+    def test_pools_are_separate(self, lanes):
+        lanes.take(Pool.LXD, 1)
+
+        assert lanes.take(Pool.WSL, 1) is not None
+
+    def test_another_process_holding_a_lane_counts(self, tmp_path, lanes):
+        # A lane held by another process: it locks lane 0 and waits.
+        lane = tmp_path / "lanes" / "lxd" / "0.lock"
+        lane.parent.mkdir(parents=True)
+        holder = subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                "import fcntl, sys, time\n"
+                "f = open(sys.argv[1], 'w')\n"
+                "fcntl.flock(f, fcntl.LOCK_EX)\n"
+                "print('held', flush=True)\n"
+                "time.sleep(60)\n",
+                str(lane),
+            ],
+            stdout=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            assert holder.stdout.readline().strip() == "held"
+
+            assert lanes.take(Pool.LXD, 1) is None
+            assert lanes.busy(Pool.LXD, 1) == 1
+        finally:
+            holder.kill()
+            holder.wait()
+
+        assert lanes.take(Pool.LXD, 1) is not None
 
 
-def test_registry_try_reserve_respects_capacity(tmp_path):
-    registry = InMemoryJobRegistry()
+class TestLockedJobLauncher:
+    def test_a_job_runs_to_a_recorded_exit(self, tmp_path, lanes, launcher):
+        _launch(tmp_path, lanes, launcher, "job", ["sh", "-c", "exit 3"])
 
-    first = registry.try_reserve(_job("a", tmp_path, reserved=True), _ONE_EACH)
-    assert first.reserved is True
-    assert first.full == ()
+        assert _eventually(lambda: _exit(tmp_path, "job") is not None)
+        exit = _exit(tmp_path, "job")
+        assert (exit.returncode, exit.ok, exit.killed) == (3, False, False)
 
-    second = registry.try_reserve(
-        _job("b", tmp_path, reserved=True), _ONE_EACH
-    )
-    assert second.reserved is False
-    assert second.full == (PoolUsage(pool=Pool.LXD, limit=1, running=1),)
+    def test_the_job_output_is_its_log(self, tmp_path, lanes, launcher):
+        _launch(tmp_path, lanes, launcher, "job", ["sh", "-c", "echo hello"])
 
+        assert _eventually(lambda: _exit(tmp_path, "job") is not None)
+        log = tmp_path / "jobs" / "job" / "stdout.log"
+        assert log.read_text().strip() == "hello"
 
-def test_registry_counts_each_pool_separately(tmp_path):
-    registry = InMemoryJobRegistry()
-    registry.try_reserve(
-        _job("a", tmp_path, reserved=True, pools=[Pool.WSL]), _ONE_EACH
-    )
+    def test_a_job_reads_no_stdin_from_the_server(
+        self, tmp_path, lanes, launcher
+    ):
+        _launch(
+            tmp_path,
+            lanes,
+            launcher,
+            "job",
+            ["sh", "-c", "read line; echo got=$line"],
+        )
 
-    lxd = registry.try_reserve(_job("b", tmp_path, reserved=True), _ONE_EACH)
-    wsl = registry.try_reserve(
-        _job("c", tmp_path, reserved=True, pools=[Pool.WSL]), _ONE_EACH
-    )
+        assert _eventually(lambda: _exit(tmp_path, "job") is not None)
+        log = tmp_path / "jobs" / "job" / "stdout.log"
+        assert log.read_text().strip() == "got="
 
-    assert lxd.reserved is True
-    assert wsl.reserved is False
-    assert wsl.full == (PoolUsage(pool=Pool.WSL, limit=1, running=1),)
+    def test_the_wrapper_holds_the_lane_and_lock_until_it_exits(
+        self, tmp_path, lanes, launcher
+    ):
+        _launch(tmp_path, lanes, launcher, "job", ["sleep", "1"])
 
+        # The launcher has let go of both; only the wrapper holds them.
+        assert launcher.is_running("job")
+        assert lanes.busy(Pool.LXD, 1) == 1
 
-def test_registry_reserves_every_pool_a_job_spans_or_none(tmp_path):
-    registry = InMemoryJobRegistry()
-    registry.try_reserve(
-        _job("a", tmp_path, reserved=True, pools=[Pool.WSL]), _ONE_EACH
-    )
+        assert _eventually(lambda: not launcher.is_running("job"))
+        assert lanes.busy(Pool.LXD, 1) == 0
+        assert _exit(tmp_path, "job").ok is True
 
-    spanning = registry.try_reserve(
-        _job("b", tmp_path, reserved=True, pools=[Pool.LXD, Pool.WSL]),
-        _ONE_EACH,
-    )
-    lxd = registry.try_reserve(_job("c", tmp_path, reserved=True), _ONE_EACH)
+    def test_a_signal_stops_the_job_and_records_a_kill(
+        self, tmp_path, lanes, launcher
+    ):
+        _launch(tmp_path, lanes, launcher, "job", ["sleep", "30"])
 
-    assert spanning.reserved is False
-    assert [usage.pool for usage in spanning.full] == [Pool.WSL]
-    assert registry.get("b") is None
-    assert lxd.reserved is True
+        signalled = launcher.signal("job")
 
+        assert signalled is True
+        assert _eventually(lambda: _exit(tmp_path, "job") is not None)
+        exit = _exit(tmp_path, "job")
+        assert (exit.killed, exit.ok) == (True, False)
 
-def test_registry_rejects_a_pool_with_no_limit(tmp_path):
-    registry = InMemoryJobRegistry()
+    def test_a_kill_reaches_every_process_the_job_started(
+        self, tmp_path, lanes, launcher
+    ):
+        pid_file = tmp_path / "child.pid"
+        _launch(
+            tmp_path,
+            lanes,
+            launcher,
+            "job",
+            ["sh", "-c", "sleep 30 & echo $! > {}; wait".format(pid_file)],
+        )
+        assert _eventually(
+            lambda: pid_file.exists() and pid_file.read_text().strip()
+        )
+        child = int(pid_file.read_text())
 
-    result = registry.try_reserve(
-        _job("a", tmp_path, reserved=True, pools=[Pool.CLOUD]),
-        {Pool.LXD: 4},
-    )
+        launcher.signal("job")
 
-    assert result.reserved is False
-    assert result.full == (PoolUsage(pool=Pool.CLOUD, limit=0, running=0),)
+        assert _eventually(lambda: not _pid_alive(child))
 
+    def test_a_finished_job_cannot_be_signalled(
+        self, tmp_path, lanes, launcher
+    ):
+        _launch(tmp_path, lanes, launcher, "job", ["true"])
+        assert _eventually(lambda: not launcher.is_running("job"))
 
-def test_registry_counts_running_processes(tmp_path):
-    registry = InMemoryJobRegistry()
-    registry.register(
-        "a", _job("a", tmp_path, handle=FakeProcessHandle(returncode=None))
-    )
+        assert launcher.signal("job") is False
 
-    result = registry.try_reserve(
-        _job("b", tmp_path, reserved=True), _ONE_EACH
-    )
-    assert result.reserved is False
-    assert result.full[0].running == 1
+    def test_a_dead_wrapper_leaves_no_exit_and_takes_its_job_with_it(
+        self, tmp_path, lanes, launcher
+    ):
+        pid_file = tmp_path / "child.pid"
+        _launch(
+            tmp_path,
+            lanes,
+            launcher,
+            "job",
+            ["sh", "-c", "echo $$ > {}; exec sleep 30".format(pid_file)],
+        )
+        assert _eventually(
+            lambda: pid_file.exists() and pid_file.read_text().strip()
+        )
+        child = int(pid_file.read_text())
+        wrapper = int((tmp_path / "jobs" / "job" / "job.lock").read_text())
 
+        os.kill(wrapper, signal.SIGKILL)
 
-def test_registry_ignores_completed_processes(tmp_path):
-    registry = InMemoryJobRegistry()
-    registry.register(
-        "a", _job("a", tmp_path, handle=FakeProcessHandle(returncode=0))
-    )
+        assert _eventually(lambda: not launcher.is_running("job"))
+        assert _exit(tmp_path, "job") is None
+        assert lanes.busy(Pool.LXD, 1) == 0
+        # The parent-death signal stops the job when its wrapper dies.
+        assert _eventually(lambda: not _pid_alive(child))
 
-    result = registry.try_reserve(
-        _job("b", tmp_path, reserved=True), _ONE_EACH
-    )
-    assert result.reserved is True
+    def test_a_kill_before_the_wrapper_is_ready_still_lands(
+        self, tmp_path, lanes, launcher
+    ):
+        # The marker a kill leaves, as if it came before the wrapper had
+        # published its PID.
+        marker = tmp_path / "jobs" / "job" / "kill"
+        marker.parent.mkdir(parents=True)
+        marker.touch()
+        lease = lanes.take(Pool.LXD, 1)
 
+        launcher.launch(
+            "job", ["sleep", "30"], str(tmp_path), PATH_ONLY, lease
+        )
 
-def test_registry_release_and_clear(tmp_path):
-    registry = InMemoryJobRegistry()
-    registry.register("a", _job("a", tmp_path))
-    assert registry.get("a") is not None
+        assert _eventually(lambda: _exit(tmp_path, "job") is not None)
+        exit = _exit(tmp_path, "job")
+        assert (exit.killed, exit.returncode) == (True, None)
 
-    registry.release("a")
-    assert registry.get("a") is None
+    def test_a_command_that_cannot_start_records_why(
+        self, tmp_path, lanes, launcher
+    ):
+        _launch(tmp_path, lanes, launcher, "job", ["/no/such/command"])
 
-    registry.register("b", _job("b", tmp_path))
-    registry.clear()
-    assert registry.get("b") is None
-
-
-def test_registry_snapshot_returns_all_tracked_jobs(tmp_path):
-    registry = InMemoryJobRegistry()
-    registry.register("a", _job("a", tmp_path))
-    registry.register("b", _job("b", tmp_path))
-
-    snapshot = registry.snapshot()
-
-    assert {job.job_id for job in snapshot} == {"a", "b"}
-
-
-# ---- LocalJobResultStore.list_job_ids ----
+        assert _eventually(lambda: _exit(tmp_path, "job") is not None)
+        exit = _exit(tmp_path, "job")
+        assert exit.returncode is None
+        assert "No such file" in exit.error
 
 
 def test_list_job_ids_globs_meta_files(tmp_path):

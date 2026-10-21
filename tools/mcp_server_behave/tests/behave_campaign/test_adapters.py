@@ -32,7 +32,6 @@ from behave_campaign.ports import (
     CampaignNotFoundError,
 )
 from behave_mcp.adapters import (
-    InMemoryJobRegistry,
     LocalFeatureFileReader,
     LocalJobResultStoreFactory,
 )
@@ -40,8 +39,8 @@ from behave_mcp.config import Settings
 from behave_mcp.domain.pools import Pool
 from behave_mcp.service import BehaveService
 from tests.conftest import (
-    FakeLauncher,
-    FakeProcessHandle,
+    FakeJobLauncher,
+    FakeLanePool,
     FakeWorkspace,
     job_file,
 )
@@ -566,7 +565,7 @@ class TestServiceLaneRunner:
     """Lanes opened, polled and killed through a real BehaveService."""
 
     @staticmethod
-    def lane_runner(tmp_path, handle):
+    def lane_runner(tmp_path, launcher):
         repo_root = tmp_path / "repo"
         (repo_root / "features").mkdir(parents=True)
         (repo_root / "features" / "a.feature").write_text(FEATURE_A)
@@ -581,8 +580,8 @@ class TestServiceLaneRunner:
             ),
             feature_reader=LocalFeatureFileReader(),
             results=LocalJobResultStoreFactory(),
-            registry=InMemoryJobRegistry(),
-            launcher=FakeLauncher(handle=handle),
+            lanes=FakeLanePool(),
+            launcher=launcher,
             monotonic=lambda: 0.0,
             sleep=lambda seconds: None,
             now_utc=lambda: AT,
@@ -591,21 +590,39 @@ class TestServiceLaneRunner:
         return ServiceLaneRunner(service), repo_root
 
     def test_a_running_job_is_signalled(self, tmp_path):
-        handle = FakeProcessHandle(returncode=None)
-        lanes, repo_root = self.lane_runner(tmp_path, handle)
+        launcher = FakeJobLauncher(tmp_path)
+        lanes, repo_root = self.lane_runner(tmp_path, launcher)
         job_id = lanes.start(UNIT_A, repo_root=repo_root, install_from="local")
 
         killed = lanes.kill(job_id)
 
         assert killed is True
-        assert handle.terminated is True
+        assert launcher.signalled == [job_id]
 
     def test_a_finished_job_is_not_signalled(self, tmp_path):
-        handle = FakeProcessHandle(returncode=0)
-        lanes, repo_root = self.lane_runner(tmp_path, handle)
+        launcher = FakeJobLauncher(tmp_path)
+        lanes, repo_root = self.lane_runner(tmp_path, launcher)
         job_id = lanes.start(UNIT_A, repo_root=repo_root, install_from="local")
+        launcher.finish(job_id)
 
         killed = lanes.kill(job_id)
 
         assert killed is False
-        assert handle.terminated is False
+        assert launcher.signalled == []
+
+    def test_a_running_job_has_no_result_yet(self, tmp_path):
+        launcher = FakeJobLauncher(tmp_path)
+        lanes, repo_root = self.lane_runner(tmp_path, launcher)
+        job_id = lanes.start(UNIT_A, repo_root=repo_root, install_from="local")
+
+        assert lanes.poll(job_id) is None
+
+    def test_an_ended_job_reports_how_it_ended(self, tmp_path):
+        launcher = FakeJobLauncher(tmp_path)
+        lanes, repo_root = self.lane_runner(tmp_path, launcher)
+        job_id = lanes.start(UNIT_A, repo_root=repo_root, install_from="local")
+        launcher.crash(job_id)
+
+        result = lanes.poll(job_id)
+
+        assert result["status"] == "interrupted"

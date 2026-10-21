@@ -12,8 +12,8 @@ from behave_mcp.domain.jobs import (
     ScenarioCombos,
     UnitMatch,
     build_command,
-    classify_job_state,
     job_matches_result_filters,
+    job_state,
     match_unit,
     validate_install_from,
     validate_machine_type,
@@ -43,6 +43,7 @@ from behave_mcp.messages import (
     DescribeFeatureResponse,
     ErrorsResponse,
     FindScenariosResponse,
+    InterruptedResponse,
     JobExit,
     JobRecord,
     JobResult,
@@ -67,13 +68,11 @@ from behave_mcp.messages import (
 )
 from behave_mcp.ports import (
     FeatureFileReader,
-    Job,
-    JobRegistry,
+    JobLauncher,
     JobResultStore,
     JobResultStoreFactory,
-    LogFileOpenError,
-    ProcessLauncher,
-    ProcessStartError,
+    JobStartError,
+    LanePool,
     Workspace,
 )
 from behave_mcp.views import (
@@ -97,8 +96,7 @@ class BehaveServiceError(Exception):
 
 
 class UnknownJobError(BehaveServiceError):
-    """Raised when a job_id isn't in the registry and can't be recovered
-    from disk."""
+    """Raised when no job with this id was ever launched."""
 
     def __init__(self, job_id: str) -> None:
         super().__init__(
@@ -121,8 +119,8 @@ class BehaveService:
         settings: Settings,
         feature_reader: FeatureFileReader,
         results: JobResultStoreFactory,
-        registry: JobRegistry,
-        launcher: ProcessLauncher,
+        lanes: LanePool,
+        launcher: JobLauncher,
         monotonic: Callable[[], float],
         sleep: Callable[[float], None],
         now_utc: Callable[[], str],
@@ -132,7 +130,7 @@ class BehaveService:
         self._settings = settings
         self._feature_reader = feature_reader
         self._results = results
-        self._registry = registry
+        self._lanes = lanes
         self._launcher = launcher
         self._monotonic = monotonic
         self._sleep = sleep
@@ -357,41 +355,26 @@ class BehaveService:
 
         repo_state = self._workspace.repo_state(resolved_repo_root)
 
-        log_dir = self._log_dir()
-        results = self._results.bind(log_dir)
-        job_id = self._new_job_id()
-
-        pools = frozenset({POOL_OF[machine_type]})
-        reserved_job = Job(
-            job_id=job_id,
-            process_handle=None,
-            log_dir=log_dir,
-            reserved=True,
-            pools=pools,
-        )
-        reservation = self._registry.try_reserve(
-            reserved_job, self._settings.pool_limits
-        )
-        if not reservation.reserved:
-            names = ", ".join(str(usage.pool) for usage in reservation.full)
-            env_vars = ", ".join(
-                POOL_LIMIT_ENV_VARS[usage.pool] for usage in reservation.full
-            )
+        results = self._results.bind(self._log_dir())
+        pool = POOL_OF[machine_type]
+        limit = self._settings.pool_limits.get(pool, 0)
+        lease = self._lanes.take(pool, limit)
+        if lease is None:
             return CapacityExceededResponse(
                 error=(
-                    f"No room in the {names} pool. Wait for an active job "
-                    f"to complete, or raise {env_vars}."
+                    f"No room in the {pool} pool. Wait for an active job "
+                    f"to complete, or raise {POOL_LIMIT_ENV_VARS[pool]}."
                 ),
                 full_pools=[
                     PoolCapacity(
-                        pool=usage.pool.value,
-                        limit=usage.limit,
-                        running=usage.running,
+                        pool=pool.value,
+                        limit=limit,
+                        running=self._lanes.busy(pool, limit),
                     )
-                    for usage in reservation.full
                 ],
             )
 
+        job_id = self._new_job_id()
         write_targets = results.write_targets(job_id)
         command = build_command(
             feature_file,
@@ -403,37 +386,9 @@ class BehaveService:
         env = self._workspace.subprocess_env()
         env[INSTALL_FROM_ENV_VAR] = install_from
 
-        try:
-            handle = self._launcher.launch(
-                command,
-                str(resolved_repo_root),
-                env,
-                write_targets.stdout_log,
-            )
-        except LogFileOpenError as exc:
-            self._registry.release(job_id)
-            raise BehaveServiceError(
-                f"Failed to open log file for job_id {job_id}: {exc}"
-            ) from exc
-        except ProcessStartError as exc:
-            self._registry.release(job_id)
-            raise BehaveServiceError(
-                f"Failed to start behave scenario: {exc}"
-            ) from exc
-
-        self._registry.register(
-            job_id,
-            Job(
-                job_id=job_id,
-                process_handle=handle,
-                log_dir=log_dir,
-                reserved=False,
-                pid=handle.pid,
-                pools=pools,
-            ),
-        )
-
         artifacts = results.artifacts(job_id)
+        # Written before the wrapper exists, so a launch that dies part way
+        # reads as an interrupted job rather than as no job at all.
         results.write_record(
             job_id,
             JobRecord(
@@ -447,10 +402,17 @@ class BehaveService:
                 command=command,
                 repo_root=str(resolved_repo_root),
                 repo_state=repo_state,
-                pid=handle.pid,
                 artifacts=artifacts,
             ),
         )
+        try:
+            self._launcher.launch(
+                job_id, command, str(resolved_repo_root), env, lease
+            )
+        except JobStartError as exc:
+            raise BehaveServiceError(
+                f"Failed to start behave scenario: {exc}"
+            ) from exc
 
         return StartScenarioResponse(
             job_id=job_id,
@@ -502,45 +464,29 @@ class BehaveService:
         raise BehaveServiceError(refusals[match])
 
     def kill_job(self, job_id: str) -> KillJobResponse:
-        """Terminate a running job.
+        """Stop a running job, from any process.
 
-        For a lane that has hung: the campaign's next tick sees the job
-        finish and records the unit, rather than waiting on it forever.
-        A job recovered from disk has no handle in this process, so there
-        is nothing here to signal -- that is reported, not raised.
+        The job's wrapper passes the signal to tox and waits for it, so the
+        job ends and records its exit as killed. A campaign's next tick then
+        records the unit, rather than waiting on it forever.
         """
-        job = self._registry.get(job_id)
-        if job is None:
-            try:
-                job = self._recover_job(job_id)
-            except ValueError as exc:
-                raise BehaveServiceError(str(exc)) from exc
-            if job is None:
-                raise UnknownJobError(job_id)
-
-        handle = job.process_handle
-        if handle is None:
+        results = self._known(job_id)
+        state = self._state(job_id, results)
+        if state == RunStatus.COMPLETED:
+            message = "Job had already finished."
+        elif state == RunStatus.INTERRUPTED:
+            message = "Job is not running: its wrapper is gone."
+        elif self._launcher.signal(job_id):
             return KillJobResponse(
-                job_id=job_id,
-                killed=False,
-                message=(
-                    "No live handle for this job in this server process; "
-                    "it was started before a restart, or has finished."
-                ),
+                job_id=job_id, killed=True, message="Termination signalled."
             )
-        if handle.poll() is not None:
-            return KillJobResponse(
-                job_id=job_id,
-                killed=False,
-                message="Job had already finished.",
-            )
+        else:
+            message = "Job's wrapper could not be signalled."
+        return KillJobResponse(job_id=job_id, killed=False, message=message)
 
-        handle.terminate()
-        return KillJobResponse(
-            job_id=job_id, killed=True, message="Termination signalled."
-        )
-
-    def job_status(self, job_id: str) -> RunningResponse | CompletedResponse:
+    def job_status(
+        self, job_id: str
+    ) -> RunningResponse | CompletedResponse | InterruptedResponse:
         """Return a job's current state without waiting.
 
         ``wait_for_completion`` requires a positive timeout, so this is what
@@ -567,7 +513,7 @@ class BehaveService:
         while True:
             payload = self._status_payload(job_id)
 
-            if isinstance(payload, CompletedResponse):
+            if not isinstance(payload, RunningResponse):
                 return payload
 
             if self._monotonic() >= deadline:
@@ -605,16 +551,7 @@ class BehaveService:
         lines = min(lines, MAX_LOG_LINES)
         context = min(context, MAX_LOG_CONTEXT)
 
-        job = self._registry.get(job_id)
-        if job is None:
-            try:
-                job = self._recover_job(job_id)
-            except ValueError as exc:
-                raise BehaveServiceError(str(exc)) from exc
-            if job is None:
-                raise UnknownJobError(job_id)
-
-        results = self._results.bind(job.log_dir)
+        results = self._known(job_id)
         if not results.exists(job_id).stdout_log:
             raise BehaveServiceError(
                 f"No log file exists for job_id: {job_id}"
@@ -644,16 +581,7 @@ class BehaveService:
         )
 
     def get_errors(self, job_id: str) -> ErrorsResponse:
-        job = self._registry.get(job_id)
-        if job is None:
-            try:
-                job = self._recover_job(job_id)
-            except ValueError as exc:
-                raise BehaveServiceError(str(exc)) from exc
-            if job is None:
-                raise UnknownJobError(job_id)
-
-        results = self._results.bind(job.log_dir)
+        results = self._known(job_id)
         if not results.exists(job_id).stdout_log:
             raise BehaveServiceError(
                 f"No log file exists for job_id: {job_id}"
@@ -694,16 +622,7 @@ class BehaveService:
         )
 
     def get_artifacts(self, job_id: str) -> ArtifactsResponse:
-        job = self._registry.get(job_id)
-        if job is None:
-            try:
-                job = self._recover_job(job_id)
-            except ValueError as exc:
-                raise BehaveServiceError(str(exc)) from exc
-            if job is None:
-                raise UnknownJobError(job_id)
-
-        results = self._results.bind(job.log_dir)
+        results = self._known(job_id)
         return ArtifactsResponse(
             job_id=job_id,
             artifacts=results.artifacts(job_id),
@@ -721,42 +640,16 @@ class BehaveService:
             )
         limit_clamped = limit > MAX_JOB_LIST_LIMIT
         limit = min(limit, MAX_JOB_LIST_LIMIT)
-        log_dir = self._log_dir()
-        results = self._results.bind(log_dir)
+        results = self._results.bind(self._log_dir())
 
-        in_memory_jobs = {job.job_id: job for job in self._registry.snapshot()}
-        disk_job_ids = set(results.list_job_ids())
-        disk_only_ids = disk_job_ids - set(in_memory_jobs)
-
-        summaries: list[JobSummary] = []
-        for job_id in sorted(set(in_memory_jobs) | disk_job_ids):
-            job = in_memory_jobs.get(job_id)
-            recovered = job is None
-            if job is None:
-                job = self._recover_job(job_id)
-                if job is None:
-                    continue
-            summary = self._job_summary(job_id, job)
-            if recovered:
-                logger.info(
-                    "recovered job %s -> status=%s ok=%s",
-                    job_id,
-                    summary.status,
-                    summary.ok,
-                )
-            summaries.append(summary)
-
+        summaries = [
+            self._job_summary(job_id, results)
+            for job_id in results.list_job_ids()
+        ]
         summaries.sort(key=lambda summary: summary.started_at or "")
         running = [s for s in summaries if s.status == RunStatus.RUNNING]
         others = [s for s in summaries if s.status != RunStatus.RUNNING]
         trimmed = running + others[-limit:]
-
-        logger.info(
-            "listing jobs: %d in-memory, %d disk-only, %d total returned",
-            len(in_memory_jobs),
-            len(disk_only_ids),
-            len(trimmed),
-        )
 
         return ListScenarioJobsResponse(
             jobs=trimmed,
@@ -799,18 +692,10 @@ class BehaveService:
         limit_clamped = limit > MAX_RESULTS_LIMIT
         limit = min(limit, MAX_RESULTS_LIMIT)
 
-        log_dir = self._log_dir()
-        results = self._results.bind(log_dir)
-        in_memory_jobs = {job.job_id: job for job in self._registry.snapshot()}
-        disk_job_ids = set(results.list_job_ids())
+        results = self._results.bind(self._log_dir())
 
-        matched: list[tuple[str, JobSummary, Job]] = []
-        for job_id in sorted(set(in_memory_jobs) | disk_job_ids):
-            job = in_memory_jobs.get(job_id)
-            if job is None:
-                job = self._recover_job(job_id)
-                if job is None:
-                    continue
+        matched: list[tuple[str, JobSummary]] = []
+        for job_id in results.list_job_ids():
             if not job_matches_result_filters(
                 results.read_record(job_id),
                 job_id=job_id,
@@ -821,16 +706,16 @@ class BehaveService:
                 machine_type=machine_type or None,
             ):
                 continue
-            summary = self._job_summary(job_id, job)
+            summary = self._job_summary(job_id, results)
             if status_filter is not None and summary.status != status_filter:
                 continue
-            matched.append((job_id, summary, job))
+            matched.append((job_id, summary))
 
         matched.sort(key=lambda item: item[1].started_at or "", reverse=True)
         return ResultsResponse(
             results=[
-                self._job_result(job_id, summary, job)
-                for job_id, summary, job in matched[:limit]
+                self._job_result(job_id, summary, results)
+                for job_id, summary in matched[:limit]
             ],
             total=len(matched),
             truncated=len(matched) > limit,
@@ -838,11 +723,11 @@ class BehaveService:
         )
 
     def _job_result(
-        self, job_id: str, summary: JobSummary, job: Job
+        self, job_id: str, summary: JobSummary, results: JobResultStore
     ) -> JobResult:
         report = None
         if summary.status == RunStatus.COMPLETED:
-            report_data = self._results.bind(job.log_dir).read_report(job_id)
+            report_data = results.read_report(job_id)
             if report_data is not None:
                 report = summarize_report(report_data)
         return JobResult(
@@ -857,50 +742,19 @@ class BehaveService:
             failures=[] if report is None else report.failures,
         )
 
-    def _job_summary(self, job_id: str, job: Job) -> JobSummary:
-        results = self._results.bind(job.log_dir)
+    def _job_summary(self, job_id: str, results: JobResultStore) -> JobSummary:
         record = results.read_record(job_id)
-
-        if job.reserved:
-            status, ok, returncode = RunStatus.RUNNING, None, None
-        else:
-            handle = job.process_handle
-            returncode = handle.poll() if handle is not None else None
-            report_data = None
-            if handle is None or returncode is not None:
-                report_data = results.read_report(job_id)
-            report = (
-                summarize_report(report_data)
-                if report_data is not None
-                else None
-            )
-            report_ok = None if report is None else not report.failures
-
-            pid = job.pid if job.pid is not None else record.pid
-            pid_alive = False
-            if handle is None and pid is not None:
-                pid_alive = self._launcher.is_pid_alive(pid)
-
-            classification = classify_job_state(
-                has_live_handle=handle is not None,
-                returncode=returncode,
-                report_present=report is not None,
-                report_ok=report_ok,
-                pid=pid,
-                pid_alive=pid_alive,
-            )
-            status, ok = classification.status, classification.ok
-            if status == RunStatus.COMPLETED:
-                self._record_completion(
-                    job_id, results, returncode=returncode, ok=bool(ok)
-                )
         exit = results.read_exit(job_id)
-
+        status = self._state(job_id, results, exit)
         return JobSummary(
             job_id=job_id,
             status=status,
-            ok=ok,
-            returncode=returncode,
+            ok=(
+                exit.ok
+                if exit is not None
+                else (None if status == RunStatus.RUNNING else False)
+            ),
+            returncode=exit.returncode if exit is not None else None,
             feature_file=record.feature_file,
             scenario_name=record.scenario_name,
             release=record.release,
@@ -912,88 +766,44 @@ class BehaveService:
 
     def _status_payload(
         self, job_id: str
-    ) -> RunningResponse | CompletedResponse:
-        job = self._registry.get(job_id)
-        recovered = job is None
-        if job is None:
-            try:
-                job = self._recover_job(job_id)
-            except ValueError as exc:
-                raise BehaveServiceError(str(exc)) from exc
-            if job is None:
-                raise UnknownJobError(job_id)
+    ) -> RunningResponse | CompletedResponse | InterruptedResponse:
+        results = self._known(job_id)
+        exit = results.read_exit(job_id)
+        state = self._state(job_id, results, exit)
+        artifacts = results.artifacts(job_id)
 
-        handle = job.process_handle
-        results = self._results.bind(job.log_dir)
-
-        returncode = handle.poll() if handle is not None else None
-        if handle is not None and returncode is None:
+        if state == RunStatus.RUNNING:
             return RunningResponse(
                 job_id=job_id,
                 recent_output=results.log_tail(
                     job_id, DEFAULT_RUNNING_TAIL_LINES
                 ),
-                artifacts=results.artifacts(job_id),
+                artifacts=artifacts,
             )
 
-        if handle is not None:
-            handle.close()
+        record = results.read_record(job_id)
+        if exit is None:
+            return InterruptedResponse(
+                job_id=job_id,
+                artifacts=artifacts,
+                recent_output=results.log_tail(
+                    job_id, DEFAULT_RUNNING_TAIL_LINES
+                ),
+                feature_file=record.feature_file,
+                scenario_name=record.scenario_name,
+                release=record.release,
+                machine_type=record.machine_type,
+            )
 
         report_data = results.read_report(job_id)
         report = (
             summarize_report(report_data) if report_data is not None else None
         )
-        report_ok = None if report is None else not report.failures
-
-        pid_alive = False
-        if handle is None and job.pid is not None:
-            pid_alive = self._launcher.is_pid_alive(job.pid)
-
-        classification = classify_job_state(
-            has_live_handle=handle is not None,
-            returncode=returncode,
-            report_present=report is not None,
-            report_ok=report_ok,
-            pid=job.pid,
-            pid_alive=pid_alive,
-        )
-
-        if recovered:
-            logger.info(
-                "reattached job %s -> status=%s reason=%s pid=%s",
-                job_id,
-                classification.status,
-                classification.reason,
-                job.pid,
-            )
-
-        if classification.status == RunStatus.RUNNING:
-            return RunningResponse(
-                job_id=job_id,
-                recent_output=results.log_tail(
-                    job_id, DEFAULT_RUNNING_TAIL_LINES
-                ),
-                artifacts=results.artifacts(job_id),
-            )
-
-        # The first exit seen is the one recorded, so every later look
-        # reports the same outcome.
-        exit = self._record_completion(
-            job_id,
-            results,
-            returncode=returncode,
-            ok=bool(classification.ok),
-        )
-        record = results.read_record(job_id)
         return CompletedResponse(
             ok=exit.ok,
             job_id=job_id,
             returncode=exit.returncode,
-            artifacts=results.artifacts(job_id),
-            feature_file=record.feature_file,
-            scenario_name=record.scenario_name,
-            release=record.release,
-            machine_type=record.machine_type,
+            artifacts=artifacts,
             summary=None if report is None else report.summary,
             failures=[] if report is None else report.failures,
             recent_output=(
@@ -1001,22 +811,30 @@ class BehaveService:
                 if report is None
                 else None
             ),
+            feature_file=record.feature_file,
+            scenario_name=record.scenario_name,
+            release=record.release,
+            machine_type=record.machine_type,
         )
 
-    def _record_completion(
+    def _known(self, job_id: str) -> JobResultStore:
+        """The store holding ``job_id``, which must have been launched."""
+        results = self._results.bind(self._log_dir())
+        if not results.exists(job_id).record:
+            raise UnknownJobError(job_id)
+        return results
+
+    def _state(
         self,
         job_id: str,
         results: JobResultStore,
-        *,
-        returncode: int | None,
-        ok: bool,
-    ) -> JobExit:
-        """Write a job's exit the first time it is seen finished."""
-        return results.write_exit(
-            job_id,
-            JobExit(
-                completed_at=self._now_utc(), returncode=returncode, ok=ok
-            ),
+        exit: JobExit | None = None,
+    ) -> RunStatus:
+        if exit is None:
+            exit = results.read_exit(job_id)
+        return job_state(
+            exited=exit is not None,
+            lock_held=exit is None and self._launcher.is_running(job_id),
         )
 
     def _log_dir(self) -> Path:
@@ -1024,35 +842,3 @@ class BehaveService:
             return self._workspace.resolve_log_dir()
         except ValueError as exc:
             raise BehaveServiceError(str(exc)) from exc
-
-    def _recover_job(self, job_id: str) -> Job | None:
-        log_dir = self._log_dir()
-        results = self._results.bind(log_dir)
-        exists = results.exists(job_id)
-        if not (exists.record or exists.stdout_log or exists.json_report):
-            logger.warning(
-                "job %s not tracked in memory and no disk artifacts found "
-                "under %s",
-                job_id,
-                log_dir,
-            )
-            return None
-
-        logger.info(
-            "job %s not tracked in memory; recovering from disk artifacts "
-            "under %s",
-            job_id,
-            log_dir,
-        )
-        metadata_record = results.read_record(job_id)
-        job = Job(
-            job_id=job_id,
-            process_handle=None,
-            log_dir=log_dir,
-            reserved=False,
-            pid=metadata_record.pid,
-        )
-        # Cache the recovery so later calls in this process hit the
-        # registry instead of re-reading disk and re-logging every poll.
-        self._registry.register(job_id, job)
-        return job

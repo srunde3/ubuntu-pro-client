@@ -42,13 +42,13 @@ Write one test per behaviour, or a table when the behaviours are cases of one ru
 
 A value that matters to the test gets a name that says why it is there. A value that does not matter gets a name that says so. A reader then never has to guess whether `2` is a count, an id or a coincidence.
 
-Good: the name says the exact pid is irrelevant, and the id comes from the arrangement.
+Good: the name says the exact value is irrelevant, and the id comes from the arrangement.
 
 ```python
-# Any pid: classify_job_state cares only whether one was recorded.
-RECORDED_PID = 4321
+# Any count: the test is about the limit, not the number.
+SHOWN = 2
 
-_signals(pid=RECORDED_PID, alive=True)
+result = service.get_results(limit=SHOWN)
 ```
 
 ```python
@@ -63,10 +63,10 @@ JOB_ID = "job-under-test"
 OTHER_JOB_ID = "job-from-another-run"
 ```
 
-Bad: bare literals. Is `123` a special pid? Which of `"1"` and `"2"` is the job under test?
+Bad: bare literals. Is `2` special? Which of `"1"` and `"2"` is the job under test?
 
 ```python
-_signals(pid=123)
+service.get_results(limit=2)
 service.get_results(job_ids=["1"])
 assert [r.job_id for r in results] == ["1", "2"]
 ```
@@ -161,11 +161,20 @@ Adapter tests check the effect an adapter has on the outside world: the file it 
 Good: the behaviour itself is observed.
 
 ```python
-handle = PopenLauncher().launch(
-    ["sh", "-c", "read line; echo got=$line"], str(tmp_path), env, log_path
-)
-assert _eventually(lambda: handle.poll() is not None)
-assert log_path.read_text().strip() == "got="
+_launch(tmp_path, lanes, launcher, "job", ["sh", "-c", "read line; echo got=$line"])
+
+assert _eventually(lambda: _exit(tmp_path, "job") is not None)
+assert log.read_text().strip() == "got="
+```
+
+Good: a crash shown with a real crash. The wrapper is killed outright, and the test observes what is left: no exit, a free lock and lane, and no orphaned child.
+
+```python
+os.kill(wrapper, signal.SIGKILL)
+
+assert _eventually(lambda: not launcher.is_running("job"))
+assert _exit(tmp_path, "job") is None
+assert _eventually(lambda: not _pid_alive(child))
 ```
 
 Weak on its own: asserting the arguments passed to a patched `Popen`. It proves the call, not that the child really reads no stdin. Keep such a test only alongside one that observes the effect.
@@ -176,34 +185,36 @@ assert calls["stdin"] == subprocess.DEVNULL
 
 ## On-disk formats
 
-Golden tests pin the exact bytes of job records and index rows. A failure means the format changed. Update the expected bytes only when the change is deliberate.
+Golden tests pin the exact bytes of job records and exits. A failure means the format changed. Update the expected bytes only when the change is deliberate.
 
 ## Fakes, not mocks
 
 A fake is a small working implementation of a port. It behaves like the real thing in the ways the test needs, records what it was asked, and fails loudly on anything else. A mock accepts every call and returns another mock, so a test built on one passes even when the code calls the wrong method or passes the wrong shape.
 
-Good: a fake with the port's real signature, which records calls and returns a real-looking handle.
+Good: a fake with the port's real signature, which records calls and behaves like the real thing where the service can tell: a job runs until the test ends it, and ending it writes the exit the way the wrapper does.
 
 ```python
-class FakeLauncher:
-    def __init__(self, handle=None, error=None, alive_pids=None):
-        self.calls = []
-        self._handle = handle if handle is not None else FakeProcessHandle()
-        self._error = error
-        self._alive_pids = set(alive_pids) if alive_pids else set()
-
-    def launch(self, command, cwd, env, stdout_log_path):
-        self.calls.append({"command": command, "cwd": cwd, "env": env, ...})
+class FakeJobLauncher:
+    def launch(self, job_id, command, cwd, env, lease):
+        self.calls.append({"job_id": job_id, "command": command, ...})
+        lease.close()
         if self._error is not None:
+            lease.release()
             raise self._error
-        return self._handle
+        self.running.add(job_id)
+
+    def is_running(self, job_id):
+        return job_id in self.running
+
+    def finish(self, job_id, returncode=0, killed=False, log="", report=None):
+        ...  # writes the log, the report, then status.json
 ```
 
-Bad: a mock standing in for the port. A typo in `launch`, or a handle method the code never had, still passes.
+Bad: a mock standing in for the port. A typo in `launch`, or a method the port never had, still passes.
 
 ```python
 launcher = MagicMock()
-launcher.launch.return_value.poll.return_value = None
+launcher.is_running.return_value = True
 service.start_scenario(
     "features/cli/attach.feature", "Attach command", "jammy", "lxd-container"
 )
@@ -268,28 +279,30 @@ def test_campaign_state_names_a_reachable_combination(intent_, progress_, busy):
 Good: a decision function whose result is an enum. Name each case with `pytest.param(..., id=...)`, and check that the cases reach every result.
 
 ```python
-CASES = [
+UNIT_MATCH_CASES = [
     pytest.param(
-        dict(has_live_handle=True, returncode=None),
-        (RunStatus.RUNNING, None, ClassifyReason.LIVE_HANDLE_RUNNING),
-        id="live-running",
+        [(SCENARIO, {JAMMY_LXD})], UnitMatch.FOUND, id="one-scenario"
     ),
     pytest.param(
-        dict(pid=RECORDED_PID, pid_alive=False),
-        (RunStatus.UNKNOWN, False, ClassifyReason.PID_DEAD_NO_REPORT),
-        id="pid-dead",
+        [(SCENARIO, {NOBLE_VM})],
+        UnitMatch.NOT_ON_COMBO,
+        id="not-on-this-combo",
     ),
-    # ... one case for every reason
+    # ... one case for every result
 ]
 
 
-def test_every_reason_is_reached_by_a_case():
-    assert {case.values[1][2] for case in CASES} == set(ClassifyReason)
+def test_every_unit_match_is_reached_by_a_case():
+    assert {case.values[1] for case in UNIT_MATCH_CASES} == set(UnitMatch)
 
 
-@pytest.mark.parametrize("signals, expected", CASES)
-def test_classify_job_state(signals, expected):
-    assert tuple(classify_job_state(**{**DEFAULTS, **signals})) == expected
+@pytest.mark.parametrize("scenarios, expected", UNIT_MATCH_CASES)
+def test_match_unit(scenarios, expected):
+    release, machine_type = JAMMY_LXD
+
+    match = match_unit(scenarios, SCENARIO, release, machine_type)
+
+    assert match == expected
 ```
 
 Weak: a hand-written list of cases. It may cover every member today, but nothing fails when a member is added.

@@ -41,13 +41,14 @@ from behave_campaign.repo import repo_state as read_repo_state
 from behave_campaign.runner import CampaignRunner
 from behave_campaign.service import CampaignService
 from behave_mcp.adapters import (
-    InMemoryJobRegistry,
+    FileLanePool,
     LocalFeatureFileReader,
     LocalJobResultStoreFactory,
     LocalWorkspace,
-    PopenLauncher,
+    LockedJobLauncher,
 )
 from behave_mcp.config import ConfigError, Settings, load_settings
+from behave_mcp.domain import layout
 from behave_mcp.domain.jobs import InstallFrom
 from behave_mcp.domain.limits import (
     DEFAULT_FIND_LIMIT,
@@ -73,7 +74,6 @@ from behave_mcp.messages import (
     StartScenarioResult,
     WaitForCompletionResult,
 )
-from behave_mcp.ports import JobRegistry
 from behave_mcp.service import BehaveService
 
 try:
@@ -203,17 +203,22 @@ def _utc_timestamp() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def create_service(
-    settings: Settings, *, registry: JobRegistry
-) -> BehaveService:
-    """Wire the production adapters into a ``BehaveService``."""
+def create_service(settings: Settings) -> BehaveService:
+    """Wire the production adapters into a ``BehaveService``.
+
+    The lanes and jobs live in the server's state directory, resolved per
+    call: nothing about a job is held in this process.
+    """
+    workspace = LocalWorkspace()
     return BehaveService(
-        workspace=LocalWorkspace(),
+        workspace=workspace,
         settings=settings,
         feature_reader=LocalFeatureFileReader(),
         results=LocalJobResultStoreFactory(),
-        registry=registry,
-        launcher=PopenLauncher(),
+        lanes=FileLanePool(
+            lambda: layout.lanes_dir(workspace.resolve_state_dir())
+        ),
+        launcher=LockedJobLauncher(workspace.resolve_log_dir),
         monotonic=time.monotonic,
         sleep=time.sleep,
         now_utc=_utc_timestamp,
@@ -221,8 +226,7 @@ def create_service(
     )
 
 
-registry = InMemoryJobRegistry()
-_service = create_service(_settings, registry=registry)
+_service = create_service(_settings)
 _workspace = LocalWorkspace()
 # The runner holds the run lock and the ticker for the active campaign, so
 # unlike the per-call service there is exactly one for the server's lifetime.
@@ -435,8 +439,8 @@ def start_scenario(
     description=(
         "List behave jobs. Returns every currently active job plus a "
         "bounded window of recently completed ones (most recent first, "
-        "capped at limit), merging in-memory state with jobs recovered "
-        "from disk (e.g. after a server restart). total_completed is the "
+        "capped at limit), read off disk, so jobs started by another "
+        "process or before a restart are listed too. total_completed is the "
         "full completed-job count regardless of limit, and truncated is "
         "set when older completed jobs were dropped to fit. limit must be "
         "positive (rejected otherwise); values above the server max are "
@@ -466,7 +470,7 @@ def list_scenario_jobs(
         "One result per job, most recently started first, the same shape "
         "wait_for_scenario_completion returns for one job. Filter by "
         "job_ids, feature_file, scenario_name (substring), release, "
-        "machine_type and status (running, completed, unknown); limit "
+        "machine_type and status (running, completed, interrupted); limit "
         "caps the jobs listed, with total and truncated alongside. For "
         "the cause behind an empty error_message, get_scenario_errors."
     )
@@ -494,7 +498,7 @@ def get_scenario_results(
         Field(
             default="",
             description="Only jobs with this status: running, completed "
-            "or unknown.",
+            "or interrupted.",
         ),
     ] = "",
     limit: Annotated[
@@ -520,9 +524,11 @@ def get_scenario_results(
 
 @tool(
     description=(
-        "Wait for a running behave job to complete by polling internally. "
+        "Wait for a running behave job to end by polling internally. "
         "job_id must come from start_scenario or list_scenario_jobs. "
-        "Returns a compact structured summary on completion, or a timeout "
+        "Returns a compact structured summary on completion; status "
+        "interrupted with recent output when the job's wrapper died "
+        "without recording an exit (a crash or a reboot); or a timeout "
         "payload with recent output if the wait limit is reached."
     )
 )
@@ -1004,11 +1010,11 @@ def retry_units(
 
 @tool(
     description=(
-        "Terminate a running behave job. Use it for a job that has hung: a "
-        "campaign's next tick then sees it finish and records the unit as "
-        "errored, rather than holding the lane open. killed is false when "
-        "there was nothing to stop, which includes a job started before a "
-        "server restart, since no handle on it survives."
+        "Terminate a running behave job, whichever process started it. Use "
+        "it for a job that has hung: tox is stopped and allowed to clean "
+        "up, and the job records its exit as killed; a campaign's next "
+        "tick then records the unit, rather than holding the lane open. "
+        "killed is false when there was nothing to stop."
     )
 )
 def kill_job(job_id: JobId) -> KillJobResponse:

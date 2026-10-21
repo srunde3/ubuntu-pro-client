@@ -20,6 +20,7 @@ from typing import Callable, Sequence
 
 from behave_campaign.domain.records import (
     PROBLEM_OUTCOMES,
+    AttemptFinished,
     AttemptInterrupted,
     AttemptStarted,
     CampaignError,
@@ -263,7 +264,11 @@ class CampaignRunner:
             records=records, lanes=lanes, lane_limits=header.lanes, at=at
         )
         self._store.append(campaign_id, plan.record)
-        problems = [item.problem for item in plan.record if item.problem]
+        problems = [
+            item.problem
+            for item in plan.record
+            if isinstance(item, AttemptFinished) and item.problem
+        ]
 
         started, refused = self._open_lanes(
             campaign_id, header, plan.start, problems

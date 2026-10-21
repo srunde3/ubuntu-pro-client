@@ -1,24 +1,23 @@
 """Golden byte-shape tests for the serializers used by the behave MCP server.
 
-These guard the exact on-disk output produced for job metadata and the
-per-log-dir index, plus the JSON key ordering of tool response payloads.
+These guard the exact on-disk bytes of a job's record and exit, plus the
+JSON key ordering of tool response payloads.
 """
 
 import json
 
 from behave_mcp.adapters import (
-    InMemoryJobRegistry,
     LocalFeatureFileReader,
+    LocalJobResultStore,
     LocalJobResultStoreFactory,
 )
 from behave_mcp.config import Settings
 from behave_mcp.domain.pools import DEFAULT_POOL_LIMITS
 from behave_mcp.messages import JobExit, JobRecord
-from behave_mcp.ports import Job
 from behave_mcp.service import BehaveService
 from tests.conftest import (
-    FakeLauncher,
-    FakeProcessHandle,
+    FakeJobLauncher,
+    FakeLanePool,
     FakeWorkspace,
     job_file,
 )
@@ -36,7 +35,6 @@ def test_write_record_byte_shape(tmp_path):
         '  "install_from": "",\n'
         '  "job_id": "jobshape",\n'
         '  "machine_type": "",\n'
-        '  "pid": null,\n'
         '  "release": "",\n'
         '  "repo_root": "",\n'
         '  "repo_state": null,\n'
@@ -56,6 +54,8 @@ def test_write_exit_byte_shape(tmp_path):
     expected = (
         "{\n"
         '  "completed_at": "T1",\n'
+        '  "error": "",\n'
+        '  "killed": false,\n'
         '  "ok": true,\n'
         '  "returncode": 0\n'
         "}\n"
@@ -71,34 +71,32 @@ _SETTINGS = Settings(
 )
 
 
-def _service(tmp_path, registry) -> BehaveService:
+def _service(tmp_path, launcher, monotonic=lambda: 0.0) -> BehaveService:
     return BehaveService(
         workspace=FakeWorkspace(repo_root=tmp_path, log_dir=tmp_path),
         settings=_SETTINGS,
         feature_reader=LocalFeatureFileReader(),
         results=LocalJobResultStoreFactory(),
-        registry=registry,
-        launcher=FakeLauncher(),
-        monotonic=lambda: 0.0,
+        lanes=FakeLanePool(),
+        launcher=launcher,
+        monotonic=monotonic,
         sleep=lambda seconds: None,
         now_utc=lambda: "T0",
         new_job_id=lambda: "job0001",
     )
 
 
-def _register(registry, tmp_path, job_id, handle):
-    registry.register(
-        job_id,
-        Job(
-            job_id=job_id,
-            process_handle=handle,
-            log_dir=tmp_path,
-        ),
+def _launched(tmp_path, job_id):
+    """A job's record, as the service writes it at launch."""
+    LocalJobResultStore(tmp_path).write_record(
+        job_id, JobRecord(job_id=job_id)
     )
+    launcher = FakeJobLauncher(tmp_path)
+    launcher.running.add(job_id)
+    return launcher
 
 
 def test_completed_with_summary_key_order(tmp_path):
-    registry = InMemoryJobRegistry()
     job_id = "job0001"
     (job_file(tmp_path, job_id, "stdout.log")).write_text(
         "done\n", encoding="utf-8"
@@ -125,10 +123,11 @@ def test_completed_with_summary_key_order(tmp_path):
         ),
         encoding="utf-8",
     )
-    _register(registry, tmp_path, job_id, FakeProcessHandle(0))
+    launcher = _launched(tmp_path, job_id)
+    launcher.finish(job_id, returncode=0)
 
     payload = (
-        _service(tmp_path, registry)
+        _service(tmp_path, launcher)
         .wait_for_completion(
             job_id, max_wait_seconds=5, poll_interval_seconds=0.01
         )
@@ -153,15 +152,15 @@ def test_completed_with_summary_key_order(tmp_path):
 
 
 def test_completed_fallback_key_order(tmp_path):
-    registry = InMemoryJobRegistry()
     job_id = "job0001"
     (job_file(tmp_path, job_id, "stdout.log")).write_text(
         "boom\n", encoding="utf-8"
     )
-    _register(registry, tmp_path, job_id, FakeProcessHandle(2))
+    launcher = _launched(tmp_path, job_id)
+    launcher.finish(job_id, returncode=2)
 
     payload = (
-        _service(tmp_path, registry)
+        _service(tmp_path, launcher)
         .wait_for_completion(
             job_id, max_wait_seconds=5, poll_interval_seconds=0.01
         )
@@ -185,26 +184,14 @@ def test_completed_fallback_key_order(tmp_path):
 
 
 def test_timeout_key_order(tmp_path):
-    registry = InMemoryJobRegistry()
     job_id = "job0001"
     (job_file(tmp_path, job_id, "stdout.log")).write_text(
         "running\n", encoding="utf-8"
     )
-    _register(registry, tmp_path, job_id, FakeProcessHandle(None))
+    launcher = _launched(tmp_path, job_id)
 
     values = iter([0.0, 1.1])
-    service = BehaveService(
-        workspace=FakeWorkspace(repo_root=tmp_path, log_dir=tmp_path),
-        settings=_SETTINGS,
-        feature_reader=LocalFeatureFileReader(),
-        results=LocalJobResultStoreFactory(),
-        registry=registry,
-        launcher=FakeLauncher(),
-        monotonic=lambda: next(values),
-        sleep=lambda seconds: None,
-        now_utc=lambda: "T0",
-        new_job_id=lambda: job_id,
-    )
+    service = _service(tmp_path, launcher, monotonic=lambda: next(values))
 
     payload = service.wait_for_completion(
         job_id, max_wait_seconds=1, poll_interval_seconds=0.01

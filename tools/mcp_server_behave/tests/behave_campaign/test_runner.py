@@ -458,6 +458,23 @@ class TestTick:
 
         assert not runner.tick(CAMPAIGN).finished
 
+    def test_a_job_whose_wrapper_died_is_run_again(self, runner, store, lanes):
+        create(store, units=[UNITS[0]], lxd_lanes=1)
+        runner.run(CAMPAIGN)
+        runner.tick(CAMPAIGN)
+        lanes.results["job1"] = {
+            "status": "interrupted",
+            "ok": False,
+            "job_id": "job1",
+        }
+
+        report = runner.tick(CAMPAIGN)
+
+        (status,) = reduce_units(store.replay(CAMPAIGN))
+        assert status.attempts[0].interrupted
+        assert report.started == 1
+        assert lanes.started_units == [UNITS[0], UNITS[0]]
+
     def test_a_retried_pass_is_watched_until_its_job_ends(
         self, runner, store, lanes
     ):

@@ -3,7 +3,7 @@
 import re
 from enum import Enum
 from pathlib import Path
-from typing import Collection, Iterable, Mapping, NamedTuple
+from typing import Collection, Iterable, Mapping
 
 from behave_mcp.domain.pools import POOL_LIMIT_ENV_VARS, POOL_OF, Pool
 from behave_mcp.messages import JobRecord, RunStatus
@@ -104,74 +104,18 @@ def validate_install_from(install_from: str) -> str | None:
     return None
 
 
-class ClassifyReason(str, Enum):
-    """Machine-readable explanation for a ``classify_job_state`` outcome."""
+def job_state(*, exited: bool, lock_held: bool) -> RunStatus:
+    """A job's state from its files and its lock.
 
-    LIVE_HANDLE_RUNNING = "live_handle_running"
-    LIVE_HANDLE_EXITED = "live_handle_exited"
-    REPORT_PRESENT = "report_present"
-    PID_UNKNOWN_NO_REPORT = "pid_unknown_no_report"
-    PID_ALIVE_NO_REPORT = "pid_alive_no_report"
-    PID_DEAD_NO_REPORT = "pid_dead_no_report"
-
-
-class JobState(NamedTuple):
-    """Classification of a job's state from observable signals.
-
-    ``reason`` is a machine-readable explanation the service layer logs.
+    The wrapper holds the job lock for its whole life and writes the exit
+    before it lets go, so an exit decides; without one, a held lock means
+    the wrapper is alive, and a free one means it died without finishing.
     """
-
-    status: RunStatus
-    ok: bool | None
-    reason: ClassifyReason
-
-
-def classify_job_state(
-    *,
-    has_live_handle: bool,
-    returncode: int | None,
-    report_present: bool,
-    report_ok: bool | None,
-    pid: int | None,
-    pid_alive: bool,
-) -> JobState:
-    """Decide a job's status from process/report/pid signals.
-
-    No I/O happens here -- callers gather ``report_present``/``report_ok``
-    (from a parsed JSON report) and ``pid_alive`` (from a liveness probe)
-    beforehand, so this stays a plain, exhaustively unit-testable function.
-    """
-    if has_live_handle:
-        if returncode is None:
-            return JobState(
-                RunStatus.RUNNING, None, ClassifyReason.LIVE_HANDLE_RUNNING
-            )
-        return JobState(
-            RunStatus.COMPLETED,
-            returncode == 0,
-            ClassifyReason.LIVE_HANDLE_EXITED,
-        )
-
-    if report_present:
-        return JobState(
-            RunStatus.COMPLETED,
-            bool(report_ok),
-            ClassifyReason.REPORT_PRESENT,
-        )
-
-    if pid is None:
-        return JobState(
-            RunStatus.UNKNOWN, False, ClassifyReason.PID_UNKNOWN_NO_REPORT
-        )
-
-    if pid_alive:
-        return JobState(
-            RunStatus.RUNNING, None, ClassifyReason.PID_ALIVE_NO_REPORT
-        )
-
-    return JobState(
-        RunStatus.UNKNOWN, False, ClassifyReason.PID_DEAD_NO_REPORT
-    )
+    if exited:
+        return RunStatus.COMPLETED
+    if lock_held:
+        return RunStatus.RUNNING
+    return RunStatus.INTERRUPTED
 
 
 def exact_name_pattern(scenario_name: str) -> str:

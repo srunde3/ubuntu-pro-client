@@ -1,14 +1,21 @@
+import time
 from pathlib import Path
 
 import pytest
 from mcp.shared.memory import create_connected_server_and_client_session
 
-import behave_mcp.adapters as adapters_module
 import behave_mcp.server as server_module
+from behave_mcp.adapters import (
+    LocalFeatureFileReader,
+    LocalJobResultStoreFactory,
+    LocalWorkspace,
+)
 from behave_mcp.server import mcp
+from behave_mcp.service import BehaveService
 from tests.conftest import (
     UNIT_SCENARIO,
-    FakeProcess,
+    FakeJobLauncher,
+    FakeLanePool,
     make_repo_with_feature,
     result_error_text,
     result_json,
@@ -140,19 +147,50 @@ async def test_mcp_find_scenarios_matches_by_text(monkeypatch):
 REAL_UNIT_SCENARIO = "Attach command with json output"
 
 
+PASSING_REPORT = [
+    {
+        "name": "attach feature",
+        "elements": [
+            {
+                "name": "attach scenario",
+                "steps": [
+                    {"name": "do attach", "result": {"status": "passed"}}
+                ],
+            }
+        ],
+    }
+]
+
+
 @pytest.mark.asyncio
 async def test_mcp_start_wait_and_log_flow(monkeypatch, tmp_path):
     monkeypatch.setenv("UBUNTU_PRO_CLIENT_REPO", str(_REPO_ROOT))
     monkeypatch.setenv("MCP_STATE_DIR", str(tmp_path))
 
-    def fake_popen(command, cwd, env, stdout, stderr, text, **_):
-        report_path = Path(command[command.index("-o") + 1])
-        stdout.write("line1\nline2\nline3\n")
-        stdout.flush()
-        proc = FakeProcess(report_path=report_path)
-        return proc
-
-    monkeypatch.setattr(adapters_module.subprocess, "Popen", fake_popen)
+    # Real wiring but for the launcher: each job ends as soon as it starts,
+    # with a log and a passing report, as a real wrapper would leave them.
+    launcher = FakeJobLauncher(
+        tmp_path / "jobs",
+        finish_on_launch=dict(
+            log="line1\nline2\nline3\n", report=PASSING_REPORT
+        ),
+    )
+    monkeypatch.setattr(
+        server_module,
+        "_service",
+        BehaveService(
+            workspace=LocalWorkspace(),
+            settings=server_module._settings,
+            feature_reader=LocalFeatureFileReader(),
+            results=LocalJobResultStoreFactory(),
+            lanes=FakeLanePool(),
+            launcher=launcher,
+            monotonic=time.monotonic,
+            sleep=time.sleep,
+            now_utc=lambda: "T0",
+            new_job_id=lambda: "job-flow",
+        ),
+    )
 
     async with create_connected_server_and_client_session(mcp) as client:
         start_result = await client.call_tool(

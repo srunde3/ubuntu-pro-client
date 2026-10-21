@@ -7,6 +7,7 @@ from typing import Any
 from behave_campaign.domain.events import failure_details
 from behave_campaign.domain.records import (
     AttemptFinished,
+    AttemptInterrupted,
     CampaignError,
     Failure,
     Outcome,
@@ -18,6 +19,18 @@ MCP_RUNNING_STATUSES = ("started", "timeout")
 
 
 MCP_COMPLETED = "completed"
+
+
+# A job whose wrapper died before recording an exit.
+MCP_INTERRUPTED = "interrupted"
+
+
+# The statuses a job that has stopped running reports.
+MCP_ENDED = (MCP_COMPLETED, MCP_INTERRUPTED)
+
+
+# Why an attempt is recorded as interrupted when its job's wrapper died.
+WRAPPER_DIED = "wrapper_died"
 
 
 def _completed_outcome(result: dict[str, Any]) -> Outcome:
@@ -91,12 +104,23 @@ def finished_from_mcp(unit: Unit, result: Any) -> AttemptFinished:
     )
 
 
-def classify_result(unit: Unit, result: Any, at: str = "") -> AttemptFinished:
-    """Map a finished MCP job onto a finished attempt. Never raises.
+def classify_result(
+    unit: Unit, result: Any, at: str = ""
+) -> AttemptFinished | AttemptInterrupted:
+    """Map an ended MCP job onto the record that closes its attempt.
 
-    A result that cannot be classified is recorded as ``error`` with the
-    reason in ``problem``: a scheduler has nobody to raise at.
+    Never raises. A job whose wrapper died established nothing, so its
+    attempt is interrupted and the unit may be queued again. A result that
+    cannot be classified is recorded as ``error`` with the reason in
+    ``problem``: a scheduler has nobody to raise at.
     """
+    if isinstance(result, dict) and result.get("status") == MCP_INTERRUPTED:
+        return AttemptInterrupted(
+            unit=unit,
+            job_id=str(result.get("job_id", "")),
+            at=at,
+            reason=WRAPPER_DIED,
+        )
     try:
         finished = finished_from_mcp(unit, result)
     except CampaignError as error:

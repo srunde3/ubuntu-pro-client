@@ -16,9 +16,13 @@ STATE_DIR_ENV_VAR = "MCP_STATE_DIR"
 DEFAULT_STATE_DIR_NAME = ".mcp_server_behave"
 JOBS_SUBDIR = "jobs"
 CAMPAIGNS_SUBDIR = "campaigns"
+LANES_SUBDIR = "lanes"
 # The files in one job's directory, ``jobs/<job_id>/``.
 JOB_RECORD_NAME = "job.json"
 JOB_STATUS_NAME = "status.json"
+JOB_LOCK_NAME = "job.lock"
+# Left by a kill, so a wrapper still starting up sees it was killed.
+JOB_KILL_NAME = "kill"
 STDOUT_LOG_NAME = "stdout.log"
 JSON_REPORT_NAME = "report.json"
 JOB_FILE_NAMES = (
@@ -89,6 +93,8 @@ class JobPaths(NamedTuple):
     status: Path
     stdout_log: Path
     json_report: Path
+    lock: Path
+    kill: Path
 
 
 def job_paths(jobs: Path, job_id: str) -> JobPaths:
@@ -99,4 +105,15 @@ def job_paths(jobs: Path, job_id: str) -> JobPaths:
         status=job_dir / JOB_STATUS_NAME,
         stdout_log=job_dir / STDOUT_LOG_NAME,
         json_report=job_dir / JSON_REPORT_NAME,
+        lock=job_dir / JOB_LOCK_NAME,
+        kill=job_dir / JOB_KILL_NAME,
     )
+
+
+def lanes_dir(state: Path) -> Path:
+    return state / LANES_SUBDIR
+
+
+def lane_path(lanes: Path, pool: str, lane: int) -> Path:
+    """One lane's lock file. Holding its lock is what using the lane means."""
+    return lanes / pool / "{}.lock".format(lane)

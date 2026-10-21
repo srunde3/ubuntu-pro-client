@@ -4,8 +4,6 @@ These Protocols describe the external interactions the application core depends
 on. Concrete adapters live in ``behave_mcp.adapters``; tests may inject fakes.
 """
 
-from collections.abc import Mapping
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, NamedTuple, Protocol
 
@@ -20,120 +18,57 @@ from behave_mcp.messages import (
 from behave_mcp.parser import FeatureDetail
 
 
-class LogFileOpenError(Exception):
-    """Raised by a ProcessLauncher when the stdout log cannot be opened."""
+class JobStartError(Exception):
+    """Raised by a JobLauncher when a job's wrapper cannot be started."""
 
 
-class ProcessStartError(Exception):
-    """Raised by a ProcessLauncher when the child process cannot be started."""
-
-
-class ProcessHandle(Protocol):
-    """Handle to a launched behave subprocess and its owned stdout log file."""
-
-    @property
-    def pid(self) -> int:
-        """Return the OS process id of the underlying process."""
-        ...
-
-    def poll(self) -> int | None:
-        """Return the exit code, or None while the process is still running."""
-        ...
+class Lease(Protocol):
+    """A lane, held. The holder releases it by closing it."""
 
     def close(self) -> None:
-        """Close the owned stdout log file. Safe to call more than once."""
-        ...
-
-    def terminate(self) -> None:
-        """Terminate the underlying process and every process it started."""
+        """Let go of the lane. Safe to call more than once."""
         ...
 
 
-class ProcessLauncher(Protocol):
-    """Launches a behave subprocess writing combined output to a log file."""
+class LanePool(Protocol):
+    """Lanes shared by every process using one state directory."""
+
+    def take(self, pool: Pool, limit: int) -> Lease | None:
+        """Take a free lane in ``pool``, or return None if all ``limit`` of
+        its lanes are held."""
+        ...
+
+    def busy(self, pool: Pool, limit: int) -> int:
+        """Return how many of ``pool``'s ``limit`` lanes are held."""
+        ...
+
+
+class JobLauncher(Protocol):
+    """Starts a job under a wrapper that outlives this process, and reads
+    and signals it from any process."""
 
     def launch(
         self,
+        job_id: str,
         command: list[str],
         cwd: str,
         env: dict[str, str],
-        stdout_log_path: Path,
-    ) -> ProcessHandle:
-        """Open ``stdout_log_path`` for writing and start ``command``.
+        lease: Lease,
+    ) -> None:
+        """Start ``command`` for ``job_id`` under a wrapper that takes over
+        ``lease`` and the job's own lock for as long as it lives.
 
-        Raises LogFileOpenError if the log file cannot be opened and
-        ProcessStartError if the process cannot be started.
+        The launcher's own hold on ``lease`` is closed either way. Raises
+        JobStartError if the wrapper cannot be started.
         """
         ...
 
-    def is_pid_alive(self, pid: int) -> bool:
-        """Return whether ``pid`` still refers to a live OS process.
-
-        Used to classify jobs recovered from disk after a server restart,
-        where no in-process ``ProcessHandle`` survives to ``poll()``.
-        """
+    def is_running(self, job_id: str) -> bool:
+        """Return whether the job's wrapper is alive: its lock is held."""
         ...
 
-
-@dataclass
-class Job:
-    """In-memory record for a reserved, running, or recovered behave job."""
-
-    job_id: str
-    process_handle: ProcessHandle | None
-    log_dir: Path
-    reserved: bool = False
-    pid: int | None = None
-    pools: frozenset[Pool] = frozenset()
-
-
-@dataclass(frozen=True)
-class PoolUsage:
-    """How many jobs a pool holds against its limit."""
-
-    pool: Pool
-    limit: int
-    running: int
-
-
-@dataclass
-class ReservationResult:
-    """Outcome of an atomic capacity check + slot reservation.
-
-    ``full`` lists the pools the job draws on that had no room.
-    """
-
-    reserved: bool
-    full: tuple[PoolUsage, ...] = ()
-
-
-class JobRegistry(Protocol):
-    """Thread-safe registry tracking reserved and running behave jobs."""
-
-    def try_reserve(
-        self, job: Job, limits: Mapping[Pool, int]
-    ) -> ReservationResult:
-        """Reserve a slot in each of the job's pools, or in none."""
-        ...
-
-    def register(self, job_id: str, job: Job) -> None:
-        """Replace any existing entry for ``job_id`` with ``job``."""
-        ...
-
-    def release(self, job_id: str) -> None:
-        """Remove the entry for ``job_id`` (used on launch failure)."""
-        ...
-
-    def get(self, job_id: str) -> Job | None:
-        """Return the stored job or None."""
-        ...
-
-    def snapshot(self) -> list[Job]:
-        """Return a point-in-time copy of every tracked job."""
-        ...
-
-    def clear(self) -> None:
-        """Remove all entries (primarily for tests)."""
+    def signal(self, job_id: str) -> bool:
+        """Ask a running job to stop; return whether a signal was sent."""
         ...
 
 

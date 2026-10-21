@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from mcp.shared.memory import create_connected_server_and_client_session
 
-from behave_mcp.server import mcp, registry
+from behave_mcp.server import mcp
 from tests.conftest import result_json
 
 
@@ -30,8 +30,9 @@ async def test_mcp_e2e_long_running_attach_flow(monkeypatch):
             "start_scenario",
             {
                 "feature_file": "features/cli/attach.feature",
-                "machine_types": ["lxd-container"],
-                "releases": ["noble"],
+                "scenario_name": "Attach command with json output",
+                "release": "noble",
+                "machine_type": "lxd-container",
             },
         )
         start_payload = result_json(start_result)
@@ -55,7 +56,7 @@ async def test_mcp_e2e_long_running_attach_flow(monkeypatch):
         assert running_jobs[job_id]["feature_file"] == (
             "features/cli/attach.feature"
         )
-        assert running_jobs[job_id]["machine_types"] == ["lxd-container"]
+        assert running_jobs[job_id]["machine_type"] == "lxd-container"
 
         completed_payload = None
         try:
@@ -69,11 +70,8 @@ async def test_mcp_e2e_long_running_attach_flow(monkeypatch):
             )
             completed_payload = result_json(status_result)
         finally:
-            job = registry.get(job_id)
-            if job and job.process_handle is not None:
-                process = job.process_handle
-                if process.poll() is None:
-                    process.terminate()
+            # A job that outlives the test holds an LXD instance.
+            await client.call_tool("kill_job", {"job_id": job_id})
 
         assert completed_payload is not None
         assert completed_payload["status"] == "completed"
@@ -121,7 +119,7 @@ async def test_mcp_e2e_long_running_attach_flow(monkeypatch):
         assert result["job_id"] == job_id
         assert result["status"] == "completed"
         assert result["summary"]["scenarios"]["total"] >= 1
-        assert result["releases"] == ["noble"]
+        assert result["release"] == "noble"
 
         async def ids(**filters):
             payload = result_json(
