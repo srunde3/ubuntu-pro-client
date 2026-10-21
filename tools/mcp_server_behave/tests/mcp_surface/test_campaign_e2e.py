@@ -26,11 +26,11 @@ import pytest
 from behave_campaign.adapters import (
     FileCampaignRunLock,
     JsonlCampaignStore,
-    JsonlEventLog,
     ParserFeatureReader,
     ServiceLaneRunner,
     system_now,
 )
+from behave_campaign.domain.feed import derive_feed
 from behave_campaign.domain.records import CampaignState, UnitState
 from behave_campaign.domain.state import reduce_units, state_of
 from behave_campaign.repo import repo_state
@@ -65,7 +65,6 @@ def test_a_campaign_runs_its_lanes_concurrently(monkeypatch, tmp_path):
 
     campaign_dir = tmp_path / "state" / "campaigns"
     store = JsonlCampaignStore(campaign_dir)
-    events = JsonlEventLog(campaign_dir)
 
     # A service of its own, so the lane limit is this test's rather than
     # whatever the server process was started with.
@@ -75,7 +74,6 @@ def test_a_campaign_runs_its_lanes_concurrently(monkeypatch, tmp_path):
     created = CampaignService(
         store=store,
         features=ParserFeatureReader(),
-        events=events,
         now=system_now,
         repo_state=repo_state,
         lane_ceiling=settings.pool_limits,
@@ -94,7 +92,6 @@ def test_a_campaign_runs_its_lanes_concurrently(monkeypatch, tmp_path):
         store=store,
         lanes=ServiceLaneRunner(service),
         lock=FileCampaignRunLock(campaign_dir),
-        events=events,
         now=system_now,
         ticker=ThreadTicker(interval=1.0),
     )
@@ -148,7 +145,7 @@ def test_a_campaign_runs_its_lanes_concurrently(monkeypatch, tmp_path):
             assert (job_dir / name).is_file(), job_dir / name
 
     # The stream a watching agent would have seen, from real jobs.
-    stream = events.read(CAMPAIGN_ID, since_seq=0, kinds=[], limit=500)
+    stream = derive_feed(CAMPAIGN_ID, store.replay(CAMPAIGN_ID))
     kinds = [event.kind for event in stream]
 
     assert kinds[0] == "campaign.created"
@@ -160,10 +157,6 @@ def test_a_campaign_runs_its_lanes_concurrently(monkeypatch, tmp_path):
     )
     # seq is dense and monotonic, so a cursor cannot skip anything.
     assert [event.seq for event in stream] == list(range(1, len(stream) + 1))
-
-    persisted = campaign_dir / "{}.events.jsonl".format(CAMPAIGN_ID)
-    assert persisted.is_file()
-    assert len(persisted.read_text().splitlines()) == len(stream)
 
 
 KILL_CAMPAIGN_ID = "e2e-pause-with-kill"
@@ -191,13 +184,11 @@ def test_pause_with_kill_stops_a_real_job_and_run_redoes_it(
 
     campaign_dir = tmp_path / "state" / "campaigns"
     store = JsonlCampaignStore(campaign_dir)
-    events = JsonlEventLog(campaign_dir)
     settings = load_settings({**os.environ, "MCP_MAX_LXD_JOBS": "1"})
     service = create_service(settings, registry=InMemoryJobRegistry())
     CampaignService(
         store=store,
         features=ParserFeatureReader(),
-        events=events,
         now=system_now,
         repo_state=repo_state,
         lane_ceiling=settings.pool_limits,
@@ -214,7 +205,6 @@ def test_pause_with_kill_stops_a_real_job_and_run_redoes_it(
         store=store,
         lanes=ServiceLaneRunner(service),
         lock=FileCampaignRunLock(campaign_dir),
-        events=events,
         now=system_now,
         ticker=ThreadTicker(interval=1.0),
     )

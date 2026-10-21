@@ -11,13 +11,16 @@ from typing import NamedTuple
 
 import pytest
 
-from behave_campaign.adapters import JsonlCampaignStore, JsonlEventLog
+from behave_campaign.adapters import JsonlCampaignStore
+from behave_campaign.domain.events import event_matches
+from behave_campaign.domain.feed import derive_feed
 from behave_campaign.domain.records import (
     AttemptFinished,
     AttemptStarted,
     CampaignError,
     CampaignHeader,
     CampaignState,
+    Cause,
     Filters,
     Intent,
     IntentRecord,
@@ -70,6 +73,21 @@ def written_intents(store, campaign_id=CAMPAIGN):
     ]
 
 
+class Feed:
+    """The events a campaign's records announce, read as a watcher would."""
+
+    def __init__(self, store):
+        self._store = store
+
+    def read(self, campaign_id, since_seq=0, kinds=(), limit=100):
+        feed = derive_feed(campaign_id, self._store.replay(campaign_id))
+        return [
+            event
+            for event in feed
+            if event.seq > since_seq and event_matches(event.kind, kinds)
+        ][:limit]
+
+
 @pytest.fixture
 def store(tmp_path):
     return JsonlCampaignStore(tmp_path / "campaigns")
@@ -91,17 +109,16 @@ def ticker():
 
 
 @pytest.fixture
-def events(tmp_path):
-    return JsonlEventLog(tmp_path / "campaigns")
+def events(store):
+    return Feed(store)
 
 
 @pytest.fixture
-def runner(store, lanes, lock, ticker, events):
+def runner(store, lanes, lock, ticker):
     return CampaignRunner(
         store=store,
         lanes=lanes,
         lock=lock,
-        events=events,
         now=lambda: AT,
         ticker=ticker,
     )
@@ -112,7 +129,6 @@ def make_runner(store, lanes=None, lock=None, **kwargs):
         store=store,
         lanes=lanes if lanes is not None else FakeLanes(),
         lock=lock if lock is not None else FakeLock(),
-        events=kwargs.pop("events", None) or JsonlEventLog(store.root),
         now=kwargs.pop("now", lambda: AT),
         ticker=kwargs.pop("ticker", None) or FakeTicker(),
         **kwargs,
@@ -397,8 +413,8 @@ class TestTick:
 
     def test_a_full_pool_does_not_hold_back_the_others(self, store):
         lanes = FakeLanes(full_pools={Pool.WSL})
-        events = JsonlEventLog(store.root)
-        runner = make_runner(store, lanes=lanes, events=events)
+        events = Feed(store)
+        runner = make_runner(store, lanes=lanes)
         create(
             store,
             units=[*WSL_UNITS, *UNITS],
@@ -708,6 +724,7 @@ class TestEvents:
         runner.run(CAMPAIGN)
 
         assert self.kinds(events) == [
+            "campaign.created",
             "campaign.running",
             "campaign.paused",
             "campaign.running",
@@ -724,6 +741,7 @@ class TestEvents:
         runner.tick(CAMPAIGN)
 
         assert self.kinds(events, "campaign.") == [
+            "campaign.created",
             "campaign.running",
             "campaign.pausing",
             "campaign.paused",
@@ -739,6 +757,7 @@ class TestEvents:
         runner.tick(CAMPAIGN)
 
         assert self.kinds(events, "campaign.") == [
+            "campaign.created",
             "campaign.running",
             "campaign.finishing",
             "campaign.complete",
@@ -1026,7 +1045,6 @@ class TestSignals:
         runner = make_runner(
             store,
             lanes=lanes,
-            events=events,
             now=lambda: "2026-09-12T12:00:00Z",
             overdue_seconds=60,
         )
@@ -1048,9 +1066,7 @@ class TestSignals:
         assert overdue[0].data["elapsed_seconds"] == 3600
 
     def test_a_refused_lane_is_reported_as_starvation(self, store, events):
-        runner = make_runner(
-            store, lanes=FakeLanes(max_starts=1), events=events
-        )
+        runner = make_runner(store, lanes=FakeLanes(max_starts=1))
         create(store, lxd_lanes=3)
         runner.run(CAMPAIGN)
 
@@ -1068,7 +1084,7 @@ class TestSignals:
 
     def test_starvation_is_reported_once_per_episode(self, store, events):
         lanes = FakeLanes(full_pools={Pool.LXD})
-        runner = make_runner(store, lanes=lanes, events=events)
+        runner = make_runner(store, lanes=lanes)
         campaign_id = create(store, lxd_lanes=1)
         runner.run(campaign_id)
 
@@ -1094,6 +1110,44 @@ class TestSignals:
         runner.tick(campaign_id)
 
         assert len(starved()) == 2
+
+    def test_a_restarted_runner_does_not_repeat_starvation(
+        self, store, events
+    ):
+        lanes = FakeLanes(full_pools={Pool.LXD})
+        create(store, lxd_lanes=1)
+        first = make_runner(store, lanes=lanes)
+        first.run(CAMPAIGN)
+        first.tick(CAMPAIGN)
+
+        make_runner(store, lanes=lanes).tick(CAMPAIGN)
+
+        starved = events.read(CAMPAIGN, kinds=["anomaly.capacity_starved"])
+        assert len(starved) == 1
+
+    def test_a_restarted_runner_does_not_repeat_an_overdue_lane(
+        self, store, lanes, events
+    ):
+        create(store, units=[UNITS[0]], lxd_lanes=1)
+        first = make_runner(store, lanes=lanes, overdue_seconds=60)
+        first.run(CAMPAIGN)
+        first.tick(CAMPAIGN)
+        later = make_runner(
+            store,
+            lanes=lanes,
+            overdue_seconds=60,
+            now=lambda: "2026-09-12T13:00:00Z",
+        )
+        later.tick(CAMPAIGN)
+
+        make_runner(
+            store,
+            lanes=lanes,
+            overdue_seconds=60,
+            now=lambda: "2026-09-12T14:00:00Z",
+        ).tick(CAMPAIGN)
+
+        assert len(events.read(CAMPAIGN, kinds=["lane.overdue"])) == 1
 
     def test_a_tick_waits_for_a_control_verb_in_progress(self, runner, store):
         create(store)
@@ -1124,7 +1178,7 @@ class TestSignals:
             lanes.finish(job, passed=0, failed=1)
         runner.tick(CAMPAIGN)
 
-        reported = runner._events.read(
+        reported = Feed(store).read(
             CAMPAIGN,
             since_seq=0,
             kinds=["anomaly.*"],
@@ -1146,7 +1200,7 @@ class TestSignals:
             lanes.finish(job)
         runner.tick(CAMPAIGN)
 
-        reported = runner._events.read(
+        reported = Feed(store).read(
             CAMPAIGN, since_seq=0, kinds=["anomaly.*"], limit=10
         )
 
@@ -1246,25 +1300,25 @@ A, B = UNITS[0], UNITS[1]
 ARRANGED = {
     CampaignState.CREATED: [],
     CampaignState.RUNNING: [
-        IntentRecord(Intent.RUN, AT),
+        IntentRecord(Intent.RUN, Cause.RUN, AT),
         _start(A, IN_FLIGHT_JOB),
     ],
     CampaignState.FINISHING: [
-        IntentRecord(Intent.RUN, AT),
+        IntentRecord(Intent.RUN, Cause.RUN, AT),
         *_tried(A, DONE_JOB, "passed"),
         _start(B, IN_FLIGHT_JOB),
     ],
     CampaignState.COMPLETE: [
-        IntentRecord(Intent.RUN, AT),
+        IntentRecord(Intent.RUN, Cause.RUN, AT),
         *_tried(A, DONE_JOB, "passed"),
         *_tried(B, IN_FLIGHT_JOB, "failed"),
     ],
     CampaignState.PAUSING: [
-        IntentRecord(Intent.HOLD, AT),
+        IntentRecord(Intent.HOLD, Cause.PAUSE, AT),
         _start(A, IN_FLIGHT_JOB),
     ],
     CampaignState.PAUSED: [
-        IntentRecord(Intent.HOLD, AT),
+        IntentRecord(Intent.HOLD, Cause.PAUSE, AT),
         *_tried(A, DONE_JOB, "failed"),
     ],
 }

@@ -12,19 +12,24 @@ from behave_campaign.domain.records import (
     CampaignError,
     CampaignHeader,
     CampaignState,
+    Cause,
+    Failure,
     Filters,
     Intent,
     IntentRecord,
     Outcome,
+    Overdue,
     PlanRecord,
     RecordType,
     RepoState,
     RetryRecord,
+    Starved,
     Unit,
     UnitState,
     encode_record,
     parse_record,
 )
+from behave_mcp.domain.pools import Pool
 
 UNIT_A = Unit("features/a.feature", "A", "jammy", "lxd-container")
 
@@ -32,33 +37,70 @@ UNIT_A = Unit("features/a.feature", "A", "jammy", "lxd-container")
 AT = "2026-09-10T12:00:00Z"
 
 
+# One record of every type, with every optional field set.
+RECORD_OF_TYPE = {
+    RecordType.CAMPAIGN: CampaignHeader(
+        at=AT,
+        campaign_id="1234567",
+        repo=RepoState(
+            root="/repo", commit="abc123", branch="main", dirty=False
+        ),
+        filters=Filters(release=("jammy",)),
+    ),
+    RecordType.PLAN: PlanRecord(UNIT_A, at=AT),
+    RecordType.STARTED: AttemptStarted(
+        UNIT_A, "job-1", install_from="proposed", at=AT
+    ),
+    RecordType.FINISHED: AttemptFinished(
+        UNIT_A,
+        "job-1",
+        Outcome.FAILED,
+        at=AT,
+        failures=(Failure("Then it works", "failed", "it did not"),),
+    ),
+    RecordType.INTERRUPTED: AttemptInterrupted(
+        UNIT_A, "job-2", at=AT, reason="killed"
+    ),
+    RecordType.INTENT: IntentRecord(
+        intent=Intent.HOLD, cause=Cause.PAUSE, at=AT
+    ),
+    RecordType.RETRY: RetryRecord(UNIT_A, at=AT, reason="looked flaky"),
+    RecordType.STARVED: Starved(
+        UNIT_A, Pool.LXD, reason="pool is full", at=AT
+    ),
+    RecordType.OVERDUE: Overdue(UNIT_A, "job-1", elapsed_seconds=3600, at=AT),
+}
+
+
+def test_every_record_type_has_an_example():
+    assert set(RECORD_OF_TYPE) == set(RecordType)
+
+
+@pytest.mark.parametrize("kind, record", RECORD_OF_TYPE.items(), ids=str)
+def test_each_record_type_survives_encoding(kind, record):
+    encoded = encode_record(record)
+
+    assert encoded["type"] == kind
+    assert parse_record(encoded) == record
+
+
+def test_an_unclassifiable_finish_keeps_its_problem():
+    finished = AttemptFinished(
+        UNIT_A, "job-1", Outcome.ERROR, at=AT, problem="cannot classify"
+    )
+
+    assert parse_record(encode_record(finished)).problem == "cannot classify"
+
+
+def test_an_intent_needs_a_command_as_its_cause():
+    raw = encode_record(RECORD_OF_TYPE[RecordType.INTENT])
+    raw["cause"] = Cause.SCHEDULER.value
+
+    with pytest.raises(CampaignError, match="intent cause must be one of"):
+        parse_record(raw)
+
+
 class TestRecordRoundTrip:
-    def test_every_record_type_survives_encoding(self):
-        records = [
-            CampaignHeader(
-                at=AT,
-                campaign_id="1234567",
-                repo=RepoState(
-                    root="/repo",
-                    commit="abc123",
-                    branch="main",
-                    dirty=False,
-                ),
-                filters=Filters(release=("jammy",)),
-            ),
-            PlanRecord(UNIT_A, at=AT),
-            AttemptStarted(UNIT_A, "job-1", install_from="proposed", at=AT),
-            AttemptFinished(UNIT_A, "job-1", "failed", at=AT),
-            AttemptStarted(UNIT_A, "job-2", install_from="proposed", at=AT),
-            AttemptInterrupted(UNIT_A, "job-2", at=AT, reason="killed"),
-            IntentRecord(intent=Intent.HOLD, at=AT),
-            RetryRecord(UNIT_A, at=AT, reason="looked flaky"),
-        ]
-
-        assert [
-            parse_record(encode_record(record)) for record in records
-        ] == records
-
     def test_campaign_without_an_id_survives_encoding(self):
         campaign = CampaignHeader(at=AT, repo=RepoState(root="/repo"))
 
@@ -129,7 +171,9 @@ class TestStringEnums:
         assert set(WRITABLE_INTENTS) == set(Intent) - {Intent.NEVER_RUN}
 
     def test_never_run_is_not_a_writable_intent(self):
-        raw = encode_record(IntentRecord(intent=Intent.RUN, at=AT))
+        raw = encode_record(
+            IntentRecord(intent=Intent.RUN, cause=Cause.RUN, at=AT)
+        )
         raw["intent"] = Intent.NEVER_RUN.value
 
         with pytest.raises(CampaignError, match="intent must be one of"):

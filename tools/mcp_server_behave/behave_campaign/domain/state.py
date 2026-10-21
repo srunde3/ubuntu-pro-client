@@ -17,10 +17,12 @@ from behave_campaign.domain.records import (
     Intent,
     IntentRecord,
     Outcome,
+    Overdue,
     PlanRecord,
     Progress,
     Record,
     RetryRecord,
+    Starved,
     StringEnum,
     Unit,
     UnitState,
@@ -56,33 +58,62 @@ def _unit_state(attempts: Sequence[Attempt]) -> tuple[str, str | None]:
     return UnitState(deciding.outcome), deciding.job_id
 
 
-def reduce_units(records: Iterable[Record]) -> list[UnitStatus]:
-    """Collapse records into one current status per planned unit.
+class Replay:
+    """A campaign's records, applied one at a time.
+
+    Keeps every planned unit's status current, and the totals the named
+    state is read from, so a whole log replays in one pass however long it
+    is. ``apply`` reports the unit whose status a record changed.
 
     Attempts are assembled here: a ``started`` record opens one and the
-    ``finished`` record sharing its ``job_id`` closes it, so one try is one
-    attempt however many records described it.
+    ``finished`` or ``interrupted`` record sharing its ``job_id`` closes it,
+    so one try is one attempt however many records described it.
     """
-    planned: list[Unit] = []
-    seen: set[Unit] = set()
-    attempts: dict[Unit, list[Attempt]] = {}
-    open_attempts: dict[tuple[Unit, str], int] = {}
-    # A retry asks for another go; the next start answers it. Reading the
-    # records in order is what decides which of the two came last.
-    pending: dict[Unit, bool] = {}
 
-    for record in records:
-        if isinstance(record, (CampaignHeader, IntentRecord)):
-            continue
+    def __init__(self) -> None:
+        self.header: CampaignHeader | None = None
+        self.intent = Intent.NEVER_RUN
+        self._planned: dict[Unit, UnitStatus] = {}
+        self._attempts: dict[Unit, list[Attempt]] = {}
+        self._open: dict[tuple[Unit, str], int] = {}
+        # A retry asks for another go; the next start answers it. Reading
+        # the records in order is what decides which of the two came last.
+        self._pending: dict[Unit, bool] = {}
+        self._attempted = 0
+        self._queueable = 0
+        self._in_flight = 0
+        self._counts = {state: 0 for state in STATES}
+        # Starvation is reported once per episode: from a refusal until a
+        # lane next opens in that pool. Overdue is reported once per job.
+        self.starved_pools: set[Pool] = set()
+        self.overdue_jobs: set[str] = set()
+
+    def apply(self, record: Record) -> UnitStatus | None:
+        """Apply one record; return the new status of the unit it changed."""
+        if isinstance(record, CampaignHeader):
+            self.header = record
+            return None
+        if isinstance(record, IntentRecord):
+            self.intent = record.intent
+            return None
         if isinstance(record, PlanRecord):
-            if record.unit not in seen:
-                seen.add(record.unit)
-                planned.append(record.unit)
-        elif isinstance(record, RetryRecord):
-            pending[record.unit] = True
+            if record.unit in self._planned:
+                return None
+            self._planned[record.unit] = self._status_of(record.unit)
+            self._count(self._planned[record.unit], 1)
+            return self._planned[record.unit]
+        if isinstance(record, Starved):
+            self.starved_pools.add(record.pool)
+            return None
+        if isinstance(record, Overdue):
+            self.overdue_jobs.add(record.job_id)
+            return None
+        if isinstance(record, RetryRecord):
+            self._pending[record.unit] = True
         elif isinstance(record, AttemptStarted):
-            started = attempts.setdefault(record.unit, [])
-            open_attempts[(record.unit, record.job_id)] = len(started)
+            self.starved_pools.discard(record.unit.pool)
+            started = self._attempts.setdefault(record.unit, [])
+            self._open[(record.unit, record.job_id)] = len(started)
             started.append(
                 Attempt(
                     job_id=record.job_id,
@@ -90,56 +121,118 @@ def reduce_units(records: Iterable[Record]) -> list[UnitStatus]:
                     started_at=record.at,
                 )
             )
-            pending[record.unit] = False
+            self._pending[record.unit] = False
         elif isinstance(record, AttemptFinished):
-            index = open_attempts.pop((record.unit, record.job_id), None)
-            if index is None:
-                # A finish with no start: recorded out of band rather than
-                # by a lane. Stand it up as a whole attempt of its own.
-                attempts.setdefault(record.unit, []).append(
-                    Attempt(
-                        job_id=record.job_id,
-                        started_at=record.at,
-                        outcome=record.outcome,
-                        finished_at=record.at,
-                    )
-                )
-            else:
-                opened = attempts[record.unit][index]
-                attempts[record.unit][index] = Attempt(
-                    job_id=opened.job_id,
-                    install_from=opened.install_from,
-                    started_at=opened.started_at,
-                    outcome=record.outcome,
-                    finished_at=record.at,
-                )
-            pending[record.unit] = False
-        elif isinstance(record, AttemptInterrupted):
-            index = open_attempts.pop((record.unit, record.job_id), None)
-            if index is not None:
-                opened = attempts[record.unit][index]
-                attempts[record.unit][index] = Attempt(
-                    job_id=opened.job_id,
-                    install_from=opened.install_from,
-                    started_at=opened.started_at,
-                    finished_at=record.at,
-                    interrupted=True,
-                )
-
-    statuses = []
-    for unit in sorted(planned):
-        unit_attempts = tuple(attempts.get(unit, ()))
-        state, job_id = _unit_state(unit_attempts)
-        statuses.append(
-            UnitStatus(
-                unit=unit,
-                state=state,
-                job_id=job_id,
-                attempts=unit_attempts,
-                retry_pending=pending.get(unit, False),
+            self._close(
+                record.unit,
+                record.job_id,
+                record.at,
+                outcome=record.outcome,
             )
+            self._pending[record.unit] = False
+        elif isinstance(record, AttemptInterrupted):
+            if (record.unit, record.job_id) not in self._open:
+                return None
+            self._close(record.unit, record.job_id, record.at, outcome=None)
+        else:
+            return None
+        return self._refresh(record.unit)
+
+    def status(self, unit: Unit) -> UnitStatus | None:
+        return self._planned.get(unit)
+
+    def statuses(self) -> list[UnitStatus]:
+        return [self._planned[unit] for unit in sorted(self._planned)]
+
+    def counts(self) -> dict[str, int]:
+        return dict(self._counts)
+
+    @property
+    def in_flight(self) -> int:
+        return self._in_flight
+
+    def progress(self) -> Progress:
+        return _progress(
+            units=len(self._planned),
+            attempted=self._attempted,
+            queueable=self._queueable,
+            in_flight=self._in_flight,
         )
-    return statuses
+
+    def state(self) -> CampaignState:
+        return campaign_state(
+            self.intent, self.progress(), bool(self._in_flight)
+        )
+
+    def _close(
+        self,
+        unit: Unit,
+        job_id: str,
+        at: str,
+        *,
+        outcome: Outcome | None,
+    ) -> None:
+        index = self._open.pop((unit, job_id), None)
+        if index is None:
+            # A finish with no start: recorded out of band rather than by a
+            # lane. Stand it up as a whole attempt of its own.
+            self._attempts.setdefault(unit, []).append(
+                Attempt(
+                    job_id=job_id,
+                    started_at=at,
+                    outcome=outcome,
+                    finished_at=at,
+                )
+            )
+            return
+        opened = self._attempts[unit][index]
+        self._attempts[unit][index] = Attempt(
+            job_id=opened.job_id,
+            install_from=opened.install_from,
+            started_at=opened.started_at,
+            outcome=outcome,
+            finished_at=at,
+            interrupted=outcome is None,
+        )
+
+    def _refresh(self, unit: Unit) -> UnitStatus | None:
+        old = self._planned.get(unit)
+        if old is None:
+            return None
+        new = self._status_of(unit)
+        self._count(old, -1)
+        self._count(new, 1)
+        self._planned[unit] = new
+        return new
+
+    def _status_of(self, unit: Unit) -> UnitStatus:
+        attempts = tuple(self._attempts.get(unit, ()))
+        state, job_id = _unit_state(attempts)
+        return UnitStatus(
+            unit=unit,
+            state=state,
+            job_id=job_id,
+            attempts=attempts,
+            retry_pending=self._pending.get(unit, False),
+        )
+
+    def _count(self, status: UnitStatus, sign: int) -> None:
+        self._counts[status.state] += sign
+        self._attempted += sign if status.attempts else 0
+        self._queueable += sign if status.queueable else 0
+        self._in_flight += sign if status.in_flight else 0
+
+
+def replay(records: Iterable[Record]) -> Replay:
+    replayed = Replay()
+    for record in records:
+        replayed.apply(record)
+    return replayed
+
+
+def reduce_units(records: Iterable[Record]) -> list[UnitStatus]:
+    """One current status per planned unit, in unit order."""
+    return replay(records).statuses()
 
 
 def busy_by_pool(statuses: Iterable[UnitStatus]) -> dict[Pool, int]:
@@ -202,11 +295,22 @@ def intent(records: Iterable[Record]) -> Intent:
 
 def progress(statuses: Sequence[UnitStatus]) -> Progress:
     """How much work is left, read off the units."""
-    if statuses and not any(status.attempts for status in statuses):
+    return _progress(
+        units=len(statuses),
+        attempted=sum(1 for status in statuses if status.attempts),
+        queueable=sum(1 for status in statuses if status.queueable),
+        in_flight=sum(1 for status in statuses if status.in_flight),
+    )
+
+
+def _progress(
+    *, units: int, attempted: int, queueable: int, in_flight: int
+) -> Progress:
+    if units and not attempted:
         return Progress.UNTOUCHED
-    if any(status.queueable for status in statuses):
+    if queueable:
         return Progress.OPEN
-    if any(status.in_flight for status in statuses):
+    if in_flight:
         return Progress.FINISHING
     return Progress.SETTLED
 
@@ -248,9 +352,6 @@ def campaign_state(
         ) from None
 
 
-def state_of(records: Sequence[Record]) -> CampaignState:
+def state_of(records: Iterable[Record]) -> CampaignState:
     """The named state a campaign's records add up to."""
-    statuses = reduce_units(records)
-    return campaign_state(
-        intent(records), progress(statuses), bool(in_flight(statuses))
-    )
+    return replay(records).state()

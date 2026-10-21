@@ -8,12 +8,8 @@ from typing import Any, Sequence
 from behave_campaign.domain.records import (
     CampaignError,
     CampaignState,
-    Intent,
     Outcome,
-    Progress,
     StringEnum,
-    require_fields,
-    text_field,
 )
 
 
@@ -109,29 +105,11 @@ STATE_EVENT = {
 }
 
 
-class Cause(StringEnum):
-    """What moved a campaign into a new state."""
-
-    RUN = "run"
-    PAUSE = "pause"
-    RETRY = "retry"
-    SCHEDULER = "scheduler"
-
-
 # Enough of a failure to triage without fetching the job's report.
 MAX_EVENT_FAILURES = 3
 
 
 MAX_EVENT_ERROR_CHARS = 1200
-
-
-@dataclass(frozen=True)
-class NewEvent:
-    """An event on its way to the log, before the log numbers it."""
-
-    kind: str
-    at: str = ""
-    data: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -152,26 +130,6 @@ class Event:
             "campaign_id": self.campaign_id,
             "data": dict(self.data),
         }
-
-
-def parse_event(raw: Any) -> Event:
-    """Read one stored event back."""
-    body = require_fields(
-        raw, ("seq", "kind", "at", "campaign_id", "data"), "event"
-    )
-    seq = body["seq"]
-    if isinstance(seq, bool) or not isinstance(seq, int) or seq < 1:
-        raise CampaignError("event field 'seq' must be a positive integer")
-    data = body["data"]
-    if not isinstance(data, dict):
-        raise CampaignError("event field 'data' must be an object")
-    return Event(
-        seq=seq,
-        kind=text_field(body, "kind", "event"),
-        at=text_field(body, "at", "event"),
-        campaign_id=text_field(body, "campaign_id", "event"),
-        data=data,
-    )
 
 
 def expand_event_kinds(kinds: Sequence[str]) -> tuple[str, ...]:
@@ -219,34 +177,6 @@ def event_matches(kind: str, patterns: Sequence[str]) -> bool:
         elif kind == pattern:
             return True
     return False
-
-
-def state_events(
-    *,
-    before: CampaignState,
-    after: CampaignState,
-    intent: Intent,
-    progress: Progress,
-    cause: Cause,
-    at: str,
-    data: dict[str, Any] | None = None,
-) -> list[NewEvent]:
-    """The one event announcing a change of named state, or none."""
-    if before == after:
-        return []
-    return [
-        NewEvent(
-            kind=STATE_EVENT[after],
-            at=at,
-            data={
-                "from": before.value,
-                "intent": intent.value,
-                "progress": progress.value,
-                "cause": cause.value,
-                **(data or {}),
-            },
-        )
-    ]
 
 
 def unit_event_kind(outcome: str, unclassifiable: bool = False) -> str:

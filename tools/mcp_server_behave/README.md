@@ -52,7 +52,7 @@ still land here, so one server keeps one set of jobs and campaigns:
 ```
 .mcp_server_behave/
   jobs/        one directory per behave job
-  campaigns/   one record, event log and run lock per campaign
+  campaigns/   one record and run lock per campaign
 ```
 
 `MCP_STATE_DIR` moves the whole thing; there is no separate variable per kind.

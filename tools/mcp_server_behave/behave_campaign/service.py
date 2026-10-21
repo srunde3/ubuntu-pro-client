@@ -11,13 +11,13 @@ so a call reads the same wherever it comes from.
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from typing import Callable, Mapping, Sequence
 
 from behave_campaign.domain.bundle import (
     AUDIT_CAMPAIGN_NAME,
     AUDIT_DIR,
-    AUDIT_EVENTS_NAME,
     CAMPAIGN_JSON_NAME,
     JOB_FILES,
     JOBS_DIR,
@@ -28,11 +28,11 @@ from behave_campaign.domain.bundle import (
 )
 from behave_campaign.domain.events import (
     MAX_EVENT_ERROR_CHARS,
-    EventKind,
-    NewEvent,
+    event_matches,
     expand_event_kinds,
     shorten_failures,
 )
+from behave_campaign.domain.feed import derive_feed
 from behave_campaign.domain.records import (
     DEFAULT_INSTALL_SOURCE,
     CampaignError,
@@ -43,7 +43,6 @@ from behave_campaign.domain.records import (
     Record,
     RepoState,
     UnitStatus,
-    lanes_as_dict,
     resolve_lanes,
     validate_campaign_id,
     validate_install_source,
@@ -76,7 +75,6 @@ from behave_campaign.messages import (
 from behave_campaign.ports import (
     BundleWriter,
     CampaignStore,
-    EventLog,
     FeatureReader,
     JobFiles,
 )
@@ -106,10 +104,10 @@ class CampaignService:
         *,
         store: CampaignStore,
         features: FeatureReader,
-        events: EventLog,
         now: Callable[[], str],
         repo_state: Callable[[Path], RepoState],
         lane_ceiling: Mapping[Pool, int] | None = None,
+        monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         """``lane_ceiling`` caps a campaign's lanes in each pool.
 
@@ -119,10 +117,10 @@ class CampaignService:
         """
         self._store = store
         self._features = features
-        self._events = events
         self._now = now
         self._repo_state = repo_state
         self._lane_ceiling = lane_ceiling
+        self._monotonic = monotonic
 
     # -- creating ---------------------------------------------------------
 
@@ -171,21 +169,6 @@ class CampaignService:
         )
         plans = [PlanRecord(unit=unit, at=at) for unit in units]
         self._store.create(campaign_id, header, plans)
-        self._events.append(
-            campaign_id,
-            [
-                NewEvent(
-                    kind=EventKind.CAMPAIGN_CREATED,
-                    at=at,
-                    data={
-                        "total_units": len(units),
-                        "install_from": install_from,
-                        "lanes": lanes_as_dict(resolved_lanes),
-                        "scope": filters.scope_as_dict(),
-                    },
-                )
-            ],
-        )
 
         records: list[Record] = [header, *plans]
         return CreateCampaignResponse(
@@ -304,30 +287,31 @@ class CampaignService:
         error, and the campaign summary comes back either way, so a quiet
         stretch still tells the caller where things stand. ``failure_chars``
         shortens the error messages a ``unit.failed`` event carries; the
-        stored event keeps them whole.
+        recorded failure keeps them whole.
+
+        The events are derived from the campaign's records on every read,
+        so ``seq`` numbers the same events the same way across restarts.
         """
         if failure_chars < 0:
             raise CampaignError("failure_chars must not be negative")
         patterns = expand_event_kinds(kinds)
         capped, _ = self._cap_events(limit)
 
-        if timeout > 0:
-            events = self._events.wait(
-                campaign_id,
-                since_seq=since_seq,
-                kinds=patterns,
-                limit=capped,
-                timeout=timeout,
-            )
-        else:
-            events = self._events.read(
-                campaign_id,
-                since_seq=since_seq,
-                kinds=patterns,
-                limit=capped,
-            )
+        deadline = self._monotonic() + timeout
+        while True:
+            records = self._store.replay(campaign_id)
+            feed = derive_feed(campaign_id, records)
+            events = [
+                event
+                for event in feed
+                if event.seq > since_seq
+                and event_matches(event.kind, patterns)
+            ][:capped]
+            remaining = deadline - self._monotonic()
+            if events or remaining <= 0:
+                break
+            self._store.wait(campaign_id, len(records), remaining)
 
-        records = self._store.replay(campaign_id)
         return AwaitEventsResponse(
             **campaign_summary(campaign_id, records).model_dump(),
             events=[
@@ -340,7 +324,7 @@ class CampaignService:
                 for event in events
             ],
             next_seq=(events[-1].seq if events else max(since_seq, 0)),
-            latest_seq=self._events.latest_seq(campaign_id),
+            latest_seq=len(feed),
             timed_out=not events,
         )
 
@@ -414,18 +398,12 @@ class CampaignService:
                     missing.append(bundled)
                     missing_jobs.add(job_id)
 
-        audit = [
-            (AUDIT_CAMPAIGN_NAME, self._store.path_for(campaign_id)),
-            (AUDIT_EVENTS_NAME, self._events.path_for(campaign_id)),
-        ]
-        for name, source in audit:
-            if source is not None:
-                entries.append(
-                    BundleEntry(
-                        name="{}/{}".format(AUDIT_DIR, name),
-                        source=source,
-                    )
-                )
+        entries.append(
+            BundleEntry(
+                name="{}/{}".format(AUDIT_DIR, AUDIT_CAMPAIGN_NAME),
+                source=self._store.path_for(campaign_id),
+            )
+        )
 
         entries += [
             BundleEntry(

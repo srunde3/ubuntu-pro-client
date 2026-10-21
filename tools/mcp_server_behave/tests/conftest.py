@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+import behave_mcp.server as server_module
 from behave_campaign.ports import CampaignLockedError, LaneStartError
 from behave_mcp.messages import RepoState
 from behave_mcp.server import registry
@@ -16,6 +17,14 @@ def clear_jobs():
     registry.clear()
     yield
     registry.clear()
+
+
+@pytest.fixture(autouse=True)
+def fresh_campaign_store(monkeypatch):
+    """The server builds its campaign store and runner on first use; each
+    test gets its own, bound to that test's state directory."""
+    monkeypatch.setattr(server_module, "_store", None)
+    monkeypatch.setattr(server_module, "_runner", None)
 
 
 # One scenario covering every pool, so a test can start a job on any of

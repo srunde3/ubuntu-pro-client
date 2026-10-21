@@ -202,28 +202,23 @@ async def test_campaign_status_on_an_unknown_campaign_is_an_error(repo):
 def runner(repo, monkeypatch, tmp_path):
     """Replace the server's runner with one that launches no real jobs."""
     import behave_mcp.server as server_module
-    from behave_campaign.adapters import (
-        JsonlCampaignStore,
-        JsonlEventLog,
-        system_now,
-    )
+    from behave_campaign.adapters import JsonlCampaignStore, system_now
     from behave_campaign.runner import CampaignRunner
 
     lanes = FakeLanes(auto_finish={})
     ticker = FakeTicker()
-    # The same log the server's own service reads, so events the runner
-    # emits are visible to await_campaign_events.
-    events = JsonlEventLog(tmp_path / "state" / "campaigns")
+    # The same store the server's own service reads, so what the runner
+    # records is announced through await_campaign_events.
+    store = JsonlCampaignStore(tmp_path / "state" / "campaigns")
     replacement = CampaignRunner(
-        store=JsonlCampaignStore(tmp_path / "state" / "campaigns"),
+        store=store,
         lanes=lanes,
         lock=FakeLock(),
-        events=events,
         now=system_now,
         ticker=ticker,
     )
     monkeypatch.setattr(server_module, "_runner", replacement)
-    monkeypatch.setattr(server_module, "_events", events)
+    monkeypatch.setattr(server_module, "_store", store)
     replacement.lanes = lanes
     replacement.ticker = ticker
     return replacement

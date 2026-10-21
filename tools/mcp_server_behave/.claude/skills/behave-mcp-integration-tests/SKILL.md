@@ -45,7 +45,7 @@ Bad: a job test without a fake `Popen`. It starts a real `tox -e behave` and tur
 
 ## Server wiring and startup: how the process is assembled
 
-Wiring tests check the objects `server.py` builds and shares, such as one event log shared by the runner and every service. Startup tests check that bad configuration ends the process with a clean message. Configuration is read at import, so these tests import the server in a fresh subprocess.
+Wiring tests check the objects `server.py` builds and shares, such as one campaign store shared by the runner and every service. Startup tests check that bad configuration ends the process with a clean message. Configuration is read at import, so these tests import the server in a fresh subprocess.
 
 Good: the shared object is identified directly.
 

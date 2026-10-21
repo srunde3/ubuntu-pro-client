@@ -6,18 +6,16 @@ import time
 
 import pytest
 
+from behave_campaign import adapters as adapters_module
 from behave_campaign.adapters import (
     FileCampaignRunLock,
     JobDirFiles,
     JsonlCampaignStore,
-    JsonlEventLog,
-    NullEventLog,
     ServiceLaneRunner,
     SingleFileCampaignStore,
     TarBundleWriter,
 )
 from behave_campaign.domain.bundle import BundleEntry
-from behave_campaign.domain.events import NewEvent
 from behave_campaign.domain.records import (
     AttemptFinished,
     AttemptStarted,
@@ -90,6 +88,12 @@ def _stored_header(drop=None, **overrides):
     if drop is not None:
         del stored[drop]
     return stored
+
+
+def started(unit, job_id):
+    return AttemptStarted(
+        unit=unit, job_id=job_id, install_from="local", at=AT
+    )
 
 
 def plans(*units):
@@ -176,11 +180,10 @@ class TestJsonlCampaignStore:
         assert "1234567.jsonl" in str(error.value)
         assert "line 3" in str(error.value)
 
-    def test_list_ids_is_sorted_and_skips_event_files(self, tmp_path):
+    def test_list_ids_is_sorted_and_skips_lock_files(self, tmp_path):
         store = JsonlCampaignStore(tmp_path)
         store.create("222", header(), plans(UNIT_A))
         store.create("111", header(), plans(UNIT_A))
-        (tmp_path / "111.events.jsonl").write_text("{}\n")
         (tmp_path / "111.lock").write_text("")
 
         assert store.list_ids() == ["111", "222"]
@@ -428,191 +431,61 @@ class TestTarBundleWriter:
         assert output.stat().st_mode & 0o777 == 0o644
 
 
-# ---- event log ----
+# ---- waiting for a campaign to grow ----
 
 
-def new(kind, **data):
-    return NewEvent(kind=kind, at=AT, data=data)
+class TestStoreWait:
+    # Short enough that the tests stay quick, long enough to be sure a
+    # wait that should return at once did not wait it out.
+    PATIENCE = 5.0
 
+    @pytest.fixture
+    def store(self, tmp_path):
+        store = JsonlCampaignStore(tmp_path)
+        store.create("c1", header(), plans(UNIT_A))
+        return store
 
-@pytest.fixture
-def log(tmp_path):
-    return JsonlEventLog(tmp_path / "campaigns")
+    def test_it_returns_at_once_when_records_were_added(self, store):
+        seen = len(store.replay("c1"))
+        store.append("c1", [started(UNIT_A, "job-1")])
 
+        began = time.monotonic()
+        store.wait("c1", seen, timeout=self.PATIENCE)
 
-class TestJsonlEventLog:
-    def test_events_are_numbered_from_one(self, log):
-        stored = log.append(
-            "c1", [new("campaign.started"), new("lane.started")]
-        )
+        assert time.monotonic() - began < 1.0
 
-        assert [event.seq for event in stored] == [1, 2]
-
-    def test_numbering_continues_across_appends(self, log):
-        log.append("c1", [new("campaign.started")])
-
-        stored = log.append("c1", [new("lane.started")])
-
-        assert [event.seq for event in stored] == [2]
-
-    def test_each_campaign_is_numbered_separately(self, log):
-        log.append("c1", [new("campaign.started")])
-
-        stored = log.append("c2", [new("campaign.started")])
-
-        assert stored[0].seq == 1
-
-    def test_appending_nothing_stores_nothing(self, log):
-        assert log.append("c1", []) == []
-        assert log.latest_seq("c1") == 0
-
-    def test_read_returns_events_after_the_cursor(self, log):
-        log.append("c1", [new("campaign.started"), new("lane.started")])
-
-        found = log.read("c1", since_seq=1, kinds=[], limit=10)
-
-        assert [event.kind for event in found] == ["lane.started"]
-
-    def test_read_filters_by_kind(self, log):
-        log.append(
-            "c1",
-            [new("campaign.started"), new("unit.failed"), new("unit.passed")],
-        )
-
-        found = log.read("c1", since_seq=0, kinds=["unit.*"], limit=10)
-
-        assert [event.kind for event in found] == [
-            "unit.failed",
-            "unit.passed",
-        ]
-
-    def test_read_respects_the_limit(self, log):
-        log.append("c1", [new("unit.passed") for _ in range(5)])
-
-        assert len(log.read("c1", since_seq=0, kinds=[], limit=2)) == 2
-
-    def test_an_unknown_campaign_simply_has_no_events(self, log):
-        assert log.read("absent", since_seq=0, kinds=[], limit=10) == []
-        assert log.latest_seq("absent") == 0
-
-    def test_latest_seq_tracks_the_last_event(self, log):
-        log.append("c1", [new("unit.passed"), new("unit.failed")])
-
-        assert log.latest_seq("c1") == 2
-
-    def test_events_are_written_to_disk(self, log, tmp_path):
-        log.append("c1", [new("unit.failed", release="jammy")])
-
-        path = tmp_path / "campaigns" / "c1.events.jsonl"
-        stored = json.loads(path.read_text().splitlines()[0])
-
-        assert stored["seq"] == 1
-        assert stored["kind"] == "unit.failed"
-        assert stored["campaign_id"] == "c1"
-        assert stored["data"] == {"release": "jammy"}
-
-    def test_a_cursor_survives_a_restart(self, log, tmp_path):
-        log.append("c1", [new("campaign.started"), new("unit.passed")])
-
-        # A fresh process reads the file rather than any memory.
-        reopened = JsonlEventLog(tmp_path / "campaigns")
-
-        assert reopened.latest_seq("c1") == 2
-        assert [
-            e.kind
-            for e in reopened.read("c1", since_seq=1, kinds=[], limit=10)
-        ] == ["unit.passed"]
-
-    def test_numbering_continues_after_a_restart(self, log, tmp_path):
-        log.append("c1", [new("campaign.started")])
-
-        reopened = JsonlEventLog(tmp_path / "campaigns")
-        stored = reopened.append("c1", [new("unit.passed")])
-
-        assert stored[0].seq == 2
-
-    def test_a_corrupt_event_line_names_the_file(self, log, tmp_path):
-        log.append("c1", [new("campaign.started")])
-        path = tmp_path / "campaigns" / "c1.events.jsonl"
-        with path.open("a") as stream:
-            stream.write('{"seq": "no"}\n')
-
-        with pytest.raises(CampaignError) as error:
-            JsonlEventLog(tmp_path / "campaigns").read(
-                "c1", since_seq=0, kinds=[], limit=10
-            )
-
-        assert "c1.events.jsonl" in str(error.value)
-        assert "line 2" in str(error.value)
-
-
-class TestWaiting:
-    def test_it_returns_at_once_when_something_already_matches(self, log):
-        log.append("c1", [new("unit.failed")])
-
-        started = time.monotonic()
-        found = log.wait("c1", since_seq=0, kinds=[], limit=10, timeout=5.0)
-
-        assert [e.kind for e in found] == ["unit.failed"]
-        assert time.monotonic() - started < 1.0
-
-    def test_it_returns_empty_on_timeout_rather_than_raising(self, log):
+    def test_it_returns_on_timeout_rather_than_raising(self, store):
         # A quiet campaign is not an error.
-        found = log.wait("c1", since_seq=0, kinds=[], limit=10, timeout=0.05)
+        store.wait("c1", len(store.replay("c1")), timeout=0.05)
 
-        assert found == []
-
-    def test_an_append_wakes_a_waiting_reader(self, log):
-        found = []
+    def test_an_append_wakes_a_waiting_reader(self, store):
+        seen = len(store.replay("c1"))
+        woke = threading.Event()
 
         def reader():
-            found.extend(
-                log.wait("c1", since_seq=0, kinds=[], limit=10, timeout=10.0)
-            )
+            store.wait("c1", seen, timeout=self.PATIENCE)
+            woke.set()
 
         thread = threading.Thread(target=reader)
         thread.start()
-        time.sleep(0.05)
-        log.append("c1", [new("unit.passed")])
-        thread.join(timeout=10)
+        store.append("c1", [started(UNIT_A, "job-1")])
 
-        assert [event.kind for event in found] == ["unit.passed"]
+        assert woke.wait(self.PATIENCE)
+        thread.join(self.PATIENCE)
 
-    def test_a_reader_keeps_waiting_through_events_it_filtered_out(self, log):
-        found = []
+    def test_another_writer_is_noticed_by_polling(
+        self, store, tmp_path, monkeypatch
+    ):
+        # A second store object stands for another process: its append
+        # cannot wake this one's readers, so they poll.
+        monkeypatch.setattr(adapters_module._Changes, "POLL_SECONDS", 0.01)
+        seen = len(store.replay("c1"))
+        JsonlCampaignStore(tmp_path).append("c1", [started(UNIT_A, "job-1")])
 
-        def reader():
-            found.extend(
-                log.wait(
-                    "c1",
-                    since_seq=0,
-                    kinds=["unit.*"],
-                    limit=10,
-                    timeout=10.0,
-                )
-            )
+        began = time.monotonic()
+        store.wait("c1", seen, timeout=self.PATIENCE)
 
-        thread = threading.Thread(target=reader)
-        thread.start()
-        time.sleep(0.05)
-        log.append("c1", [new("lane.started")])
-        time.sleep(0.05)
-        log.append("c1", [new("unit.failed")])
-        thread.join(timeout=10)
-
-        assert [event.kind for event in found] == ["unit.failed"]
-
-
-class TestNullEventLog:
-    def test_it_discards_everything(self):
-        log = NullEventLog()
-
-        assert log.append("c1", [new("unit.passed")]) == []
-        assert log.read("c1", since_seq=0, kinds=[], limit=10) == []
-        assert (
-            log.wait("c1", since_seq=0, kinds=[], limit=10, timeout=0.01) == []
-        )
-        assert log.latest_seq("c1") == 0
+        assert time.monotonic() - began < 1.0
 
 
 FEATURE_A = """Feature: A feature

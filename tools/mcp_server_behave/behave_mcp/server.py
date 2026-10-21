@@ -17,7 +17,6 @@ from starlette.responses import JSONResponse
 from behave_campaign.adapters import (
     FileCampaignRunLock,
     JsonlCampaignStore,
-    JsonlEventLog,
     ParserFeatureReader,
     ServiceLaneRunner,
     system_now,
@@ -228,7 +227,7 @@ _workspace = LocalWorkspace()
 # The runner holds the run lock and the ticker for the active campaign, so
 # unlike the per-call service there is exactly one for the server's lifetime.
 _runner: CampaignRunner | None = None
-_events: JsonlEventLog | None = None
+_store: JsonlCampaignStore | None = None
 _runner_guard = threading.Lock()
 
 
@@ -236,17 +235,18 @@ def _campaign_dir() -> Path:
     return _workspace.resolve_campaign_dir()
 
 
-def campaign_events(campaign_dir: Path) -> JsonlEventLog:
-    """Return the one event log for a campaign directory.
+def campaign_store() -> JsonlCampaignStore:
+    """Return the one store for the server's campaign directory.
 
-    Shared rather than per-call: a blocked reader is woken through the same
-    object the runner appends to, so it has to outlive a single request.
+    Shared rather than per-call: a reader waiting for events is woken by
+    the appends the runner makes through this same object.
     """
-    global _events
+    global _store
+    campaign_dir = _campaign_dir()
     with _runner_guard:
-        if _events is None:
-            _events = JsonlEventLog(campaign_dir)
-        return _events
+        if _store is None:
+            _store = JsonlCampaignStore(campaign_dir)
+        return _store
 
 
 def campaign_runner() -> CampaignRunner:
@@ -256,32 +256,27 @@ def campaign_runner() -> CampaignRunner:
     lock and the ticker for whichever campaign is active.
     """
     global _runner
-    campaign_dir = _campaign_dir()
-    # Resolved before the guard, which is not reentrant, and so that the
-    # runner shares the one log rather than quietly making a second.
-    events = campaign_events(campaign_dir)
+    # Resolved before the guard, which is not reentrant.
+    store = campaign_store()
     with _runner_guard:
         if _runner is None:
             _runner = CampaignRunner(
-                store=JsonlCampaignStore(campaign_dir),
+                store=store,
                 lanes=ServiceLaneRunner(_service),
-                lock=FileCampaignRunLock(campaign_dir),
-                events=events,
+                lock=FileCampaignRunLock(store.root),
                 now=system_now,
             )
         return _runner
 
 
 def campaign_service() -> CampaignService:
-    """Build a CampaignService over the server's campaign directory.
+    """Build a CampaignService over the server's campaign store.
 
     It holds no state of its own, so it is assembled per call.
     """
-    campaign_dir = _campaign_dir()
     return CampaignService(
-        store=JsonlCampaignStore(campaign_dir),
+        store=campaign_store(),
         features=ParserFeatureReader(),
-        events=campaign_events(campaign_dir),
         now=system_now,
         repo_state=read_repo_state,
         lane_ceiling=_settings.pool_limits,

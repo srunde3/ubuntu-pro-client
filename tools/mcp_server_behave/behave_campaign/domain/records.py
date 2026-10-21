@@ -41,6 +41,10 @@ class RecordType(StringEnum):
     INTERRUPTED = "interrupted"
     INTENT = "intent"
     RETRY = "retry"
+    # Observations the scheduler writes once per episode, so a watcher
+    # hears of each once, across restarts.
+    STARVED = "starved"
+    OVERDUE = "overdue"
 
 
 class Outcome(StringEnum):
@@ -84,6 +88,19 @@ class Intent(StringEnum):
 
 
 WRITABLE_INTENTS = (Intent.RUN, Intent.HOLD)
+
+
+class Cause(StringEnum):
+    """What moved a campaign: a command, or the scheduler on its own."""
+
+    RUN = "run"
+    PAUSE = "pause"
+    RETRY = "retry"
+    SCHEDULER = "scheduler"
+
+
+# The commands that write an intent.
+COMMAND_CAUSES = (Cause.RUN, Cause.PAUSE, Cause.RETRY)
 
 
 class Progress(StringEnum):
@@ -147,7 +164,23 @@ UNIT_FIELDS = ("feature", "scenario", "release", "machine_type")
 STARTED_FIELDS = (*UNIT_FIELDS, "job_id", "install_from", "at")
 
 
-FINISHED_FIELDS = (*UNIT_FIELDS, "job_id", "outcome", "at")
+FINISHED_FIELDS = (
+    *UNIT_FIELDS,
+    "job_id",
+    "outcome",
+    "at",
+    "problem",
+    "failures",
+)
+
+
+FAILURE_FIELDS = ("step", "status", "error_message")
+
+
+STARVED_FIELDS = (*UNIT_FIELDS, "pool", "reason", "at")
+
+
+OVERDUE_FIELDS = (*UNIT_FIELDS, "job_id", "elapsed_seconds", "at")
 
 
 PLAN_FIELDS = (*UNIT_FIELDS, "at")
@@ -156,7 +189,7 @@ PLAN_FIELDS = (*UNIT_FIELDS, "at")
 INTERRUPTED_FIELDS = (*UNIT_FIELDS, "job_id", "at", "reason")
 
 
-INTENT_FIELDS = ("intent", "at")
+INTENT_FIELDS = ("intent", "cause", "at")
 
 
 RETRY_FIELDS = (*UNIT_FIELDS, "at", "reason")
@@ -239,13 +272,36 @@ class AttemptStarted:
 
 
 @dataclass(frozen=True)
+class Failure:
+    """One failing step, as a finished job's report gave it."""
+
+    step: str
+    status: str
+    error_message: str = ""
+
+    def as_dict(self) -> dict[str, str]:
+        return {
+            "step": self.step,
+            "status": self.status,
+            "error_message": self.error_message,
+        }
+
+
+@dataclass(frozen=True)
 class AttemptFinished:
-    """That job ended, and what it established."""
+    """That job ended, and what it established.
+
+    ``problem`` says why a result could not be classified, which makes the
+    outcome ``error``. ``failures`` carries the first failing steps, so a
+    failure can be judged without the job's report.
+    """
 
     unit: Unit
     job_id: str
     outcome: Outcome
     at: str = ""
+    problem: str = ""
+    failures: tuple[Failure, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -256,6 +312,27 @@ class AttemptInterrupted:
     job_id: str
     at: str = ""
     reason: str = ""
+
+
+@dataclass(frozen=True)
+class Starved:
+    """A unit could not get a lane in its pool. Once per episode: until a
+    lane next opens in that pool."""
+
+    unit: Unit
+    pool: Pool
+    reason: str
+    at: str = ""
+
+
+@dataclass(frozen=True)
+class Overdue:
+    """A job has run longer than the scheduler expects. Once per job."""
+
+    unit: Unit
+    job_id: str
+    elapsed_seconds: int
+    at: str = ""
 
 
 @dataclass(frozen=True)
@@ -395,6 +472,7 @@ class IntentRecord:
     """What a caller asked the campaign to do: run, or hold."""
 
     intent: Intent
+    cause: Cause
     at: str = ""
 
 
@@ -406,6 +484,8 @@ Record = (
     | AttemptInterrupted
     | IntentRecord
     | RetryRecord
+    | Starved
+    | Overdue
 )
 
 
@@ -502,11 +582,50 @@ def _parse_started(body: dict[str, Any]) -> AttemptStarted:
 
 def _parse_finished(body: dict[str, Any]) -> AttemptFinished:
     require_fields(body, FINISHED_FIELDS, "finished")
+    failures = body["failures"]
+    if not isinstance(failures, list):
+        raise CampaignError("finished field 'failures' must be a list")
+    parsed = []
+    for raw in failures:
+        failure = require_fields(raw, FAILURE_FIELDS, "failure")
+        if not all(isinstance(failure[f], str) for f in FAILURE_FIELDS):
+            raise CampaignError("failure fields must be strings")
+        parsed.append(Failure(**failure))
     return AttemptFinished(
         unit=_unit_from(body, "finished"),
         job_id=text_field(body, "job_id", "finished"),
         outcome=validate_outcome(body["outcome"]),
         at=text_field(body, "at", "finished"),
+        problem=_string_field(body, "problem", "finished"),
+        failures=tuple(parsed),
+    )
+
+
+def _parse_starved(body: dict[str, Any]) -> Starved:
+    require_fields(body, STARVED_FIELDS, "starved")
+    pool = body["pool"]
+    if pool not in POOLS:
+        raise CampaignError(
+            "starved pool must be one of: {}".format(", ".join(POOLS))
+        )
+    return Starved(
+        unit=_unit_from(body, "starved"),
+        pool=Pool(pool),
+        reason=_string_field(body, "reason", "starved"),
+        at=text_field(body, "at", "starved"),
+    )
+
+
+def _parse_overdue(body: dict[str, Any]) -> Overdue:
+    require_fields(body, OVERDUE_FIELDS, "overdue")
+    elapsed = body["elapsed_seconds"]
+    if isinstance(elapsed, bool) or not isinstance(elapsed, int):
+        raise CampaignError("overdue field 'elapsed_seconds' must be an int")
+    return Overdue(
+        unit=_unit_from(body, "overdue"),
+        job_id=text_field(body, "job_id", "overdue"),
+        elapsed_seconds=elapsed,
+        at=text_field(body, "at", "overdue"),
     )
 
 
@@ -521,10 +640,16 @@ def _parse_interrupted(body: dict[str, Any]) -> AttemptInterrupted:
 
 
 def _reason_field(body: dict[str, Any], label: str) -> str:
-    reason = body["reason"]
-    if not isinstance(reason, str):
-        raise CampaignError("{} field 'reason' must be a string".format(label))
-    return reason
+    return _string_field(body, "reason", label)
+
+
+def _string_field(body: dict[str, Any], key: str, label: str) -> str:
+    value = body[key]
+    if not isinstance(value, str):
+        raise CampaignError(
+            "{} field '{}' must be a string".format(label, key)
+        )
+    return value
 
 
 def _parse_campaign(body: dict[str, Any]) -> CampaignHeader:
@@ -642,6 +767,10 @@ def parse_record(raw: Any) -> Record:
         return _parse_finished(body)
     if kind == RecordType.INTERRUPTED:
         return _parse_interrupted(body)
+    if kind == RecordType.STARVED:
+        return _parse_starved(body)
+    if kind == RecordType.OVERDUE:
+        return _parse_overdue(body)
     if kind == RecordType.CAMPAIGN:
         return _parse_campaign(body)
     if kind == RecordType.RETRY:
@@ -658,8 +787,16 @@ def parse_record(raw: Any) -> Record:
             raise CampaignError(
                 "intent must be one of: {}".format(", ".join(WRITABLE_INTENTS))
             )
+        cause = body["cause"]
+        if cause not in COMMAND_CAUSES:
+            raise CampaignError(
+                "intent cause must be one of: {}".format(
+                    ", ".join(COMMAND_CAUSES)
+                )
+            )
         return IntentRecord(
             intent=Intent(intent),
+            cause=Cause(cause),
             at=text_field(body, "at", "intent"),
         )
     raise CampaignError(
@@ -683,6 +820,7 @@ def encode_record(record: Record) -> dict[str, Any]:
         return {
             "type": RecordType.INTENT,
             "intent": record.intent,
+            "cause": record.cause,
             "at": record.at,
         }
 
@@ -704,6 +842,18 @@ def encode_record(record: Record) -> dict[str, Any]:
         data["type"] = RecordType.FINISHED
         data["job_id"] = record.job_id
         data["outcome"] = record.outcome
+        data["problem"] = record.problem
+        data["failures"] = [failure.as_dict() for failure in record.failures]
+        return data
+    if isinstance(record, Starved):
+        data["type"] = RecordType.STARVED
+        data["pool"] = record.pool.value
+        data["reason"] = record.reason
+        return data
+    if isinstance(record, Overdue):
+        data["type"] = RecordType.OVERDUE
+        data["job_id"] = record.job_id
+        data["elapsed_seconds"] = record.elapsed_seconds
         return data
     if isinstance(record, AttemptInterrupted):
         data["type"] = RecordType.INTERRUPTED

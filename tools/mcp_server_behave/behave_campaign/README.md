@@ -11,17 +11,20 @@ A **test unit** is one behave scenario for one release on one `machine_type`.
 ## Storage
 
 One append-only JSON Lines file per campaign, replayed in full to get the
-current state. Seven record types:
+current state. It is the only thing stored: every event a watcher hears is
+derived from it. Nine record types:
 
 | type | written when | says |
 | --- | --- | --- |
 | `campaign` | once, first line | how the campaign was built: scope, checkout, install source, lanes |
 | `plan` | once per unit, at creation | this unit is in scope |
 | `started` | a lane opens | a job began for this unit, and what it installs from |
-| `finished` | that job ends | what it established: `passed`, `failed`, `skipped` or `error` |
+| `finished` | that job ends | what it established: `passed`, `failed`, `skipped` or `error`; the first failing steps; and, for a result that could not be classified, the `problem` |
 | `interrupted` | a pause with kill stops the job | the job ended without an outcome, and why |
 | `intent` | `run`, `pause` or `retry_units` | what the caller asked the campaign to do: `run` or `hold` |
 | `retry` | `retry_units` | someone asked for another go at a unit |
+| `starved` | a lane is refused for want of capacity | which pool, and why; once per episode, until a lane next opens in that pool |
+| `overdue` | a job runs past the overdue threshold | which job, and for how long; once per job |
 
 One try at a unit is one job, written as two records. Both are needed: the
 `started` record is what holds the lane, including across a restart. Neither
@@ -124,8 +127,8 @@ is `<repo>/.mcp_server_behave/campaigns/1234567.jsonl` (or under
 same name. `--campaign FILE` addresses a file anywhere instead; its id is
 always the file's name. `--repo-root` defaults to `$UBUNTU_PRO_CLIENT_REPO`.
 
-`events` reads the log a server writes beside the campaign file
-(`1234567.events.jsonl`); it needs no server of its own. `--since-seq` and
+`events` reads the events the campaign's records announce; it needs no
+server of its own. `--since-seq` and
 `--kinds` work as they do for `await_campaign_events`. With `--follow` it
 prints one batch per line as events arrive, polling every `--interval`
 seconds, and returns once the campaign is paused or complete. The CLI records
@@ -255,17 +258,25 @@ failure can be judged without fetching the job's report; `failure_chars`
 shortens the messages on read for a caller that only wants to skim. A
 `unit.unclassifiable` event carries the reason the result could not be read.
 
-`seq` is dense and monotonic within a campaign, so a cursor never skips: pass
-`next_seq` from one response as the next `since_seq`. Events are appended to
-`<campaign_id>.events.jsonl` and held in memory for serving, which is what
-lets a cursor survive a restart and a blocked reader be woken by an append.
+Events are not stored. Each read derives them from the campaign's records,
+one pass over the log: a record announces what it says (`lane.started`,
+`unit.failed`, `unit.retried`, `anomaly.capacity_starved`, `lane.overdue` and
+so on), and any change of the campaign's state it causes. `seq` is an event's
+position in that feed, so it is dense, and appending records never renumbers
+an earlier event: a cursor survives a restart, and two readers in different
+processes see the same numbers. Pass `next_seq` from one response as the next
+`since_seq`. A reader waiting with a timeout is woken by the server's own
+appends at once, and notices another process's within a second.
 
 `anomaly.*` and `lane.overdue` are derived: nothing acts on them. A run of
 skips usually means a config the host does not have, and one scenario failing
 across every release usually means a real defect rather than flake -- but
 which of those it is, and what to do about it, is not for an unattended loop
-to decide. Each is reported once per condition rather than every tick, keyed
-on the condition itself, so a lane that stays slow does not flood the stream.
+to decide. Each is announced once per condition, so a lane that stays slow
+does not flood the stream: a repeated failure or run of skips the first time
+it holds, a starved pool once until a lane next opens there, an overdue job
+once. Starvation and overdue are written as records, so a restart does not
+announce them again.
 
 There is deliberately no heartbeat. Every response carries the campaign's
 counts and state, so a batch that came back empty on timeout still says
@@ -337,7 +348,7 @@ that silently matches nothing:
 
 | enum | values | module |
 | --- | --- | --- |
-| `RecordType` | the seven record types above | `domain/records.py` |
+| `RecordType` | the nine record types above | `domain/records.py` |
 | `Outcome` | `passed`, `failed`, `skipped`, `error` | `domain/records.py` |
 | `UnitState` | those four, plus `unattempted` and `in_flight` | `domain/records.py` |
 | `Intent` | `never_run`, `run`, `hold` | `domain/records.py` |
@@ -346,7 +357,7 @@ that silently matches nothing:
 | `GroupBy` | `unit`, `scenario` | `domain/state.py` |
 | `ControlAction` | `run`, `pause` | `domain/schedule.py` |
 | `EventKind` | every event, with a `family` property | `domain/events.py` |
-| `Cause` | `run`, `pause`, `retry`, `scheduler` | `domain/events.py` |
+| `Cause` | `run`, `pause`, `retry`, `scheduler` | `domain/records.py` |
 | `EventFamily` | `campaign`, `lane`, `unit`, `anomaly` | `domain/events.py` |
 
 They all subclass `StringEnum`, so a member reads and serialises as its
@@ -370,8 +381,9 @@ packages with one module per concern.
 - `classify.py`: what a finished MCP job established for its unit.
 - `events.py`: event kinds, subscription presets and matching, and the
   event a change of state announces.
-- `signals.py`: derived observations such as repeated failures and overdue
-  lanes.
+- `signals.py`: the thresholds for derived signals, and which lanes are
+  overdue.
+- `feed.py`: derives every event from the record log.
 - `discovery.py`: builds units from the feature files through
   `behave_mcp.parser`.
 - `bundle.py`: what a complete campaign's evidence bundle holds.
@@ -386,7 +398,7 @@ The other modules:
 
 - `messages.py`: pydantic DTOs returned across the MCP boundary.
 - `ports.py`: the Protocols the service and runner depend on:
-  `CampaignStore`, `FeatureReader`, `LaneRunner`, `EventLog`, `Ticker`,
+  `CampaignStore`, `FeatureReader`, `LaneRunner`, `Ticker`,
   `CampaignRunLock`, `JobFiles`, `BundleWriter`.
 - `adapters.py`: concrete implementations. Two stores satisfy
   `CampaignStore`: the MCP names a campaign by id inside a campaign

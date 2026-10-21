@@ -12,7 +12,6 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Protocol, Sequence
 
 from behave_campaign.domain.bundle import BundleEntry
-from behave_campaign.domain.events import Event, NewEvent
 from behave_campaign.domain.records import (
     CampaignError,
     CampaignHeader,
@@ -86,6 +85,11 @@ class CampaignStore(Protocol):
         """Return the file holding the campaign's records."""
         ...
 
+    def wait(self, campaign_id: str, seen: int, timeout: float) -> None:
+        """Block until the campaign holds more than ``seen`` records, or
+        ``timeout`` seconds pass. Returns either way."""
+        ...
+
 
 class FeatureReader(Protocol):
     """Reads the behave feature files a campaign draws its units from."""
@@ -140,56 +144,6 @@ class LaneRunner(Protocol):
         False means there was nothing to signal: the job had finished, or
         this process holds no handle on it.
         """
-        ...
-
-
-class EventLog(Protocol):
-    """Numbered, durable notifications about one campaign.
-
-    The campaign's own record is the truth about what happened; this is how
-    a watcher hears about it promptly. ``seq`` is monotonic per campaign and
-    survives a restart, so a cursor stays valid across one.
-    """
-
-    def append(
-        self, campaign_id: str, events: Sequence[NewEvent]
-    ) -> list[Event]:
-        """Number and store ``events``, returning them as stored."""
-        ...
-
-    def read(
-        self,
-        campaign_id: str,
-        *,
-        since_seq: int,
-        kinds: Sequence[str],
-        limit: int,
-    ) -> list[Event]:
-        """Return matching events after ``since_seq``, oldest first."""
-        ...
-
-    def wait(
-        self,
-        campaign_id: str,
-        *,
-        since_seq: int,
-        kinds: Sequence[str],
-        limit: int,
-        timeout: float,
-    ) -> list[Event]:
-        """Like ``read``, but block until something matches or time runs out.
-
-        Returns an empty list on timeout rather than raising: a quiet
-        campaign is not an error.
-        """
-        ...
-
-    def latest_seq(self, campaign_id: str) -> int:
-        """Return the highest seq stored, or 0 when there are none."""
-        ...
-
-    def path_for(self, campaign_id: str) -> Path | None:
-        """Return the file holding the events, or None if none is kept."""
         ...
 
 

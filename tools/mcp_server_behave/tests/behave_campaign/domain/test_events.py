@@ -6,23 +6,18 @@ import pytest
 
 from behave_campaign.domain.events import (
     ACTIONABLE_PRESET,
-    Cause,
+    STATE_EVENT,
     EventKind,
     event_matches,
     expand_event_kinds,
     failure_details,
-    state_events,
     unit_event_kind,
 )
 from behave_campaign.domain.records import (
     CampaignError,
     CampaignState,
-    Intent,
     Outcome,
-    Progress,
 )
-
-AT = "2026-09-12T12:00:00Z"
 
 
 class TestEventMatching:
@@ -163,52 +158,7 @@ def test_every_campaign_state_has_an_expected_event():
 
 @pytest.mark.parametrize("state, kind", EVENT_FOR_STATE.items(), ids=str)
 def test_arriving_in_a_state_announces_its_event(state, kind):
-    # Any other state will do as the one left behind.
-    previous = next(other for other in CampaignState if other != state)
-
-    (event,) = state_events(
-        before=previous,
-        after=state,
-        intent=Intent.RUN,
-        progress=Progress.OPEN,
-        cause=Cause.SCHEDULER,
-        at=AT,
-    )
-
-    assert event.kind == kind
-
-
-def test_staying_in_a_state_announces_nothing():
-    events = state_events(
-        before=CampaignState.RUNNING,
-        after=CampaignState.RUNNING,
-        intent=Intent.RUN,
-        progress=Progress.OPEN,
-        cause=Cause.RUN,
-        at=AT,
-    )
-
-    assert events == []
-
-
-def test_a_state_event_says_where_from_and_why():
-    (event,) = state_events(
-        before=CampaignState.RUNNING,
-        after=CampaignState.PAUSING,
-        intent=Intent.HOLD,
-        progress=Progress.OPEN,
-        cause=Cause.PAUSE,
-        at=AT,
-        data={"kill": False},
-    )
-
-    assert event.data == {
-        "from": "running",
-        "intent": "hold",
-        "progress": "open",
-        "cause": "pause",
-        "kill": False,
-    }
+    assert STATE_EVENT[state] == kind
 
 
 class TestFailureDetails:

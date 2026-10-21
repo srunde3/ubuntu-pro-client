@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Any
 
+from behave_campaign.domain.events import failure_details
 from behave_campaign.domain.records import (
     AttemptFinished,
     CampaignError,
+    Failure,
     Outcome,
     Unit,
     text_field,
@@ -90,21 +91,12 @@ def finished_from_mcp(unit: Unit, result: Any) -> AttemptFinished:
     )
 
 
-@dataclass(frozen=True)
-class Classification:
-    """One finished job mapped onto an attempt.
+def classify_result(unit: Unit, result: Any, at: str = "") -> AttemptFinished:
+    """Map a finished MCP job onto a finished attempt. Never raises.
 
-    ``problem`` is set when the job's result could not be classified. The
-    outcome is still recorded, as ``error``, because a scheduler has nobody
-    to raise at and one strange job must not stop a campaign.
+    A result that cannot be classified is recorded as ``error`` with the
+    reason in ``problem``: a scheduler has nobody to raise at.
     """
-
-    finished: AttemptFinished
-    problem: str = ""
-
-
-def classify_result(unit: Unit, result: Any, at: str = "") -> Classification:
-    """Map a finished MCP job onto an outcome. Never raises."""
     try:
         finished = finished_from_mcp(unit, result)
     except CampaignError as error:
@@ -112,20 +104,21 @@ def classify_result(unit: Unit, result: Any, at: str = "") -> Classification:
         if isinstance(result, dict):
             raw_job_id = result.get("job_id")
             job_id = raw_job_id if isinstance(raw_job_id, str) else ""
-        return Classification(
-            finished=AttemptFinished(
-                unit=unit,
-                job_id=job_id,
-                outcome=Outcome.ERROR,
-                at=at,
-            ),
+        return AttemptFinished(
+            unit=unit,
+            job_id=job_id,
+            outcome=Outcome.ERROR,
+            at=at,
             problem=str(error),
         )
-    return Classification(
-        finished=AttemptFinished(
-            unit=finished.unit,
-            job_id=finished.job_id,
-            outcome=finished.outcome,
-            at=at,
-        )
+    return AttemptFinished(
+        unit=finished.unit,
+        job_id=finished.job_id,
+        outcome=finished.outcome,
+        at=at,
+        failures=(
+            tuple(Failure(**raw) for raw in failure_details(result))
+            if finished.outcome == Outcome.FAILED
+            else ()
+        ),
     )

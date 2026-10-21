@@ -60,16 +60,15 @@ Everything the server writes lives under its own checkout's `.mcp_server_behave/
 | `jobs/<job_id>/stdout.log` | combined stdout and stderr of the job | the behave subprocess |
 | `jobs/<job_id>/report.json` | behave's JSON report | the behave subprocess |
 | `campaigns/<id>.jsonl` | the campaign record: header, plan, started, finished, interrupted, intent and retry records, append only | `CampaignService` (create), `CampaignRunner` |
-| `campaigns/<id>.events.jsonl` | numbered events | `JsonlEventLog` |
 | `campaigns/<id>.lock` | the run lock (`flock`) while a campaign schedules | `FileCampaignRunLock` |
 | `exports/<id>.tar.gz` | the evidence bundle | CLI `export` |
 
-Only a campaign's intent is written. Its unit states, progress and named state are rebuilt by replaying its record file through `domain/state.py` (`reduce_units`, `progress`, `state_of`).
+Only a campaign's intent is written, and events are never stored: `domain/feed.py` derives them from the records on every read. Its unit states, progress and named state are rebuilt by replaying its record file through `domain/state.py` (`reduce_units`, `progress`, `state_of`).
 
 ## Process model
 
 - One long-lived server process, serving MCP over streamable HTTP at `http://MCP_HOST:MCP_PORT/mcp`. FastMCP runs tool calls on worker threads.
-- `server.py` holds the long-lived objects: one `BehaveService`, one `InMemoryJobRegistry`, one `CampaignRunner` and one `JsonlEventLog`. `CampaignService` is built per call.
+- `server.py` holds the long-lived objects: one `BehaveService`, one `InMemoryJobRegistry`, one `CampaignRunner` and one `JsonlCampaignStore`, shared so a reader waiting for events is woken by the runner's appends. `CampaignService` is built per call.
 - One daemon ticker thread calls `CampaignRunner.tick` every 2 s for the one campaign that is scheduling: running, finishing or pausing. It stops, and the run lock is released, once that campaign is paused or complete. The runner's guard serialises ticks and the `run`, `pause` and `retry_units` commands.
 - Each behave job is a `tox -e behave` subprocess in its own session, with stdin from `/dev/null`. `kill_job` signals the whole process group.
 

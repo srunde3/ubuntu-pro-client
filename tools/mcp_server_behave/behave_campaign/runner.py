@@ -16,17 +16,8 @@ from __future__ import annotations
 import logging
 import threading
 from pathlib import Path
-from typing import Any, Callable, Sequence
+from typing import Callable, Sequence
 
-from behave_campaign.domain.classify import Classification
-from behave_campaign.domain.events import (
-    Cause,
-    EventKind,
-    NewEvent,
-    failure_details,
-    state_events,
-    unit_event_kind,
-)
 from behave_campaign.domain.records import (
     PROBLEM_OUTCOMES,
     AttemptInterrupted,
@@ -34,27 +25,26 @@ from behave_campaign.domain.records import (
     CampaignError,
     CampaignHeader,
     CampaignState,
+    Cause,
     Filters,
     Intent,
     IntentRecord,
-    Outcome,
     Record,
     RetryRecord,
+    Starved,
     Unit,
     UnitStatus,
 )
 from behave_campaign.domain.schedule import Lane, plan_tick
 from behave_campaign.domain.signals import (
     DEFAULT_OVERDUE_SECONDS,
-    Signal,
-    detect_signals,
+    overdue_lanes,
 )
 from behave_campaign.domain.state import (
-    count_states,
     in_flight,
     intent,
-    progress,
     reduce_units,
+    replay,
     state_of,
 )
 from behave_campaign.messages import (
@@ -66,7 +56,6 @@ from behave_campaign.messages import (
 from behave_campaign.ports import (
     CampaignRunLock,
     CampaignStore,
-    EventLog,
     LaneRunner,
     LaneStartError,
     Ticker,
@@ -138,7 +127,12 @@ class ThreadTicker:
 
 
 class CampaignRunner:
-    """Runs, pauses and advances the one campaign that may be scheduling."""
+    """Runs, pauses and advances the one campaign that may be scheduling.
+
+    It writes records only. Everything a watcher hears is derived from
+    them, so the runner keeps nothing about a campaign in memory but which
+    one it is scheduling.
+    """
 
     def __init__(
         self,
@@ -146,7 +140,6 @@ class CampaignRunner:
         store: CampaignStore,
         lanes: LaneRunner,
         lock: CampaignRunLock,
-        events: EventLog,
         now: Callable[[], str],
         ticker: Ticker | None = None,
         overdue_seconds: float = DEFAULT_OVERDUE_SECONDS,
@@ -154,16 +147,11 @@ class CampaignRunner:
         self._store = store
         self._lanes = lanes
         self._lock = lock
-        self._events = events
         self._now = now
         self._ticker = ticker if ticker is not None else ThreadTicker()
         self._overdue_seconds = overdue_seconds
         self._guard = threading.Lock()
         self._active: str | None = None
-        # Signals already reported, so a condition that stays true is said
-        # once rather than every tick. Per-process: a restart may repeat
-        # one, which is better than losing it.
-        self._reported: set[tuple[str, str]] = set()
 
     # -- control ----------------------------------------------------------
 
@@ -172,8 +160,11 @@ class CampaignRunner:
         with self._guard:
             records = self._store.replay(campaign_id)
             self._check_not_blocked(campaign_id, records)
-            written = self._intent_change(records, Intent.RUN)
-            self._commit(campaign_id, records, written, Cause.RUN)
+            self._commit(
+                campaign_id,
+                records,
+                self._intent_change(records, Intent.RUN, Cause.RUN),
+            )
             return self._control_response(campaign_id)
 
     def pause(
@@ -186,17 +177,18 @@ class CampaignRunner:
         """
         with self._guard:
             records = self._store.replay(campaign_id)
-            written = self._intent_change(records, Intent.HOLD)
-            self._store.append(campaign_id, written)
+            self._store.append(
+                campaign_id,
+                self._intent_change(records, Intent.HOLD, Cause.PAUSE),
+            )
             interrupted: list[UnitStatus] = []
             unsignalled: list[str] = []
             if kill:
                 interrupted = in_flight(reduce_units(records))
                 unsignalled = self._kill(campaign_id, interrupted)
-                written += self._interrupt(campaign_id, interrupted)
-            self._announce(
-                campaign_id, records, written, Cause.PAUSE, kill=kill
-            )
+                self._store.append(
+                    campaign_id, self._interruptions(interrupted)
+                )
             response = self._control_response(campaign_id)
             response.interrupted = [unit_view(s) for s in interrupted]
             response.unsignalled = unsignalled
@@ -231,25 +223,17 @@ class CampaignRunner:
             self._check_not_blocked(campaign_id, records, retrying=True)
 
             at = self._now()
-            retries: list[Record] = [
-                RetryRecord(unit=status.unit, at=at, reason=reason)
-                for status in selected
-            ]
-            written = [*retries, *self._intent_change(records, Intent.RUN)]
-            self._commit(campaign_id, records, written, Cause.RETRY)
-            self._events.append(
+            # The intent comes first, so the retries are what move the
+            # campaign, and its state changes once.
+            self._commit(
                 campaign_id,
+                records,
                 [
-                    NewEvent(
-                        kind=EventKind.UNIT_RETRIED,
-                        at=at,
-                        data={
-                            **status.unit.as_dict(),
-                            "previous_state": status.state,
-                            "reason": reason,
-                        },
-                    )
-                    for status in selected
+                    *self._intent_change(records, Intent.RUN, Cause.RETRY),
+                    *(
+                        RetryRecord(unit=status.unit, at=at, reason=reason)
+                        for status in selected
+                    ),
                 ],
             )
             return RetryUnitsResponse(
@@ -273,68 +257,38 @@ class CampaignRunner:
         records = self._store.replay(campaign_id)
         header = _header_of(records)
         lanes = self._read_lanes(records)
+        at = self._now()
 
         plan = plan_tick(
-            records=records,
-            lanes=lanes,
-            lane_limits=header.lanes,
-            at=self._now(),
+            records=records, lanes=lanes, lane_limits=header.lanes, at=at
         )
+        self._store.append(campaign_id, plan.record)
+        problems = [item.problem for item in plan.record if item.problem]
 
-        problems: list[str] = []
-        emitted: list[NewEvent] = []
-        written: list[Record] = []
-        if plan.record:
-            finished = [item.finished for item in plan.record]
-            self._store.append(campaign_id, finished)
-            written += finished
-            problems.extend(
-                item.problem for item in plan.record if item.problem
-            )
-            emitted.extend(self._outcome_events(plan.record, lanes))
-
-        starved: list[Signal] = []
-        started = self._open_lanes(
-            campaign_id, header, plan.start, problems, starved
+        started, refused = self._open_lanes(
+            campaign_id, header, plan.start, problems
         )
-        written += started
-        emitted.extend(self._signal_events(campaign_id, starved))
-        emitted.extend(
-            NewEvent(
-                kind=EventKind.LANE_STARTED,
-                at=attempt.at,
-                data={
-                    **attempt.unit.as_dict(),
-                    "job_id": attempt.job_id,
-                    "install_from": attempt.install_from,
-                },
-            )
-            for attempt in started
+        replayed = replay([*records, *plan.record, *started])
+        observed: list[Record] = [
+            refusal
+            for refusal in refused
+            if refusal.pool not in replayed.starved_pools
+        ]
+        observed += overdue_lanes(
+            [lane for lane in lanes if not lane.finished],
+            at=at,
+            overdue_seconds=self._overdue_seconds,
+            reported=replayed.overdue_jobs,
         )
+        self._store.append(campaign_id, observed)
 
-        busy = sum(1 for lane in lanes if not lane.finished) + len(started)
-        settled = [*records, *written]
-        current = state_of(settled)
-        emitted.extend(
-            self._signal_events(
-                campaign_id,
-                detect_signals(
-                    statuses=reduce_units(settled),
-                    lanes=self._read_lane_ages(settled),
-                    at=self._now(),
-                    overdue_seconds=self._overdue_seconds,
-                ),
-            )
-        )
-        emitted.extend(self._state_events(records, settled, Cause.SCHEDULER))
-        self._events.append(campaign_id, emitted)
-
+        current = replayed.state()
         return TickReport(
             campaign_id=campaign_id,
             state=current,
             recorded=len(plan.record),
             started=len(started),
-            lanes_busy=busy,
+            lanes_busy=replayed.in_flight,
             problems=problems,
             finished=current in IDLE_STATES,
         )
@@ -373,28 +327,27 @@ class CampaignRunner:
         )
 
     def _intent_change(
-        self, records: Sequence[Record], wanted: Intent
+        self, records: Sequence[Record], wanted: Intent, cause: Cause
     ) -> list[Record]:
         """The record that sets ``wanted``, or none if it is already set."""
         if intent(records) == wanted:
             return []
-        return [IntentRecord(intent=wanted, at=self._now())]
+        return [IntentRecord(intent=wanted, cause=cause, at=self._now())]
 
     def _commit(
         self,
         campaign_id: str,
         before: Sequence[Record],
         written: Sequence[Record],
-        cause: Cause,
     ) -> None:
         """Write a command's records, and schedule if there is work.
 
         The run lock is taken before anything is written, so a campaign
         another process is running is left exactly as it was.
         """
-        after = [*before, *written]
         schedules = (
-            state_of(after) not in IDLE_STATES and self._active != campaign_id
+            state_of([*before, *written]) not in IDLE_STATES
+            and self._active != campaign_id
         )
         if schedules:
             self._lock.acquire(campaign_id)
@@ -404,7 +357,6 @@ class CampaignRunner:
             if schedules:
                 self._lock.release(campaign_id)
             raise
-        self._announce(campaign_id, before, written, cause)
         if schedules:
             self._active = campaign_id
             self._start_ticker(campaign_id)
@@ -425,13 +377,11 @@ class CampaignRunner:
                 unsignalled.append(job_id)
         return unsignalled
 
-    def _interrupt(
-        self, campaign_id: str, statuses: Sequence[UnitStatus]
-    ) -> list[Record]:
-        if not statuses:
-            return []
+    def _interruptions(
+        self, statuses: Sequence[UnitStatus]
+    ) -> list[AttemptInterrupted]:
         at = self._now()
-        records: list[Record] = [
+        return [
             AttemptInterrupted(
                 unit=status.unit,
                 job_id=status.job_id or "",
@@ -440,54 +390,6 @@ class CampaignRunner:
             )
             for status in statuses
         ]
-        self._store.append(campaign_id, records)
-        self._events.append(
-            campaign_id,
-            [
-                NewEvent(
-                    kind=EventKind.UNIT_INTERRUPTED,
-                    at=at,
-                    data={
-                        **status.unit.as_dict(),
-                        "job_id": status.job_id,
-                        "reason": KILLED_REASON,
-                    },
-                )
-                for status in statuses
-            ],
-        )
-        return records
-
-    def _announce(
-        self,
-        campaign_id: str,
-        before: Sequence[Record],
-        written: Sequence[Record],
-        cause: Cause,
-        **data: Any,
-    ) -> None:
-        self._events.append(
-            campaign_id,
-            self._state_events(before, [*before, *written], cause, **data),
-        )
-
-    def _state_events(
-        self,
-        before: Sequence[Record],
-        after: Sequence[Record],
-        cause: Cause,
-        **data: Any,
-    ) -> list[NewEvent]:
-        statuses = reduce_units(after)
-        return state_events(
-            before=state_of(before),
-            after=state_of(after),
-            intent=intent(after),
-            progress=progress(statuses),
-            cause=cause,
-            at=self._now(),
-            data={**data, "counts": count_states(statuses)},
-        )
 
     def _open_lanes(
         self,
@@ -495,14 +397,15 @@ class CampaignRunner:
         header: CampaignHeader,
         units: Sequence[Unit],
         problems: list[str],
-        starved: list[Signal],
-    ) -> list[AttemptStarted]:
+    ) -> tuple[list[AttemptStarted], list[Starved]]:
+        """Start a job for each unit; return what started and what was
+        refused, one refusal per pool."""
         repo_root = Path(header.repo.root)
         install_from = header.install_from
         started: list[AttemptStarted] = []
-        full: set[Pool] = set()
+        refused: dict[Pool, Starved] = {}
         for unit in units:
-            if unit.pool in full:
+            if unit.pool in refused:
                 continue
             try:
                 job_id = self._lanes.start(
@@ -513,24 +416,15 @@ class CampaignRunner:
                 # later tick picks it up, and say why. A full pool only
                 # stops that pool; anything else stops the tick.
                 problems.append(str(error))
-                starved.append(
-                    Signal(
-                        kind=EventKind.ANOMALY_CAPACITY_STARVED,
-                        key=unit.pool.value,
-                        data={
-                            **unit.as_dict(),
-                            "pool": unit.pool.value,
-                            "reason": str(error),
-                        },
-                    )
+                refused[unit.pool] = Starved(
+                    unit=unit,
+                    pool=unit.pool,
+                    reason=str(error),
+                    at=self._now(),
                 )
                 if error.full_pool is None:
                     break
-                full.add(error.full_pool)
                 continue
-            self._reported.discard(
-                (EventKind.ANOMALY_CAPACITY_STARVED, unit.pool.value)
-            )
             started.append(
                 AttemptStarted(
                     unit=unit,
@@ -539,42 +433,10 @@ class CampaignRunner:
                     at=self._now(),
                 )
             )
-        if started:
-            # Recorded straight after starting, because an unfinished
-            # attempt is what keeps the unit out of the next tick's
-            # selection.
-            self._store.append(campaign_id, started)
-        return started
-
-    def _signal_events(
-        self, campaign_id: str, signals: Sequence[Signal]
-    ) -> list[NewEvent]:
-        """Turn new signals into events, skipping ones already reported."""
-        fresh = []
-        for signal in signals:
-            marker = (signal.kind, signal.key)
-            if marker in self._reported:
-                continue
-            self._reported.add(marker)
-            fresh.append(
-                NewEvent(
-                    kind=signal.kind, at=self._now(), data=dict(signal.data)
-                )
-            )
-        return fresh
-
-    def _read_lane_ages(self, records: Sequence[Record]) -> list[Lane]:
-        """Lanes as they stand now, without polling their jobs again."""
-        return [
-            Lane(
-                unit=status.unit,
-                job_id=status.job_id,
-                install_from=status.attempts[-1].install_from,
-                opened_at=status.attempts[-1].started_at,
-            )
-            for status in reduce_units(records)
-            if status.in_flight and status.job_id
-        ]
+        # Recorded straight after starting, because an unfinished attempt is
+        # what keeps the unit out of the next tick's selection.
+        self._store.append(campaign_id, started)
+        return started, list(refused.values())
 
     @staticmethod
     def _select_for_retry(
@@ -589,35 +451,6 @@ class CampaignRunner:
             and status.state in wanted
             and filters.matches_unit(status.unit)
         ]
-
-    def _outcome_events(
-        self,
-        classified: Sequence[Classification],
-        lanes: Sequence[Lane],
-    ) -> list[NewEvent]:
-        """One outcome event per finished lane; the kind is the outcome."""
-        results = {lane.unit: lane.result for lane in lanes if lane.finished}
-        events: list[NewEvent] = []
-        for item in classified:
-            finished = item.finished
-            body: dict[str, Any] = {
-                **finished.unit.as_dict(),
-                "job_id": finished.job_id,
-            }
-            if item.problem:
-                body["problem"] = item.problem
-            if finished.outcome == Outcome.FAILED:
-                # Carried here so a caller can judge the failure without
-                # going back for the job's report.
-                body["failures"] = failure_details(results.get(finished.unit))
-            events.append(
-                NewEvent(
-                    kind=unit_event_kind(finished.outcome, bool(item.problem)),
-                    at=finished.at,
-                    data=body,
-                )
-            )
-        return events
 
     def _read_lanes(self, records: Sequence[Record]) -> list[Lane]:
         lanes = []

@@ -11,6 +11,7 @@ from behave_campaign.domain.records import (
     CampaignError,
     CampaignHeader,
     CampaignState,
+    Cause,
     Filters,
     Intent,
     IntentRecord,
@@ -239,8 +240,8 @@ class TestIntent:
     def test_the_latest_intent_wins(self):
         records = [
             *plan(UNIT_A),
-            IntentRecord(Intent.RUN, AT),
-            IntentRecord(Intent.HOLD, AT),
+            IntentRecord(Intent.RUN, Cause.RUN, AT),
+            IntentRecord(Intent.HOLD, Cause.PAUSE, AT),
         ]
 
         assert intent(records) == Intent.HOLD
@@ -364,7 +365,7 @@ def test_campaign_state_refuses_an_unreachable_combination(
 def test_state_of_reads_the_records():
     records = [
         *plan(UNIT_A, UNIT_B),
-        IntentRecord(Intent.HOLD, AT),
+        IntentRecord(Intent.HOLD, Cause.PAUSE, AT),
         start(UNIT_A, FIRST_JOB),
     ]
 

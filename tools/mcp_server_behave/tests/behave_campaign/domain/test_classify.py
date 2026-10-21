@@ -72,15 +72,15 @@ def test_every_outcome_is_reached_by_a_case():
 def test_classify_result(result, outcome, flagged):
     classified = classify_result(UNIT_A, result, AT)
 
-    assert classified.finished.outcome == outcome
+    assert classified.outcome == outcome
     assert bool(classified.problem) is flagged
 
 
 def test_a_classified_result_keeps_the_job_id_and_time():
     classified = classify_result(UNIT_A, completed(passed=2), AT)
 
-    assert classified.finished.job_id == "job1"
-    assert classified.finished.at == AT
+    assert classified.job_id == "job1"
+    assert classified.at == AT
 
 
 def test_an_unclassifiable_result_keeps_the_job_id_and_says_why():
@@ -88,7 +88,7 @@ def test_an_unclassifiable_result_keeps_the_job_id_and_says_why():
         UNIT_A, completed(passed=1, unknown=1, job_id="job-xyz"), AT
     )
 
-    assert classified.finished.job_id == "job-xyz"
+    assert classified.job_id == "job-xyz"
     assert "classify" in classified.problem
 
 

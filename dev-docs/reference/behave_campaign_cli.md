@@ -185,8 +185,9 @@ uv run behave-campaign history --campaign-id 1234567 \
 
 ## events
 
-Read the events a running server has written beside the campaign file. Each
-response carries the campaign's `state`, `intent`, `progress`, `lanes_busy`
+Read the events the campaign's records announce. Events are derived from the
+record on every read, so they need no server and number the same way
+everywhere. Each response carries the campaign's `state`, `intent`, `progress`, `lanes_busy`
 and `counts` as well as the events.
 
 Required arguments:
@@ -248,7 +249,6 @@ The bundle unpacks to one directory named after the campaign:
 | `units.csv` | One row per unit: `feature, scenario, release, machine_type, state, job_id, finished_at` |
 | `jobs/<job_id>/` | `job.json`, `status.json`, `report.json`, `stdout.log` for every attempt, including superseded ones |
 | `audit/campaign.jsonl` | The campaign record as stored |
-| `audit/events.jsonl` | The event log, when the campaign has one |
 
 Each unit appears once, in the state its attempts ended in; the summary never
 shows attempt counts. Repo state is left out of the review files, because
@@ -269,7 +269,6 @@ and marked `files missing` in the summary.
 | File                          | Written by            | Contents                                   |
 | ----------------------------- | --------------------- | ------------------------------------------ |
 | `<id>.jsonl`                  | `create`, the server  | The campaign record, append-only           |
-| `<id>.events.jsonl`           | the server            | Numbered events; `events` reads it         |
 | `<id>.lock`                   | the server            | Advisory lock while the campaign schedules |
 | `../exports/<id>.tar.gz`      | `export`              | The evidence bundle, by default            |
 

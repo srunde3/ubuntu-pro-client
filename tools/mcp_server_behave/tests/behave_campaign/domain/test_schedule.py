@@ -7,6 +7,7 @@ from behave_campaign.domain.records import (
     AttemptStarted,
     CampaignHeader,
     CampaignState,
+    Cause,
     Intent,
     IntentRecord,
     PlanRecord,
@@ -77,7 +78,7 @@ class TestPlanTick:
     def test_each_pool_fills_only_its_own_free_lanes(self):
         records = [
             *plan(UNIT_W1, UNIT_W2, UNIT_A, UNIT_B, UNIT_C, UNIT_CLOUD),
-            IntentRecord(Intent.RUN, AT),
+            IntentRecord(Intent.RUN, Cause.RUN, AT),
         ]
 
         tick = plan_tick(
@@ -97,7 +98,7 @@ class TestPlanTick:
     def test_a_busy_wsl_lane_does_not_hold_back_lxd(self):
         records = [
             *plan(UNIT_W1, UNIT_W2, UNIT_A, UNIT_B),
-            IntentRecord(Intent.RUN, AT),
+            IntentRecord(Intent.RUN, Cause.RUN, AT),
             attempt(UNIT_W1, "running"),
         ]
         lanes = [Lane(unit=UNIT_W1, job_id="job1")]
@@ -114,7 +115,7 @@ class TestPlanTick:
     def test_a_pool_without_lanes_starts_nothing(self):
         records = [
             *plan(UNIT_W1, UNIT_A),
-            IntentRecord(Intent.RUN, AT),
+            IntentRecord(Intent.RUN, Cause.RUN, AT),
         ]
 
         tick = plan_tick(records=records, lanes=[], lane_limits=lxd(4), at=AT)
@@ -132,7 +133,7 @@ class TestPlanTick:
     def test_a_running_campaign_fills_every_free_lane(self):
         records = [
             *plan(UNIT_A, UNIT_B, UNIT_C),
-            IntentRecord(Intent.RUN, AT),
+            IntentRecord(Intent.RUN, Cause.RUN, AT),
         ]
 
         tick = plan_tick(records=records, lanes=[], lane_limits=lxd(2), at=AT)
@@ -143,7 +144,7 @@ class TestPlanTick:
     def test_it_never_opens_more_lanes_than_the_limit(self):
         records = [
             *plan(UNIT_A, UNIT_B, UNIT_C),
-            IntentRecord(Intent.RUN, AT),
+            IntentRecord(Intent.RUN, Cause.RUN, AT),
         ]
         lanes = [Lane(unit=UNIT_A, job_id="job1")]
 
@@ -156,7 +157,7 @@ class TestPlanTick:
     def test_a_full_window_starts_nothing(self):
         records = [
             *plan(UNIT_A, UNIT_B),
-            IntentRecord(Intent.RUN, AT),
+            IntentRecord(Intent.RUN, Cause.RUN, AT),
         ]
         lanes = [
             Lane(unit=UNIT_A, job_id="job1"),
@@ -172,7 +173,7 @@ class TestPlanTick:
     def test_a_finished_lane_is_recorded(self):
         records = [
             *plan(UNIT_A),
-            IntentRecord(Intent.RUN, AT),
+            IntentRecord(Intent.RUN, Cause.RUN, AT),
             attempt(UNIT_A, "running"),
         ]
         lanes = [Lane(unit=UNIT_A, job_id="job1", result=completed())]
@@ -181,12 +182,12 @@ class TestPlanTick:
             records=records, lanes=lanes, lane_limits=lxd(2), at=AT
         )
 
-        assert [c.finished.outcome for c in tick.record] == ["passed"]
+        assert [f.outcome for f in tick.record] == ["passed"]
 
     def test_a_freed_lane_is_refilled_in_the_same_tick(self):
         records = [
             *plan(UNIT_A, UNIT_B),
-            IntentRecord(Intent.RUN, AT),
+            IntentRecord(Intent.RUN, Cause.RUN, AT),
             attempt(UNIT_A, "running"),
         ]
         lanes = [Lane(unit=UNIT_A, job_id="job1", result=completed())]
@@ -195,13 +196,13 @@ class TestPlanTick:
             records=records, lanes=lanes, lane_limits=lxd(1), at=AT
         )
 
-        assert [c.finished.unit for c in tick.record] == [UNIT_A]
+        assert [f.unit for f in tick.record] == [UNIT_A]
         assert tick.start == (UNIT_B,)
 
     def test_a_unit_in_flight_is_never_started_twice(self):
         records = [
             *plan(UNIT_A, UNIT_B),
-            IntentRecord(Intent.RUN, AT),
+            IntentRecord(Intent.RUN, Cause.RUN, AT),
             attempt(UNIT_A, "running"),
         ]
         lanes = [Lane(unit=UNIT_A, job_id="job1")]
@@ -215,7 +216,7 @@ class TestPlanTick:
     def test_a_failed_unit_is_not_retried_on_its_own(self):
         records = [
             *plan(UNIT_A, UNIT_B),
-            IntentRecord(Intent.RUN, AT),
+            IntentRecord(Intent.RUN, Cause.RUN, AT),
             attempt(UNIT_A, "failed"),
             attempt(UNIT_B, "passed"),
         ]
@@ -228,9 +229,9 @@ class TestPlanTick:
     def test_a_paused_campaign_records_but_starts_nothing(self):
         records = [
             *plan(UNIT_A, UNIT_B),
-            IntentRecord(Intent.RUN, AT),
+            IntentRecord(Intent.RUN, Cause.RUN, AT),
             attempt(UNIT_A, "running"),
-            IntentRecord(Intent.HOLD, AT),
+            IntentRecord(Intent.HOLD, Cause.PAUSE, AT),
         ]
         lanes = [Lane(unit=UNIT_A, job_id="job1", result=completed())]
 
@@ -238,14 +239,14 @@ class TestPlanTick:
             records=records, lanes=lanes, lane_limits=lxd(4), at=AT
         )
 
-        assert [c.finished.outcome for c in tick.record] == ["passed"]
+        assert [f.outcome for f in tick.record] == ["passed"]
         assert tick.start == ()
         assert tick.state == CampaignState.PAUSED
 
     def test_the_last_finished_lane_completes_the_campaign(self):
         records = [
             *plan(UNIT_A),
-            IntentRecord(Intent.RUN, AT),
+            IntentRecord(Intent.RUN, Cause.RUN, AT),
             attempt(UNIT_A, "running"),
         ]
         lanes = [Lane(unit=UNIT_A, job_id="job1", result=completed())]
@@ -260,7 +261,7 @@ class TestPlanTick:
     def test_an_unclassifiable_result_does_not_stop_scheduling(self):
         records = [
             *plan(UNIT_A, UNIT_B),
-            IntentRecord(Intent.RUN, AT),
+            IntentRecord(Intent.RUN, Cause.RUN, AT),
             attempt(UNIT_A, "running"),
         ]
         lanes = [
@@ -296,7 +297,9 @@ def test_every_intent_has_an_expectation():
 @pytest.mark.parametrize("wanted, opens", OPENS_LANES.items(), ids=str)
 def test_only_intent_run_opens_lanes(wanted, opens):
     intent_records = (
-        [] if wanted == Intent.NEVER_RUN else [IntentRecord(wanted, AT)]
+        []
+        if wanted == Intent.NEVER_RUN
+        else [IntentRecord(wanted, Cause.RUN, AT)]
     )
     records = [*plan(UNIT_A, UNIT_B), *intent_records]
 
@@ -312,7 +315,7 @@ class TestSchedulerNeverRetries:
     def test_a_problem_unit_is_never_started_automatically(self, state):
         records = [
             *plan(UNIT_A, UNIT_B),
-            IntentRecord(Intent.RUN, AT),
+            IntentRecord(Intent.RUN, Cause.RUN, AT),
             attempt(UNIT_A, state),
             attempt(UNIT_B, "passed"),
         ]
@@ -325,7 +328,7 @@ class TestSchedulerNeverRetries:
     def test_problem_units_do_not_crowd_out_untouched_ones(self, state):
         records = [
             *plan(UNIT_A, UNIT_B, UNIT_C),
-            IntentRecord(Intent.RUN, AT),
+            IntentRecord(Intent.RUN, Cause.RUN, AT),
             attempt(UNIT_A, state),
         ]
 
@@ -336,7 +339,7 @@ class TestSchedulerNeverRetries:
     def test_a_lane_that_errors_frees_capacity_for_untouched_work(self):
         records = [
             *plan(UNIT_A, UNIT_B),
-            IntentRecord(Intent.RUN, AT),
+            IntentRecord(Intent.RUN, Cause.RUN, AT),
             attempt(UNIT_A, "running"),
         ]
         lanes = [Lane(unit=UNIT_A, job_id="job1", result=completed(passed=0))]
@@ -345,5 +348,5 @@ class TestSchedulerNeverRetries:
             records=records, lanes=lanes, lane_limits=lxd(1), at=AT
         )
 
-        assert tick.record[0].finished.outcome == "error"
+        assert tick.record[0].outcome == "error"
         assert tick.start == (UNIT_B,)

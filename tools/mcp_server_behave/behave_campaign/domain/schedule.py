@@ -5,9 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
-from behave_campaign.domain.classify import Classification, classify_result
+from behave_campaign.domain.classify import classify_result
 from behave_campaign.domain.records import (
     DEFAULT_INSTALL_SOURCE,
+    AttemptFinished,
     CampaignState,
     Intent,
     Record,
@@ -16,13 +17,7 @@ from behave_campaign.domain.records import (
     UnitState,
     UnitStatus,
 )
-from behave_campaign.domain.state import (
-    campaign_state,
-    in_flight,
-    intent,
-    progress,
-    reduce_units,
-)
+from behave_campaign.domain.state import replay
 from behave_mcp.domain.pools import Pool
 
 
@@ -78,13 +73,14 @@ class Lane:
 class TickPlan:
     """What one scheduler tick decided to do.
 
-    ``record`` holds the finished lanes, classified. ``start`` holds the
+    ``record`` holds the finished lanes as finished attempts; one whose
+    result could not be classified carries its ``problem``. ``start`` holds the
     units to open new lanes for. Both are empty when there is nothing to do,
     which is the common case. ``state`` is the campaign's named state once
     the finished lanes are recorded.
     """
 
-    record: tuple[Classification, ...] = ()
+    record: tuple[AttemptFinished, ...] = ()
     start: tuple[Unit, ...] = ()
     state: CampaignState = CampaignState.CREATED
 
@@ -113,13 +109,10 @@ def plan_tick(
         if lane.finished
     )
 
-    after = [*records, *(item.finished for item in classified)]
-    statuses = reduce_units(after)
-    wanted = intent(after)
-    state = campaign_state(
-        wanted, progress(statuses), bool(in_flight(statuses))
-    )
-    if wanted != Intent.RUN or state == CampaignState.COMPLETE:
+    replayed = replay([*records, *classified])
+    statuses = replayed.statuses()
+    state = replayed.state()
+    if replayed.intent != Intent.RUN or state == CampaignState.COMPLETE:
         return TickPlan(record=classified, state=state)
 
     busy: dict[Pool, int] = {}

@@ -1,11 +1,12 @@
 import pytest
 
-from behave_campaign.adapters import JsonlCampaignStore, JsonlEventLog
-from behave_campaign.domain.events import NewEvent
+from behave_campaign.adapters import JsonlCampaignStore
 from behave_campaign.domain.records import (
     AttemptFinished,
     AttemptStarted,
     CampaignError,
+    Cause,
+    Failure,
     Filters,
     Intent,
     IntentRecord,
@@ -32,16 +33,10 @@ def features():
 
 
 @pytest.fixture
-def events(tmp_path):
-    return JsonlEventLog(tmp_path / "campaigns")
-
-
-@pytest.fixture
-def service(tmp_path, features, events):
+def service(tmp_path, features):
     return CampaignService(
         store=JsonlCampaignStore(tmp_path / "campaigns"),
         features=features,
-        events=events,
         now=lambda: AT,
         repo_state=lambda root: REPO,
         lane_ceiling={Pool.LXD: 8, Pool.CLOUD: 2, Pool.WSL: 1},
@@ -57,14 +52,12 @@ MIXED_UNITS = [
 
 def _service_over(
     tmp_path,
-    events,
     units,
     ceiling={Pool.LXD: 8, Pool.CLOUD: 2, Pool.WSL: 1},
 ):
     return CampaignService(
         store=JsonlCampaignStore(tmp_path / "campaigns"),
         features=FakeFeatureReader(units),
-        events=events,
         now=lambda: AT,
         repo_state=lambda root: REPO,
         lane_ceiling=ceiling,
@@ -84,7 +77,7 @@ def create(service, **overrides):
 
 def ran(store):
     """Set intent to run, as the runner does before any attempt."""
-    store.append("1234567", [IntentRecord(Intent.RUN, AT)])
+    store.append("1234567", [IntentRecord(Intent.RUN, Cause.RUN, AT)])
 
 
 class TestCreateCampaign:
@@ -175,8 +168,8 @@ class TestCreateCampaign:
     def test_a_pool_left_out_gets_one_lane(self, service):
         assert create(service).campaign.lanes == {"lxd": 1}
 
-    def test_lanes_are_kept_for_each_pool_in_scope(self, tmp_path, events):
-        service = _service_over(tmp_path, events, MIXED_UNITS)
+    def test_lanes_are_kept_for_each_pool_in_scope(self, tmp_path):
+        service = _service_over(tmp_path, MIXED_UNITS)
 
         result = create(service, lanes={Pool.LXD: 6, Pool.CLOUD: 2})
 
@@ -190,24 +183,22 @@ class TestCreateCampaign:
         with pytest.raises(CampaignError, match="no unit in scope"):
             create(service, lanes={Pool.WSL: 1})
 
-    def test_more_than_one_wsl_lane_is_rejected(self, tmp_path, events):
-        service = _service_over(tmp_path, events, MIXED_UNITS)
+    def test_more_than_one_wsl_lane_is_rejected(self, tmp_path):
+        service = _service_over(tmp_path, MIXED_UNITS)
 
         with pytest.raises(CampaignError, match="wsl lanes may not exceed"):
             create(service, lanes={Pool.WSL: 2})
 
-    def test_a_pool_the_server_disabled_is_rejected(self, tmp_path, events):
+    def test_a_pool_the_server_disabled_is_rejected(self, tmp_path):
         service = _service_over(
-            tmp_path, events, MIXED_UNITS, ceiling={Pool.LXD: 8, Pool.WSL: 1}
+            tmp_path, MIXED_UNITS, ceiling={Pool.LXD: 8, Pool.WSL: 1}
         )
 
         with pytest.raises(CampaignError, match="disabled the cloud pool"):
             create(service)
 
-    def test_without_a_ceiling_any_lane_count_is_allowed(
-        self, tmp_path, events
-    ):
-        service = _service_over(tmp_path, events, UNITS, ceiling=None)
+    def test_without_a_ceiling_any_lane_count_is_allowed(self, tmp_path):
+        service = _service_over(tmp_path, UNITS, ceiling=None)
 
         result = create(service, lanes={Pool.LXD: 64})
 
@@ -332,8 +323,8 @@ class TestCampaignStatus:
         assert status.summary.progress == "open"
         assert status.problem_scenarios is None
 
-    def test_it_counts_busy_lanes_in_each_pool(self, tmp_path, events, store):
-        service = _service_over(tmp_path, events, MIXED_UNITS)
+    def test_it_counts_busy_lanes_in_each_pool(self, tmp_path, store):
+        service = _service_over(tmp_path, MIXED_UNITS)
         create(service)
         ran(store)
         store.append(
@@ -515,24 +506,22 @@ class TestUnitHistory:
 
 
 class TestAwaitEvents:
-    def test_failure_messages_can_be_shortened_on_read(self, service, events):
+    def test_failure_messages_can_be_shortened_on_read(self, service, store):
         create(service)
-        events.append(
+        ran(store)
+        store.append(
             "1234567",
             [
-                NewEvent(
-                    kind="unit.failed",
+                AttemptStarted(
+                    unit=UNITS[0], job_id="job1", install_from="local", at=AT
+                ),
+                AttemptFinished(
+                    unit=UNITS[0],
+                    job_id="job1",
+                    outcome="failed",
                     at=AT,
-                    data={
-                        "failures": [
-                            {
-                                "step": "s",
-                                "status": "failed",
-                                "error_message": "x" * 50,
-                            }
-                        ]
-                    },
-                )
+                    failures=(Failure("s", "failed", "x" * 50),),
+                ),
             ],
         )
 
@@ -652,7 +641,7 @@ class TestExportCampaign:
         self, service, store, tmp_path
     ):
         create(service)
-        store.append("1234567", [IntentRecord(Intent.HOLD, AT)])
+        store.append("1234567", [IntentRecord(Intent.HOLD, Cause.PAUSE, AT)])
         store.append(
             "1234567",
             [
@@ -681,7 +670,6 @@ class TestExportCampaign:
             ):
                 assert "jobs/{}/{}".format(job_id, name) in writer.entries
         assert "audit/campaign.jsonl" in writer.entries
-        assert "audit/events.jsonl" in writer.entries
         for name in ("SUMMARY.md", "campaign.json", "units.csv"):
             assert writer.entries[name].data
 

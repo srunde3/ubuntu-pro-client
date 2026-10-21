@@ -8,6 +8,7 @@ from behave_campaign.cli import main
 from behave_campaign.domain.records import (
     AttemptFinished,
     AttemptStarted,
+    Cause,
     Intent,
     IntentRecord,
     Unit,
@@ -60,7 +61,7 @@ def record(campaign_file, attempts):
     SingleFileCampaignStore(campaign_file).append(
         campaign_file.stem,
         [
-            IntentRecord(Intent.RUN, AT),
+            IntentRecord(Intent.RUN, Cause.RUN, AT),
             *(item for tried in attempts for item in tried),
         ],
     )
@@ -426,50 +427,37 @@ class TestQueries:
 
 
 class TestEvents:
-    """``events`` reads the log a server wrote beside the campaign file."""
+    """``events`` reads the events a campaign's records announce."""
 
-    @pytest.fixture
-    def log(self, campaign_file):
-        from behave_campaign.adapters import JsonlEventLog
-
-        return JsonlEventLog(campaign_file.parent)
-
-    @staticmethod
-    def new(kind, **data):
-        from behave_campaign.domain.events import NewEvent
-
-        return NewEvent(kind=kind, at="2026-01-01T00:00:00Z", data=data)
-
-    def test_reads_the_servers_events(self, planned, run, log):
-        log.append(
-            "records",
-            [self.new("campaign.running"), self.new("unit.failed", x=1)],
-        )
+    def test_reads_the_campaigns_events(self, planned, run, campaign_file):
+        record(campaign_file, [attempt(UNIT_A_JAMMY, "failed", "job-1")])
 
         result = run(["events"])
 
         assert [e["kind"] for e in result["events"]] == [
+            "campaign.created",
             "campaign.running",
+            "lane.started",
             "unit.failed",
         ]
-        assert result["events"][1]["data"] == {"x": 1}
-        assert result["next_seq"] == 2
+        assert result["events"][3]["data"]["job_id"] == "job-1"
+        assert result["next_seq"] == 4
         assert "campaign_id" not in result["events"][0]
 
-    def test_cursor_and_kinds_narrow_the_batch(self, planned, run, log):
-        log.append(
-            "records",
+    def test_cursor_and_kinds_narrow_the_batch(
+        self, planned, run, campaign_file
+    ):
+        record(
+            campaign_file,
             [
-                self.new("campaign.running"),
-                self.new("lane.started"),
-                self.new("unit.failed"),
-                self.new("unit.passed"),
+                attempt(UNIT_A_JAMMY, "failed", "job-1"),
+                attempt(UNIT_A_NOBLE, "passed", "job-2"),
             ],
         )
 
-        result = run(["events", "--since-seq", "1", "--kinds", "unit.*"])
+        result = run(["events", "--since-seq", "4", "--kinds", "unit.*"])
 
-        assert [e["seq"] for e in result["events"]] == [3, 4]
+        assert [e["kind"] for e in result["events"]] == ["unit.passed"]
 
     def test_unknown_kind_is_rejected(self, planned, run):
         error = run(["events", "--kinds", "unit.exploded"], expect=2)
@@ -477,7 +465,7 @@ class TestEvents:
         assert "unit.exploded" in error
 
     def test_follow_stops_once_the_campaign_is_complete(
-        self, planned, run, log, capsys, campaign_file
+        self, planned, capsys, campaign_file
     ):
         # Every unit has an outcome, so a follower prints what there is and
         # returns.
@@ -488,9 +476,6 @@ class TestEvents:
                 attempt(UNIT_A_NOBLE, "passed", "j2"),
                 attempt(UNIT_B_JAMMY, "passed", "j3"),
             ],
-        )
-        log.append(
-            "records", [self.new("unit.passed"), self.new("unit.passed")]
         )
 
         code = main(
@@ -509,7 +494,9 @@ class TestEvents:
 
         assert code == 0
         batches = [json.loads(line) for line in out.splitlines()]
-        assert [b["events"][0]["seq"] for b in batches] == [1, 2]
+        seqs = [b["events"][0]["seq"] for b in batches]
+        assert seqs == list(range(1, len(batches) + 1))
+        assert batches[-1]["events"][0]["kind"] == "campaign.complete"
         assert batches[-1]["state"] == "complete"
 
 

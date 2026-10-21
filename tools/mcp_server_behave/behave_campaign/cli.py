@@ -33,8 +33,6 @@ from behave_mcp.domain.pools import Pool
 
 from .adapters import (
     JobDirFiles,
-    JsonlEventLog,
-    NullEventLog,
     ParserFeatureReader,
     SingleFileCampaignStore,
     TarBundleWriter,
@@ -46,36 +44,21 @@ from .messages import (
     MAX_UNITS_LIMIT,
     AwaitEventsResponse,
 )
-from .ports import EventLog
 from .repo import repo_state
 from .service import CampaignService
 
 Output = BaseModel | Iterator[BaseModel]
 
 
-def _service(
-    campaign_file: Path, events: EventLog | None = None
-) -> CampaignService:
+def _service(campaign_file: Path) -> CampaignService:
     return CampaignService(
         store=SingleFileCampaignStore(campaign_file),
         features=ParserFeatureReader(),
-        # The CLI reports to someone already reading its output, so it
-        # writes to no notification channel; only ``events`` reads one.
-        events=events or NullEventLog(),
         now=system_now,
         repo_state=repo_state,
         # Nothing here runs tests, so no lane ceiling applies.
         lane_ceiling=None,
     )
-
-
-def _event_log(campaign_file: Path) -> JsonlEventLog:
-    """The log a server writes beside the campaign file.
-
-    Built fresh per read: the log caches its file, and the process
-    appending to it is not this one.
-    """
-    return JsonlEventLog(campaign_file.parent)
 
 
 def _repo_root(args: argparse.Namespace) -> Path:
@@ -177,9 +160,7 @@ def _command_export(args: argparse.Namespace) -> BaseModel:
     state = _state_dir(args)
     campaign_id = _campaign_id(args)
     output = args.output or layout.export_file(state, campaign_id)
-    return _service(
-        _campaign_file(args), events=_event_log(_campaign_file(args))
-    ).export_campaign(
+    return _service(_campaign_file(args)).export_campaign(
         campaign_id=campaign_id,
         output=Path(output).expanduser().resolve(),
         jobs=JobDirFiles(layout.jobs_dir(state)),
@@ -190,9 +171,7 @@ def _command_export(args: argparse.Namespace) -> BaseModel:
 def _read_events(
     args: argparse.Namespace, since_seq: int
 ) -> AwaitEventsResponse:
-    return _service(
-        args.campaign_file, events=_event_log(_campaign_file(args))
-    ).await_events(
+    return _service(_campaign_file(args)).await_events(
         campaign_id=_campaign_id(args),
         since_seq=since_seq,
         kinds=args.kinds or (),
