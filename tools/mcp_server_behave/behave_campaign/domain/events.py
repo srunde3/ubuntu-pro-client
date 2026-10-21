@@ -7,7 +7,10 @@ from typing import Any, Sequence
 
 from behave_campaign.domain.records import (
     CampaignError,
+    CampaignState,
+    Intent,
     Outcome,
+    Progress,
     StringEnum,
     require_fields,
     text_field,
@@ -30,13 +33,13 @@ class EventKind(StringEnum):
     it, and one asking for a family gets it without asking again.
     """
 
+    # One kind per named campaign state, announced when the state changes.
     CAMPAIGN_CREATED = "campaign.created"
-    CAMPAIGN_STARTED = "campaign.started"
-    CAMPAIGN_PAUSED = "campaign.paused"
-    CAMPAIGN_RESUMED = "campaign.resumed"
-    CAMPAIGN_CANCELLED = "campaign.cancelled"
-    CAMPAIGN_REOPENED = "campaign.reopened"
+    CAMPAIGN_RUNNING = "campaign.running"
+    CAMPAIGN_FINISHING = "campaign.finishing"
     CAMPAIGN_COMPLETE = "campaign.complete"
+    CAMPAIGN_PAUSING = "campaign.pausing"
+    CAMPAIGN_PAUSED = "campaign.paused"
     LANE_STARTED = "lane.started"
     LANE_OVERDUE = "lane.overdue"
     UNIT_PASSED = "unit.passed"
@@ -44,6 +47,7 @@ class EventKind(StringEnum):
     UNIT_SKIPPED = "unit.skipped"
     UNIT_ERRORED = "unit.errored"
     UNIT_UNCLASSIFIABLE = "unit.unclassifiable"
+    UNIT_INTERRUPTED = "unit.interrupted"
     UNIT_RETRIED = "unit.retried"
     ANOMALY_REPEATED_SCENARIO_FAILURE = "anomaly.repeated_scenario_failure"
     ANOMALY_REPEATED_SKIPS = "anomaly.repeated_skips"
@@ -75,6 +79,7 @@ ACTIONABLE_KINDS = (
     EventKind.UNIT_ERRORED.value,
     EventKind.UNIT_SKIPPED.value,
     EventKind.UNIT_UNCLASSIFIABLE.value,
+    EventKind.UNIT_INTERRUPTED.value,
     EventFamily.ANOMALY.value + ".*",
     EventKind.LANE_OVERDUE.value,
     EventFamily.CAMPAIGN.value + ".*",
@@ -91,6 +96,26 @@ _UNIT_EVENT_FOR_OUTCOME = {
     Outcome.SKIPPED: EventKind.UNIT_SKIPPED,
     Outcome.ERROR: EventKind.UNIT_ERRORED,
 }
+
+
+# Which campaign event announces arriving in a state.
+STATE_EVENT = {
+    CampaignState.CREATED: EventKind.CAMPAIGN_CREATED,
+    CampaignState.RUNNING: EventKind.CAMPAIGN_RUNNING,
+    CampaignState.FINISHING: EventKind.CAMPAIGN_FINISHING,
+    CampaignState.COMPLETE: EventKind.CAMPAIGN_COMPLETE,
+    CampaignState.PAUSING: EventKind.CAMPAIGN_PAUSING,
+    CampaignState.PAUSED: EventKind.CAMPAIGN_PAUSED,
+}
+
+
+class Cause(StringEnum):
+    """What moved a campaign into a new state."""
+
+    RUN = "run"
+    PAUSE = "pause"
+    RETRY = "retry"
+    SCHEDULER = "scheduler"
 
 
 # Enough of a failure to triage without fetching the job's report.
@@ -194,6 +219,34 @@ def event_matches(kind: str, patterns: Sequence[str]) -> bool:
         elif kind == pattern:
             return True
     return False
+
+
+def state_events(
+    *,
+    before: CampaignState,
+    after: CampaignState,
+    intent: Intent,
+    progress: Progress,
+    cause: Cause,
+    at: str,
+    data: dict[str, Any] | None = None,
+) -> list[NewEvent]:
+    """The one event announcing a change of named state, or none."""
+    if before == after:
+        return []
+    return [
+        NewEvent(
+            kind=STATE_EVENT[after],
+            at=at,
+            data={
+                "from": before.value,
+                "intent": intent.value,
+                "progress": progress.value,
+                "cause": cause.value,
+                **(data or {}),
+            },
+        )
+    ]
 
 
 def unit_event_kind(outcome: str, unclassifiable: bool = False) -> str:

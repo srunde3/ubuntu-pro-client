@@ -10,8 +10,6 @@ from behave_campaign.domain.records import (
     CampaignError,
     Outcome,
     Unit,
-    parse_unit,
-    require_fields,
     text_field,
 )
 
@@ -70,10 +68,8 @@ def _completed_outcome(result: dict[str, Any]) -> Outcome:
 def finished_from_mcp(unit: Unit, result: Any) -> AttemptFinished:
     """Map one completed MCP job payload onto a finished attempt.
 
-    Only a completed job can be recorded this way. A job still in flight is
-    the scheduler's business -- it wrote the ``started`` record itself and
-    will write the finish -- so handing one here means something is being
-    recorded that nobody has an outcome for yet.
+    Only a completed job has an outcome. Handing a job still in flight here
+    means something is being recorded that nobody has an outcome for yet.
     """
     if not isinstance(result, dict):
         raise CampaignError("each MCP result must be a JSON object")
@@ -92,20 +88,6 @@ def finished_from_mcp(unit: Unit, result: Any) -> AttemptFinished:
         job_id=text_field(result, "job_id", "MCP result"),
         outcome=_completed_outcome(result),
     )
-
-
-def finished_from_mcp_payload(payload: Any) -> list[AttemptFinished]:
-    """Map ``[{"unit": ..., "result": ...}]`` MCP payloads onto outcomes."""
-    if not isinstance(payload, list) or not payload:
-        raise CampaignError("input must be a non-empty JSON array")
-
-    finished = []
-    for entry in payload:
-        body = require_fields(entry, ("unit", "result"), "MCP entry")
-        finished.append(
-            finished_from_mcp(parse_unit(body["unit"]), body["result"])
-        )
-    return finished
 
 
 @dataclass(frozen=True)

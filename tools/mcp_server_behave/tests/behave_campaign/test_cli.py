@@ -3,7 +3,15 @@ import tarfile
 
 import pytest
 
+from behave_campaign.adapters import SingleFileCampaignStore
 from behave_campaign.cli import main
+from behave_campaign.domain.records import (
+    AttemptFinished,
+    AttemptStarted,
+    Intent,
+    IntentRecord,
+    Unit,
+)
 
 pytestmark = pytest.mark.integration
 
@@ -37,16 +45,25 @@ FEATURE_B = """Feature: B feature
 
 
 def attempt(unit, outcome, job_id):
-    """One completed try, as the CLI's record command takes it."""
-    feature, scenario, release, machine_type = unit
-    return {
-        "feature": feature,
-        "scenario": scenario,
-        "release": release,
-        "machine_type": machine_type,
-        "outcome": outcome,
-        "job_id": job_id,
-    }
+    """One completed try: its start and its finish."""
+    tried = Unit(*unit)
+    return [
+        AttemptStarted(
+            unit=tried, job_id=job_id, install_from="proposed", at=AT
+        ),
+        AttemptFinished(unit=tried, job_id=job_id, outcome=outcome, at=AT),
+    ]
+
+
+def record(campaign_file, attempts):
+    """Write attempts as a runner does: intent run, then each try."""
+    SingleFileCampaignStore(campaign_file).append(
+        campaign_file.stem,
+        [
+            IntentRecord(Intent.RUN, AT),
+            *(item for tried in attempts for item in tried),
+        ],
+    )
 
 
 def unit_of(reported):
@@ -81,8 +98,6 @@ def run(tmp_path, campaign_file, repo, capsys):
             args = [*args, "--input", str(source)]
         if args[0] == "create":
             args = [*args, "--repo-root", str(repo)]
-        if args[0] == "record" and "--install-from" not in args:
-            args = [*args, "--install-from", "proposed"]
         if "--campaign-id" not in args:
             args = [*args, "--campaign", str(campaign_file)]
         code = main(args)
@@ -100,7 +115,7 @@ def planned(run):
 
 class TestInit:
     def test_campaign_covers_every_discovered_unit(self, planned, run):
-        assert planned["state"]["counts"]["unattempted"] == 3
+        assert planned["summary"]["counts"]["unattempted"] == 3
         assert planned["campaign"]["total_units"] == 3
         history = run(["history"])
         assert [unit_of(unit) for unit in history["units"]] == [
@@ -112,7 +127,7 @@ class TestInit:
     def test_filters_define_the_campaign(self, run):
         result = run(["create", "--machine-type", "lxd-vm"])
 
-        assert result["state"]["counts"]["unattempted"] == 1
+        assert result["summary"]["counts"]["unattempted"] == 1
         history = run(["history"])
         assert [unit_of(unit) for unit in history["units"]] == [UNIT_A_NOBLE]
 
@@ -139,7 +154,7 @@ class TestInit:
     def test_full_campaign_needs_no_filters(self, run):
         result = run(["create"])
 
-        assert result["state"]["counts"]["unattempted"] == 3
+        assert result["summary"]["counts"]["unattempted"] == 3
         assert result["campaign"]["scope"] == {
             "feature": [],
             "scenario": [],
@@ -158,8 +173,10 @@ class TestInit:
 
 
 class TestUnits:
-    def test_lists_every_unit_with_its_state(self, planned, run):
-        run(["record"], [attempt(UNIT_A_JAMMY, "failed", "job-1")])
+    def test_lists_every_unit_with_its_state(
+        self, planned, run, campaign_file
+    ):
+        record(campaign_file, [attempt(UNIT_A_JAMMY, "failed", "job-1")])
 
         result = run(["units"])
 
@@ -179,7 +196,7 @@ class TestUnits:
     def test_csv_is_one_row_per_unit(
         self, planned, run, capsys, campaign_file
     ):
-        run(["record"], [attempt(UNIT_A_JAMMY, "failed", "job-1")])
+        record(campaign_file, [attempt(UNIT_A_JAMMY, "failed", "job-1")])
 
         code = main(
             ["units", "--campaign", str(campaign_file), "--format", "csv"]
@@ -218,8 +235,8 @@ class TestUnits:
     def test_history_csv_is_one_row_per_attempt(
         self, planned, run, capsys, campaign_file
     ):
-        run(
-            ["record"],
+        record(
+            campaign_file,
             [
                 attempt(UNIT_A_JAMMY, "failed", "job-1"),
                 attempt(UNIT_A_JAMMY, "passed", "job-2"),
@@ -243,7 +260,8 @@ class TestUnits:
             "feature,scenario,release,machine_type,state,"
         )
         assert out[0].endswith(
-            "attempt,job_id,install_from,started_at,outcome,finished_at"
+            "attempt,job_id,install_from,started_at,outcome,finished_at,"
+            "interrupted"
         )
         # Two attempts at A/jammy, then A/noble with none.
         assert [row.split(",")[5:7] for row in out[1:]] == [
@@ -325,186 +343,17 @@ class TestAddressing:
         assert result["campaign"]["scope"]["release"] == []
 
 
-class TestRecord:
-    def test_attempt_for_unplanned_unit_is_rejected(
-        self, planned, run, campaign_file
-    ):
-        original = campaign_file.read_text()
-        unplanned = attempt(
-            ["features/a.feature", "A", "xenial", "lxd-vm"], "failed", "job-1"
-        )
-
-        error = run(["record"], [unplanned], expect=2)
-
-        assert "unplanned units" in error
-        assert campaign_file.read_text() == original
-
-    def test_recorded_pass_supersedes_earlier_failure(self, planned, run):
-        run(["record"], [attempt(UNIT_A_JAMMY, "failed", "job-1")])
-        result = run(["record"], [attempt(UNIT_A_JAMMY, "passed", "job-2")])
-
-        assert result["counts"]["passed"] == 1
-        assert result["counts"]["failed"] == 0
-        assert result["problems"] == []
-
-    def test_batches_record_every_attempt(self, planned, run):
-        result = run(
-            ["record"],
-            [
-                attempt(UNIT_A_JAMMY, "failed", "job-1"),
-                attempt(UNIT_A_NOBLE, "passed", "job-2"),
-            ],
-        )
-
-        assert result["recorded"] == 2
-        assert result["counts"]["failed"] == 1
-        assert result["counts"]["passed"] == 1
-
-    def test_a_job_still_in_flight_cannot_be_recorded(self, planned, run):
-        # The scheduler owns unfinished jobs: it wrote the start and will
-        # write the finish. The CLI records completed tries only.
-        error = run(
-            ["record"], [attempt(UNIT_A_JAMMY, "running", "job-1")], expect=2
-        )
-
-        assert "outcome must be one of" in error
-
-    def test_attempts_store_install_source_and_timestamp(
-        self, planned, run, campaign_file
-    ):
-        run(
-            ["record", "--install-from", "proposed"],
-            [attempt(UNIT_A_JAMMY, "passed", "job-1")],
-        )
-        lines = campaign_file.read_text().splitlines()
-        started = json.loads(lines[-2])
-        finished = json.loads(lines[-1])
-
-        # One completed try is written as both halves; the start is what
-        # carries the install source.
-        assert started["type"] == "started"
-        assert started["install_from"] == "proposed"
-        assert started["at"].endswith("Z")
-        assert finished["type"] == "finished"
-        assert finished["outcome"] == "passed"
-        assert finished["job_id"] == started["job_id"]
-
-    def test_unknown_install_source_is_rejected(
-        self, planned, tmp_path, campaign_file
-    ):
-        source = tmp_path / "attempts.json"
-        source.write_text(
-            json.dumps([attempt(UNIT_A_JAMMY, "passed", "job-1")])
-        )
-
-        with pytest.raises(SystemExit):
-            main(
-                [
-                    "record",
-                    "--campaign",
-                    str(campaign_file),
-                    "--input",
-                    str(source),
-                    "--install-from",
-                    "somewhere",
-                ]
-            )
-
-    def test_mcp_payloads_are_translated_into_attempts(self, planned, run):
-        feature, scenario, release, machine_type = UNIT_A_JAMMY
-        result = run(
-            ["record", "--from-mcp"],
-            [
-                {
-                    "unit": {
-                        "feature": feature,
-                        "scenario": scenario,
-                        "release": release,
-                        "machine_type": machine_type,
-                    },
-                    "result": {
-                        "status": "completed",
-                        "ok": True,
-                        "job_id": "job-abc",
-                        "returncode": 0,
-                        "summary": {
-                            "scenarios": {"passed": 1},
-                            "features": {"passed": 1},
-                        },
-                        "failures": [],
-                    },
-                }
-            ],
-        )
-
-        assert result["counts"]["passed"] == 1
-        history = run(["history"])
-        assert history["units"][0]["job_id"] == "job-abc"
-
-    def test_unclassifiable_mcp_result_is_rejected(self, planned, run):
-        feature, scenario, release, machine_type = UNIT_A_JAMMY
-        error = run(
-            ["record", "--from-mcp"],
-            [
-                {
-                    "unit": {
-                        "feature": feature,
-                        "scenario": scenario,
-                        "release": release,
-                        "machine_type": machine_type,
-                    },
-                    "result": {
-                        "status": "completed",
-                        "ok": True,
-                        "job_id": "job-abc",
-                        "summary": {
-                            "scenarios": {"passed": 1, "unknown": 1},
-                            "features": {},
-                        },
-                        "failures": [],
-                    },
-                }
-            ],
-            expect=2,
-        )
-
-        assert "cannot classify" in error
-
-
 class TestQueries:
-    def test_next_returns_unattempted_before_problems(self, planned, run):
-        run(
-            ["record"],
-            [
-                attempt(UNIT_A_JAMMY, "failed", "job-1"),
-                attempt(UNIT_A_NOBLE, "passed", "job-2"),
-            ],
-        )
-
-        result = run(["next", "--limit", "5"])
-
-        assert [unit_of(unit) for unit in result["units"]] == [
-            UNIT_B_JAMMY,
-            UNIT_A_JAMMY,
-        ]
-
-    def test_next_respects_filters_and_limit(self, planned, run):
-        run(["record"], [attempt(UNIT_B_JAMMY, "passed", "job-1")])
-
-        result = run(["next", "--limit", "1", "--release", "jammy"])
-
-        assert [unit_of(unit) for unit in result["units"]] == [UNIT_A_JAMMY]
-
     def test_status_filters_narrow_units_and_counts(self, planned, run):
         result = run(["status", "--machine-type", "lxd-vm"])
 
-        assert result["state"]["counts"]["unattempted"] == 1
-        assert result["running"] == []
+        assert result["summary"]["counts"]["unattempted"] == 1
+        assert result["in_flight"] == []
         assert result["problems"] == []
 
-    def test_status_reports_problems(self, planned, run):
-        run(
-            ["record"],
+    def test_status_reports_problems(self, planned, run, campaign_file):
+        record(
+            campaign_file,
             [
                 attempt(UNIT_A_JAMMY, "failed", "job-1"),
                 attempt(UNIT_A_NOBLE, "skipped", "job-2"),
@@ -513,18 +362,20 @@ class TestQueries:
 
         result = run(["status"])
 
-        assert result["state"]["counts"]["failed"] == 1
-        assert result["state"]["counts"]["skipped"] == 1
-        assert result["running"] == []
+        assert result["summary"]["counts"]["failed"] == 1
+        assert result["summary"]["counts"]["skipped"] == 1
+        assert result["in_flight"] == []
         assert {u["job_id"] for u in result["problems"]} == {"job-1", "job-2"}
         assert {u["state"] for u in result["problems"]} == {
             "failed",
             "skipped",
         }
 
-    def test_status_groups_problems_by_scenario(self, planned, run):
-        run(
-            ["record"],
+    def test_status_groups_problems_by_scenario(
+        self, planned, run, campaign_file
+    ):
+        record(
+            campaign_file,
             [
                 attempt(UNIT_A_JAMMY, "failed", "job-1"),
                 attempt(UNIT_A_NOBLE, "skipped", "job-2"),
@@ -539,9 +390,9 @@ class TestQueries:
         assert [u["job_id"] for u in row["failed"]] == ["job-1"]
         assert [u["job_id"] for u in row["skipped"]] == ["job-2"]
 
-    def test_history_lists_every_attempt(self, planned, run):
-        run(["record"], [attempt(UNIT_A_JAMMY, "failed", "job-1")])
-        run(["record"], [attempt(UNIT_A_JAMMY, "passed", "job-2")])
+    def test_history_lists_every_attempt(self, planned, run, campaign_file):
+        record(campaign_file, [attempt(UNIT_A_JAMMY, "failed", "job-1")])
+        record(campaign_file, [attempt(UNIT_A_JAMMY, "passed", "job-2")])
 
         result = run(["history", "--release", "jammy", "--scenario", "A"])
 
@@ -561,16 +412,9 @@ class TestQueries:
     ):
         # An absent file used to read as a fresh campaign with header
         # defaults -- no lanes, no repo -- which looks like a real one.
-        for command in (["status"], ["next"], ["history"], ["events"]):
+        for command in (["status"], ["history"], ["events"]):
             error = run(command, expect=2)
             assert str(campaign_file) in error, command
-
-        error = run(
-            ["record"],
-            payload=[attempt(UNIT_A_JAMMY, "passed", "job-1")],
-            expect=2,
-        )
-        assert str(campaign_file) in error
 
     def test_a_missing_id_is_an_error(self, run, repo):
         error = run(
@@ -599,13 +443,13 @@ class TestEvents:
     def test_reads_the_servers_events(self, planned, run, log):
         log.append(
             "records",
-            [self.new("campaign.started"), self.new("unit.failed", x=1)],
+            [self.new("campaign.running"), self.new("unit.failed", x=1)],
         )
 
         result = run(["events"])
 
         assert [e["kind"] for e in result["events"]] == [
-            "campaign.started",
+            "campaign.running",
             "unit.failed",
         ]
         assert result["events"][1]["data"] == {"x": 1}
@@ -616,7 +460,7 @@ class TestEvents:
         log.append(
             "records",
             [
-                self.new("campaign.started"),
+                self.new("campaign.running"),
                 self.new("lane.started"),
                 self.new("unit.failed"),
                 self.new("unit.passed"),
@@ -632,31 +476,19 @@ class TestEvents:
 
         assert "unit.exploded" in error
 
-    def test_follow_stops_once_the_campaign_is_settled(
+    def test_follow_stops_once_the_campaign_is_complete(
         self, planned, run, log, capsys, campaign_file
     ):
-        from behave_campaign.adapters import SingleFileCampaignStore
-        from behave_campaign.domain.records import Lifecycle, LifecycleRecord
-
-        # Every unit attempted and marked complete, so a follower prints
-        # what there is and returns.
-        SingleFileCampaignStore(campaign_file).append(
-            "records",
+        # Every unit has an outcome, so a follower prints what there is and
+        # returns.
+        record(
+            campaign_file,
             [
-                LifecycleRecord(
-                    state=Lifecycle.RUNNING, at="2026-01-01T00:00:00Z"
-                )
-            ],
-        )
-        run(
-            ["record"],
-            payload=[
                 attempt(UNIT_A_JAMMY, "passed", "j1"),
                 attempt(UNIT_A_NOBLE, "passed", "j2"),
                 attempt(UNIT_B_JAMMY, "passed", "j3"),
             ],
         )
-        run(["complete"])
         log.append(
             "records", [self.new("unit.passed"), self.new("unit.passed")]
         )
@@ -678,7 +510,7 @@ class TestEvents:
         assert code == 0
         batches = [json.loads(line) for line in out.splitlines()]
         assert [b["events"][0]["seq"] for b in batches] == [1, 2]
-        assert batches[-1]["lifecycle"] == "complete"
+        assert batches[-1]["state"] == "complete"
 
 
 class TestExport:
@@ -695,24 +527,18 @@ class TestExport:
             ]
         )
         state = repo / ".mcp_server_behave"
-        lines = [
-            {"type": "lifecycle", "state": "running", "at": AT, "reason": ""}
-        ]
+        attempts = []
         for unit, job_id in (
             (UNIT_A_JAMMY, "j1"),
             (UNIT_A_NOBLE, "n1"),
             (UNIT_B_JAMMY, "b1"),
         ):
-            done = attempt(unit, "passed", job_id)
-            lines.append({**done, "type": "finished", "at": AT})
+            attempts.append(attempt(unit, "passed", job_id))
             for suffix in ("_meta.json", "_report.json", "_stdout.log"):
                 path = state / "jobs" / (job_id + suffix)
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text("[]" if suffix == "_report.json" else "x")
-        with (state / "campaigns" / "1234567.jsonl").open("a") as stream:
-            for line in lines:
-                stream.write(json.dumps(line) + "\n")
-        run(["complete", "--campaign-id", "1234567", "--repo-root", str(repo)])
+        record(state / "campaigns" / "1234567.jsonl", attempts)
         return state
 
     def export(self, run, repo, *extra):
@@ -771,25 +597,3 @@ class TestExport:
         )
 
         assert "only a complete campaign can be exported" in error
-
-
-class TestComplete:
-    def test_completes_a_campaign_recorded_by_hand(self, planned, run):
-        run(
-            ["record"],
-            payload=[
-                attempt(UNIT_A_JAMMY, "passed", "j1"),
-                attempt(UNIT_A_NOBLE, "failed", "j2"),
-                attempt(UNIT_B_JAMMY, "skipped", "j3"),
-            ],
-        )
-
-        result = run(["complete"])
-
-        assert result["lifecycle"] == "complete"
-        assert run(["status"])["state"]["lifecycle"] == "complete"
-
-    def test_refuses_with_units_left(self, planned, run):
-        error = run(["complete"], expect=2)
-
-        assert "3 unit(s) left" in error

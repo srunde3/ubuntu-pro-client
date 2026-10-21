@@ -12,7 +12,7 @@ so a call reads the same wherever it comes from.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Callable, Mapping, Sequence
+from typing import Callable, Mapping, Sequence
 
 from behave_campaign.domain.bundle import (
     AUDIT_CAMPAIGN_NAME,
@@ -26,7 +26,6 @@ from behave_campaign.domain.bundle import (
     BundleEntry,
     job_ids,
 )
-from behave_campaign.domain.classify import finished_from_mcp_payload
 from behave_campaign.domain.events import (
     MAX_EVENT_ERROR_CHARS,
     EventKind,
@@ -36,20 +35,15 @@ from behave_campaign.domain.events import (
 )
 from behave_campaign.domain.records import (
     DEFAULT_INSTALL_SOURCE,
-    AttemptFinished,
-    AttemptStarted,
     CampaignError,
     CampaignHeader,
+    CampaignState,
     Filters,
-    Lifecycle,
-    LifecycleRecord,
     PlanRecord,
     Record,
     RepoState,
-    UnitState,
     UnitStatus,
     lanes_as_dict,
-    parse_finished,
     resolve_lanes,
     validate_campaign_id,
     validate_install_source,
@@ -57,14 +51,10 @@ from behave_campaign.domain.records import (
 from behave_campaign.domain.state import (
     GROUPINGS,
     GroupBy,
-    count_states,
-    describe_units,
-    lifecycle,
-    outstanding,
+    in_flight,
     problems,
     reduce_units,
-    running,
-    select_next,
+    state_of,
 )
 from behave_campaign.messages import (
     DEFAULT_EVENTS_LIMIT,
@@ -73,7 +63,6 @@ from behave_campaign.messages import (
     MAX_EVENTS_LIMIT,
     MAX_UNITS_LIMIT,
     AwaitEventsResponse,
-    CampaignState,
     CampaignStatusResponse,
     CreateCampaignResponse,
     DimensionsResponse,
@@ -81,8 +70,6 @@ from behave_campaign.messages import (
     EventView,
     ExportCampaignResponse,
     ListCampaignsResponse,
-    NextUnitsResponse,
-    RecordAttemptsResponse,
     UnitHistoryResponse,
     UnitsResponse,
 )
@@ -101,7 +88,7 @@ from behave_campaign.views.export import (
 from behave_campaign.views.responses import (
     campaign_header,
     campaign_listing,
-    campaign_state,
+    campaign_summary,
     header_of,
     lanes_busy_by_pool,
     scenario_problems,
@@ -112,7 +99,7 @@ from behave_mcp.domain.pools import Pool
 
 
 class CampaignService:
-    """Create campaigns, record what happened, and report on them."""
+    """Create campaigns and report on them."""
 
     def __init__(
         self,
@@ -203,116 +190,8 @@ class CampaignService:
         records: list[Record] = [header, *plans]
         return CreateCampaignResponse(
             campaign=campaign_header(campaign_id, records),
-            state=campaign_state(campaign_id, records),
+            summary=campaign_summary(campaign_id, records),
         )
-
-    # -- recording --------------------------------------------------------
-
-    def record_attempts(
-        self,
-        *,
-        campaign_id: str,
-        payload: Any,
-        install_from: str,
-        from_mcp: bool = False,
-    ) -> RecordAttemptsResponse:
-        """Append attempts to a campaign and report the resulting state.
-
-        Each entry describes one completed try: the unit, its ``job_id`` and
-        its ``outcome``. With ``from_mcp``, entries are
-        ``{"unit": ..., "result": <completed MCP payload>}`` and the domain
-        reads the outcome out of them. An attempt against a unit the campaign
-        never planned is rejected, because it means the scope and the work
-        have diverged.
-
-        A job still in flight cannot be recorded here: the scheduler owns
-        those, having written the start itself.
-        """
-        validate_install_source(install_from)
-        if from_mcp:
-            parsed = finished_from_mcp_payload(payload)
-        else:
-            if not isinstance(payload, list) or not payload:
-                raise CampaignError("input must be a non-empty JSON array")
-            parsed = [parse_finished(raw) for raw in payload]
-
-        at = self._now()
-        # One completed try becomes both halves: it started, and it
-        # finished. A caller recording out of band is describing a whole
-        # attempt, not half of one.
-        records: list[Record] = []
-        for finished in parsed:
-            records.append(
-                AttemptStarted(
-                    unit=finished.unit,
-                    job_id=finished.job_id,
-                    install_from=install_from,
-                    at=at,
-                )
-            )
-            records.append(
-                AttemptFinished(
-                    unit=finished.unit,
-                    job_id=finished.job_id,
-                    outcome=finished.outcome,
-                    at=at,
-                )
-            )
-
-        existing = self._store.replay(campaign_id)
-        self._reject_unplanned(existing, parsed)
-        self._store.append(campaign_id, records)
-
-        settled = [*existing, *records]
-        statuses = reduce_units(settled)
-        return RecordAttemptsResponse(
-            **campaign_state(campaign_id, settled).model_dump(),
-            recorded=len(parsed),
-            running=[unit_view(status) for status in running(statuses)],
-            problems=[unit_view(status) for status in problems(statuses)],
-        )
-
-    def complete_campaign(self, *, campaign_id: str) -> CampaignState:
-        """Mark a campaign complete once it has no work left.
-
-        This is the transition for a campaign recorded by hand; a server
-        writes it on its own when the last lane finishes.
-        """
-        records = self._store.replay(campaign_id)
-        state = lifecycle(records)
-        if state == Lifecycle.COMPLETE:
-            return campaign_state(campaign_id, records)
-        if state == Lifecycle.CANCELLED:
-            raise CampaignError(
-                "campaign {!r} was cancelled; reopen it instead".format(
-                    campaign_id
-                )
-            )
-        left = outstanding(records)
-        if left:
-            raise CampaignError(
-                "campaign {!r} has {} unit(s) left to run or retry: {}".format(
-                    campaign_id,
-                    len(left),
-                    describe_units(status.unit for status in left),
-                )
-            )
-
-        at = self._now()
-        record = LifecycleRecord(state=Lifecycle.COMPLETE, at=at)
-        self._store.append(campaign_id, [record])
-        settled = [*records, record]
-        self._events.append(
-            campaign_id,
-            [
-                NewEvent(
-                    kind=EventKind.CAMPAIGN_COMPLETE,
-                    at=at,
-                    data={"counts": count_states(reduce_units(settled))},
-                )
-            ],
-        )
-        return campaign_state(campaign_id, settled)
 
     # -- reporting --------------------------------------------------------
 
@@ -360,9 +239,9 @@ class CampaignService:
 
         return CampaignStatusResponse(
             campaign=campaign_header(campaign_id, records),
-            state=campaign_state(campaign_id, records, statuses),
+            summary=campaign_summary(campaign_id, records, statuses),
             lanes_busy_by_pool=lanes_busy_by_pool(records),
-            running=[unit_view(status) for status in running(statuses)],
+            in_flight=[unit_view(status) for status in in_flight(statuses)],
             problems=(
                 [unit_view(status) for status in problem_units[:problems_cap]]
                 if group_by == GroupBy.UNIT
@@ -390,27 +269,6 @@ class CampaignService:
             units=[unit_view(status) for status in statuses[:capped]],
             truncated=len(statuses) > capped,
             limit_clamped=clamped,
-        )
-
-    def next_units(
-        self,
-        *,
-        campaign_id: str,
-        filters: Filters = Filters(),
-        limit: int = 1,
-    ) -> NextUnitsResponse:
-        """Report the units to attempt next.
-
-        Never-attempted units come first, then retryable problems. Units
-        that passed, or that are already running, are never returned.
-        """
-        return NextUnitsResponse(
-            units=[
-                unit_view(status)
-                for status in select_next(
-                    self._selected(campaign_id, filters), limit
-                )
-            ]
         )
 
     def unit_history(
@@ -471,7 +329,7 @@ class CampaignService:
 
         records = self._store.replay(campaign_id)
         return AwaitEventsResponse(
-            **campaign_state(campaign_id, records).model_dump(),
+            **campaign_summary(campaign_id, records).model_dump(),
             events=[
                 EventView(
                     seq=event.seq,
@@ -518,17 +376,24 @@ class CampaignService:
         campaign exports: evidence is a finished record, never a snapshot.
         """
         records = self._store.replay(campaign_id)
-        current = lifecycle(records)
+        current = state_of(records)
         statuses = reduce_units(records)
-        if current != Lifecycle.COMPLETE:
-            counts = count_states(statuses)
+        if current != CampaignState.COMPLETE:
+            busy = in_flight(statuses)
             raise CampaignError(
-                "campaign {!r} is {} with {} running and {} unattempted "
-                "units; only a complete campaign can be exported".format(
+                "campaign {!r} is {} with {} unit(s) in flight{} and {} "
+                "queueable; only a complete campaign can be exported".format(
                     campaign_id,
                     current,
-                    counts[UnitState.RUNNING],
-                    counts[UnitState.UNATTEMPTED],
+                    len(busy),
+                    (
+                        " (jobs {})".format(
+                            ", ".join(str(s.job_id) for s in busy)
+                        )
+                        if busy
+                        else ""
+                    ),
+                    sum(1 for status in statuses if status.queueable),
                 )
             )
         header = header_of(records) or CampaignHeader()
@@ -585,7 +450,7 @@ class CampaignService:
         return ExportCampaignResponse(
             campaign_id=campaign_id,
             path=str(output),
-            counts=campaign_state(campaign_id, records).counts,
+            counts=campaign_summary(campaign_id, records).counts,
             jobs=len(all_jobs),
             # A campaign created outside a server has no event log.
             missing_files=sorted(
@@ -610,25 +475,6 @@ class CampaignService:
             for status in reduce_units(self._store.replay(campaign_id))
             if filters.matches(status)
         ]
-
-    @staticmethod
-    def _reject_unplanned(
-        existing: Sequence[Record], finished: Sequence[AttemptFinished]
-    ) -> None:
-        planned = {
-            record.unit
-            for record in existing
-            if isinstance(record, PlanRecord)
-        }
-        unplanned = {
-            item.unit for item in finished if item.unit not in planned
-        }
-        if unplanned:
-            raise CampaignError(
-                "{} attempt(s) reference unplanned units: {}".format(
-                    len(unplanned), describe_units(unplanned)
-                )
-            )
 
     def _check_lane_ceiling(self, lanes: Mapping[Pool, int]) -> None:
         if self._lane_ceiling is None:

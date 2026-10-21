@@ -30,8 +30,8 @@ from behave_campaign.adapters import (
     ServiceLaneRunner,
     system_now,
 )
-from behave_campaign.domain.records import Lifecycle
-from behave_campaign.domain.state import lifecycle, reduce_units
+from behave_campaign.domain.records import CampaignState, UnitState
+from behave_campaign.domain.state import reduce_units, state_of
 from behave_campaign.repo import repo_state
 from behave_campaign.runner import CampaignRunner, ThreadTicker
 from behave_campaign.service import CampaignService
@@ -100,13 +100,13 @@ def test_a_campaign_runs_its_lanes_concurrently(monkeypatch, tmp_path):
 
     peak_lanes = 0
     try:
-        runner.start(CAMPAIGN_ID)
+        runner.run(CAMPAIGN_ID)
         deadline = time.monotonic() + CAMPAIGN_TIMEOUT_SECONDS
         while time.monotonic() < deadline:
             statuses = reduce_units(store.replay(CAMPAIGN_ID))
             peak_lanes = max(
                 peak_lanes,
-                sum(1 for s in statuses if s.state == "running"),
+                sum(1 for s in statuses if s.state == UnitState.IN_FLIGHT),
             )
             if runner.active_campaign() is None:
                 break
@@ -119,7 +119,7 @@ def test_a_campaign_runs_its_lanes_concurrently(monkeypatch, tmp_path):
     states = {s.unit.release: s.state for s in statuses}
 
     assert (
-        lifecycle(records) == Lifecycle.COMPLETE
+        state_of(records) == CampaignState.COMPLETE
     ), "campaign did not finish within {}s; states were {}".format(
         CAMPAIGN_TIMEOUT_SECONDS, states
     )
@@ -135,7 +135,7 @@ def test_a_campaign_runs_its_lanes_concurrently(monkeypatch, tmp_path):
     for status in statuses:
         assert len(status.attempts) == 1, status
         attempt = status.attempts[0]
-        assert not attempt.running
+        assert not attempt.in_flight
         assert attempt.outcome == status.state
         assert attempt.started_at and attempt.finished_at
 
@@ -155,7 +155,7 @@ def test_a_campaign_runs_its_lanes_concurrently(monkeypatch, tmp_path):
     kinds = [event.kind for event in stream]
 
     assert kinds[0] == "campaign.created"
-    assert "campaign.started" in kinds
+    assert "campaign.running" in kinds
     assert kinds[-1] == "campaign.complete"
     assert kinds.count("lane.started") == len(RELEASES)
     assert sum(1 for kind in kinds if kind.startswith("unit.")) == len(
@@ -167,3 +167,97 @@ def test_a_campaign_runs_its_lanes_concurrently(monkeypatch, tmp_path):
     persisted = campaign_dir / "{}.events.jsonl".format(CAMPAIGN_ID)
     assert persisted.is_file()
     assert len(persisted.read_text().splitlines()) == len(stream)
+
+
+KILL_CAMPAIGN_ID = "e2e-pause-with-kill"
+
+
+def _wait_for(predicate, timeout, what):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return
+        time.sleep(SAMPLE_INTERVAL_SECONDS)
+    raise AssertionError(
+        "timed out after {}s waiting for {}".format(timeout, what)
+    )
+
+
+@pytest.mark.e2e
+@pytest.mark.long_running
+def test_pause_with_kill_stops_a_real_job_and_run_redoes_it(
+    monkeypatch, tmp_path
+):
+    repo_root = Path(__file__).resolve().parents[4]
+    monkeypatch.setenv("UBUNTU_PRO_CLIENT_REPO", str(repo_root))
+    monkeypatch.setenv("MCP_STATE_DIR", str(tmp_path / "state"))
+
+    campaign_dir = tmp_path / "state" / "campaigns"
+    store = JsonlCampaignStore(campaign_dir)
+    events = JsonlEventLog(campaign_dir)
+    settings = load_settings({**os.environ, "MCP_MAX_LXD_JOBS": "1"})
+    service = create_service(settings, registry=InMemoryJobRegistry())
+    CampaignService(
+        store=store,
+        features=ParserFeatureReader(),
+        events=events,
+        now=system_now,
+        repo_state=repo_state,
+        lane_ceiling=settings.pool_limits,
+    ).create_campaign(
+        campaign_id=KILL_CAMPAIGN_ID,
+        repo_root=repo_root,
+        releases=[RELEASES[0]],
+        machine_types=["lxd-container"],
+        feature_files=[FEATURE],
+        scenarios=[SCENARIO],
+        lanes={Pool.LXD: 1},
+    )
+    runner = CampaignRunner(
+        store=store,
+        lanes=ServiceLaneRunner(service),
+        lock=FileCampaignRunLock(campaign_dir),
+        events=events,
+        now=system_now,
+        ticker=ThreadTicker(interval=1.0),
+    )
+
+    def unit():
+        (status,) = reduce_units(store.replay(KILL_CAMPAIGN_ID))
+        return status
+
+    try:
+        runner.run(KILL_CAMPAIGN_ID)
+        _wait_for(
+            lambda: unit().state == UnitState.IN_FLIGHT,
+            CAMPAIGN_TIMEOUT_SECONDS,
+            "the job to start",
+        )
+        killed_job = unit().job_id
+
+        paused = runner.pause(KILL_CAMPAIGN_ID, kill=True)
+
+        assert paused.state == CampaignState.PAUSED
+        assert paused.unsignalled == []
+        assert unit().attempts[-1].interrupted
+        # The job's process group really went away.
+        _wait_for(
+            lambda: service.job_status(killed_job).status == "completed",
+            CAMPAIGN_TIMEOUT_SECONDS,
+            "the killed job to exit",
+        )
+
+        runner.run(KILL_CAMPAIGN_ID)
+        _wait_for(
+            lambda: runner.active_campaign() is None,
+            CAMPAIGN_TIMEOUT_SECONDS,
+            "the campaign to complete",
+        )
+    finally:
+        runner.shutdown()
+
+    final = unit()
+    assert state_of(store.replay(KILL_CAMPAIGN_ID)) == CampaignState.COMPLETE
+    assert [a.interrupted for a in final.attempts] == [True, False]
+    assert final.attempts[0].job_id == killed_job
+    assert final.state in TERMINAL_STATES

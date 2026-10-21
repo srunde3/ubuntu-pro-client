@@ -1,28 +1,34 @@
-"""Unit states, lifecycle, filters and counts derived from records."""
+"""Unit states, intent, progress and named campaign states from records."""
+
+import itertools
 
 import pytest
 
 from behave_campaign.domain.records import (
     AttemptFinished,
+    AttemptInterrupted,
     AttemptStarted,
     CampaignError,
     CampaignHeader,
+    CampaignState,
     Filters,
-    Lifecycle,
-    LifecycleRecord,
+    Intent,
+    IntentRecord,
     PlanRecord,
+    Progress,
     RetryRecord,
     Unit,
+    UnitState,
 )
 from behave_campaign.domain.state import (
+    campaign_state,
     count_states,
-    last_state_reason,
-    lifecycle,
-    outstanding,
+    in_flight,
+    intent,
     problems,
+    progress,
     reduce_units,
-    running,
-    select_next,
+    state_of,
 )
 
 AT = "2026-09-12T12:00:00Z"
@@ -34,231 +40,341 @@ UNIT_A = Unit("features/a.feature", "A", "jammy", "lxd-container")
 UNIT_B = Unit("features/b.feature", "B", "noble", "lxd-vm")
 
 
-UNIT_C = Unit("features/c.feature", "C", "focal", "lxd-container")
+FIRST_JOB = "job-1"
+
+
+SECOND_JOB = "job-2"
+
+
+THIRD_JOB = "job-3"
 
 
 def plan(*units):
     return [CampaignHeader(at=AT), *(PlanRecord(unit=u, at=AT) for u in units)]
 
 
-def attempt(unit, outcome, job_id="job1"):
-    """One record standing for a try.
+def start(unit, job_id):
+    return AttemptStarted(
+        unit=unit, job_id=job_id, install_from="proposed", at=AT
+    )
 
-    A try still in flight is just its start; a finished one is just its
-    finish, which reduce_units reads as a whole attempt -- the shape an
-    out-of-band recording takes. Tests that need a real start/finish pair
-    go through the runner or the service.
-    """
-    if outcome == "running":
-        return AttemptStarted(
-            unit=unit, job_id=job_id, install_from="proposed", at=AT
-        )
+
+def finish(unit, job_id, outcome):
     return AttemptFinished(unit=unit, job_id=job_id, outcome=outcome, at=AT)
 
 
-class TestLifecycle:
-    def test_a_campaign_with_no_state_record_is_created(self):
-        assert lifecycle(plan(UNIT_A)) == Lifecycle.CREATED
+def tried(unit, job_id, outcome):
+    """A whole attempt: its start and its finish."""
+    return [start(unit, job_id), finish(unit, job_id, outcome)]
 
-    def test_the_latest_state_record_wins(self):
-        records = [
-            *plan(UNIT_A),
-            LifecycleRecord(state=Lifecycle.RUNNING, at=AT),
-            LifecycleRecord(state=Lifecycle.PAUSED, at=AT),
-        ]
 
-        assert lifecycle(records) == Lifecycle.PAUSED
+def interrupt(unit, job_id):
+    return AttemptInterrupted(unit=unit, job_id=job_id, at=AT, reason="kill")
 
-    def test_a_resumed_campaign_is_running_again(self):
-        records = [
-            *plan(UNIT_A),
-            LifecycleRecord(state=Lifecycle.RUNNING, at=AT),
-            LifecycleRecord(state=Lifecycle.PAUSED, at=AT),
-            LifecycleRecord(state=Lifecycle.RUNNING, at=AT),
-        ]
 
-        assert lifecycle(records) == Lifecycle.RUNNING
+def retry(unit):
+    return RetryRecord(unit=unit, at=AT)
 
-    def test_running_with_work_left_stays_running(self):
-        records = [
-            *plan(UNIT_A, UNIT_B),
-            LifecycleRecord(Lifecycle.RUNNING, AT),
-        ]
 
-        assert lifecycle(records) == Lifecycle.RUNNING
+# One unit's history, and what it adds up to: (state, queueable).
+UNIT_CASES = [
+    pytest.param([], (UnitState.UNATTEMPTED, True), id="never-attempted"),
+    pytest.param(
+        [start(UNIT_A, FIRST_JOB)],
+        (UnitState.IN_FLIGHT, False),
+        id="in-flight",
+    ),
+    pytest.param(
+        tried(UNIT_A, FIRST_JOB, "passed"),
+        (UnitState.PASSED, False),
+        id="passed",
+    ),
+    pytest.param(
+        tried(UNIT_A, FIRST_JOB, "failed"),
+        (UnitState.FAILED, False),
+        id="failed-waits-for-a-retry",
+    ),
+    pytest.param(
+        tried(UNIT_A, FIRST_JOB, "skipped"),
+        (UnitState.SKIPPED, False),
+        id="skipped",
+    ),
+    pytest.param(
+        tried(UNIT_A, FIRST_JOB, "error"),
+        (UnitState.ERROR, False),
+        id="error",
+    ),
+    pytest.param(
+        [*tried(UNIT_A, FIRST_JOB, "failed"), retry(UNIT_A)],
+        (UnitState.FAILED, True),
+        id="failed-and-retried",
+    ),
+    pytest.param(
+        [
+            *tried(UNIT_A, FIRST_JOB, "failed"),
+            retry(UNIT_A),
+            start(UNIT_A, SECOND_JOB),
+        ],
+        (UnitState.IN_FLIGHT, False),
+        id="a-start-answers-the-retry",
+    ),
+    pytest.param(
+        [start(UNIT_A, FIRST_JOB), interrupt(UNIT_A, FIRST_JOB)],
+        (UnitState.UNATTEMPTED, True),
+        id="interrupted-first-try",
+    ),
+    pytest.param(
+        [
+            *tried(UNIT_A, FIRST_JOB, "failed"),
+            retry(UNIT_A),
+            start(UNIT_A, SECOND_JOB),
+            interrupt(UNIT_A, SECOND_JOB),
+        ],
+        (UnitState.FAILED, True),
+        id="interrupted-retry-keeps-the-outcome",
+    ),
+    pytest.param(
+        [
+            *tried(UNIT_A, FIRST_JOB, "passed"),
+            retry(UNIT_A),
+            start(UNIT_A, SECOND_JOB),
+        ],
+        (UnitState.IN_FLIGHT, False),
+        id="retried-pass-is-in-flight",
+    ),
+    pytest.param(
+        [
+            *tried(UNIT_A, FIRST_JOB, "passed"),
+            retry(UNIT_A),
+            *tried(UNIT_A, SECOND_JOB, "failed"),
+        ],
+        (UnitState.PASSED, False),
+        id="a-pass-sticks",
+    ),
+]
 
-    def test_running_with_a_job_in_flight_stays_running(self):
-        records = [
-            *plan(UNIT_A),
-            LifecycleRecord(Lifecycle.RUNNING, AT),
-            attempt(UNIT_A, "running"),
-        ]
 
-        assert lifecycle(records) == Lifecycle.RUNNING
+def test_every_unit_state_is_reached_by_a_case():
+    assert {case.values[1][0] for case in UNIT_CASES} == set(UnitState)
 
-    def test_running_with_nothing_left_stays_running_until_marked(self):
-        records = [
-            *plan(UNIT_A, UNIT_B),
-            LifecycleRecord(Lifecycle.RUNNING, AT),
-            attempt(UNIT_A, "passed"),
-            attempt(UNIT_B, "passed"),
-        ]
 
-        assert lifecycle(records) == Lifecycle.RUNNING
-        assert outstanding(records) == []
+@pytest.mark.parametrize("history, expected", UNIT_CASES)
+def test_unit_state_and_queueable(history, expected):
+    (status,) = reduce_units([*plan(UNIT_A), *history])
 
-    def test_a_written_complete_is_complete(self):
-        records = [
-            *plan(UNIT_A),
-            LifecycleRecord(Lifecycle.RUNNING, AT),
-            attempt(UNIT_A, "passed"),
-            LifecycleRecord(Lifecycle.COMPLETE, AT),
-        ]
-
-        assert lifecycle(records) == Lifecycle.COMPLETE
-
-    def test_problem_units_do_not_count_as_remaining_work(self):
-        # Nothing retries a failure on its own.
-        records = [
-            *plan(UNIT_A, UNIT_B),
-            LifecycleRecord(Lifecycle.RUNNING, AT),
-            attempt(UNIT_A, "failed"),
-            attempt(UNIT_B, "skipped"),
-        ]
-
-        assert outstanding(records) == []
-
-    def test_unattempted_running_and_retried_units_are_outstanding(self):
-        records = [
-            *plan(UNIT_A, UNIT_B, UNIT_C),
-            attempt(UNIT_A, "running"),
-            attempt(UNIT_B, "failed"),
-            RetryRecord(unit=UNIT_B, at=AT),
-        ]
-
-        assert [s.unit for s in outstanding(records)] == [
-            UNIT_A,
-            UNIT_B,
-            UNIT_C,
-        ]
-
-    def test_a_paused_campaign_with_nothing_left_stays_paused(self):
-        records = [
-            *plan(UNIT_A),
-            LifecycleRecord(Lifecycle.RUNNING, AT),
-            attempt(UNIT_A, "passed"),
-            LifecycleRecord(Lifecycle.PAUSED, AT),
-        ]
-
-        assert lifecycle(records) == Lifecycle.PAUSED
-
-    def test_a_cancelled_campaign_stays_cancelled(self):
-        records = [
-            *plan(UNIT_A),
-            LifecycleRecord(Lifecycle.RUNNING, AT),
-            LifecycleRecord(Lifecycle.CANCELLED, AT),
-        ]
-
-        assert lifecycle(records) == Lifecycle.CANCELLED
-
-    def test_the_reason_of_the_latest_transition_is_reported(self):
-        records = [
-            *plan(UNIT_A),
-            LifecycleRecord(Lifecycle.RUNNING, AT),
-            LifecycleRecord(Lifecycle.PAUSED, AT, reason="server_restart"),
-        ]
-
-        assert last_state_reason(records) == "server_restart"
-
-    def test_no_transition_has_no_reason(self):
-        assert last_state_reason(plan(UNIT_A)) == ""
+    assert (status.state, status.queueable) == expected
 
 
 class TestReduceUnits:
-    def test_planned_unit_without_attempts_is_unattempted(self):
-        statuses = reduce_units([PlanRecord(UNIT_A)])
+    def test_a_pass_decides_the_job_id(self):
+        records = [
+            *plan(UNIT_A),
+            *tried(UNIT_A, FIRST_JOB, "failed"),
+            *tried(UNIT_A, SECOND_JOB, "passed"),
+            *tried(UNIT_A, THIRD_JOB, "failed"),
+        ]
 
-        assert statuses[0].state == "unattempted"
-        assert statuses[0].job_id is None
+        (status,) = reduce_units(records)
 
-    def test_passing_attempt_wins_over_earlier_and_later_failures(self):
-        statuses = reduce_units(
-            [
-                PlanRecord(UNIT_A),
-                attempt(UNIT_A, "failed", "job-1"),
-                attempt(UNIT_A, "passed", "job-2"),
-                attempt(UNIT_A, "failed", "job-3"),
-            ]
-        )
+        assert status.job_id == SECOND_JOB
+        assert len(status.attempts) == 3
 
-        assert statuses[0].state == "passed"
-        assert statuses[0].job_id == "job-2"
-        assert len(statuses[0].attempts) == 3
+    def test_a_unit_in_flight_names_the_job_in_flight(self):
+        records = [
+            *plan(UNIT_A),
+            *tried(UNIT_A, FIRST_JOB, "passed"),
+            retry(UNIT_A),
+            start(UNIT_A, SECOND_JOB),
+        ]
 
-    def test_latest_attempt_wins_until_a_unit_passes(self):
-        statuses = reduce_units(
-            [
-                PlanRecord(UNIT_A),
-                attempt(UNIT_A, "failed", "job-1"),
-                attempt(UNIT_A, "skipped", "job-2"),
-            ]
-        )
+        (status,) = reduce_units(records)
 
-        assert statuses[0].state == "skipped"
-        assert statuses[0].job_id == "job-2"
+        assert status.job_id == SECOND_JOB
+
+    def test_an_interrupted_attempt_is_kept_and_marked(self):
+        records = [
+            *plan(UNIT_A),
+            start(UNIT_A, FIRST_JOB),
+            interrupt(UNIT_A, FIRST_JOB),
+        ]
+
+        (status,) = reduce_units(records)
+
+        assert [a.interrupted for a in status.attempts] == [True]
+        assert status.attempts[0].outcome is None
+
+    def test_an_interruption_with_no_start_is_ignored(self):
+        records = [*plan(UNIT_A), interrupt(UNIT_A, FIRST_JOB)]
+
+        (status,) = reduce_units(records)
+
+        assert status.attempts == ()
+        assert status.state == UnitState.UNATTEMPTED
+
+    def test_a_finish_with_no_start_is_a_whole_attempt(self):
+        records = [*plan(UNIT_A), finish(UNIT_A, FIRST_JOB, "failed")]
+
+        (status,) = reduce_units(records)
+
+        assert status.state == UnitState.FAILED
+        assert len(status.attempts) == 1
 
     def test_units_are_ordered_and_deduplicated(self):
-        statuses = reduce_units(
-            [PlanRecord(UNIT_B), PlanRecord(UNIT_A), PlanRecord(UNIT_A)]
-        )
+        records = [PlanRecord(UNIT_B), PlanRecord(UNIT_A), PlanRecord(UNIT_A)]
+
+        statuses = reduce_units(records)
 
         assert [status.unit for status in statuses] == [UNIT_A, UNIT_B]
 
     def test_attempts_for_unplanned_units_are_not_reported(self):
-        statuses = reduce_units([attempt(UNIT_A, "failed", "job-1")])
+        statuses = reduce_units(tried(UNIT_A, FIRST_JOB, "failed"))
 
         assert statuses == []
 
 
-class TestSelectNext:
-    def test_unattempted_units_come_before_retryable_problems(self):
-        statuses = reduce_units(
-            [
-                PlanRecord(UNIT_A),
-                PlanRecord(UNIT_B),
-                attempt(UNIT_A, "failed", "job-1"),
-            ]
-        )
+class TestIntent:
+    def test_a_campaign_with_no_intent_record_never_ran(self):
+        assert intent(plan(UNIT_A)) == Intent.NEVER_RUN
 
-        selected = select_next(statuses, limit=5)
+    def test_the_latest_intent_wins(self):
+        records = [
+            *plan(UNIT_A),
+            IntentRecord(Intent.RUN, AT),
+            IntentRecord(Intent.HOLD, AT),
+        ]
 
-        assert [status.unit for status in selected] == [UNIT_B, UNIT_A]
+        assert intent(records) == Intent.HOLD
 
-    def test_passed_and_running_units_are_excluded(self):
-        statuses = reduce_units(
-            [
-                PlanRecord(UNIT_A),
-                PlanRecord(UNIT_B),
-                attempt(UNIT_A, "passed", "job-1"),
-                attempt(UNIT_B, "running", "job-2"),
-            ]
-        )
 
-        assert select_next(statuses, limit=5) == []
+# A campaign of units A and B: what B's history adds to A's, as progress.
+PROGRESS_CASES = [
+    pytest.param([], Progress.UNTOUCHED, id="nothing-attempted"),
+    pytest.param(
+        tried(UNIT_A, FIRST_JOB, "passed"),
+        Progress.OPEN,
+        id="an-unattempted-unit-is-left",
+    ),
+    pytest.param(
+        [*tried(UNIT_A, FIRST_JOB, "passed"), start(UNIT_B, SECOND_JOB)],
+        Progress.FINISHING,
+        id="only-a-job-in-flight-is-left",
+    ),
+    pytest.param(
+        [*tried(UNIT_A, FIRST_JOB, "failed"), start(UNIT_B, SECOND_JOB)],
+        Progress.FINISHING,
+        id="a-problem-unit-is-not-work-left",
+    ),
+    pytest.param(
+        [
+            *tried(UNIT_A, FIRST_JOB, "failed"),
+            *tried(UNIT_B, SECOND_JOB, "passed"),
+        ],
+        Progress.SETTLED,
+        id="every-unit-has-an-outcome",
+    ),
+    pytest.param(
+        [
+            *tried(UNIT_A, FIRST_JOB, "failed"),
+            *tried(UNIT_B, SECOND_JOB, "passed"),
+            retry(UNIT_A),
+        ],
+        Progress.OPEN,
+        id="a-retry-reopens-it",
+    ),
+]
 
-    def test_limit_must_be_positive(self):
-        with pytest.raises(CampaignError):
-            select_next([], limit=0)
+
+def test_every_progress_is_reached_by_a_case():
+    assert {case.values[1] for case in PROGRESS_CASES} == set(Progress)
+
+
+@pytest.mark.parametrize("history, expected", PROGRESS_CASES)
+def test_progress(history, expected):
+    statuses = reduce_units([*plan(UNIT_A, UNIT_B), *history])
+
+    assert progress(statuses) == expected
+
+
+# Every combination of intent, progress and "a job is in flight". None
+# marks a combination no record this package writes can produce.
+NAMED_STATE = {
+    (Intent.NEVER_RUN, Progress.UNTOUCHED, False): CampaignState.CREATED,
+    (Intent.NEVER_RUN, Progress.UNTOUCHED, True): None,
+    (Intent.NEVER_RUN, Progress.OPEN, False): None,
+    (Intent.NEVER_RUN, Progress.OPEN, True): None,
+    (Intent.NEVER_RUN, Progress.FINISHING, False): None,
+    (Intent.NEVER_RUN, Progress.FINISHING, True): None,
+    (Intent.NEVER_RUN, Progress.SETTLED, False): None,
+    (Intent.NEVER_RUN, Progress.SETTLED, True): None,
+    (Intent.RUN, Progress.UNTOUCHED, False): CampaignState.RUNNING,
+    (Intent.RUN, Progress.UNTOUCHED, True): None,
+    (Intent.RUN, Progress.OPEN, False): CampaignState.RUNNING,
+    (Intent.RUN, Progress.OPEN, True): CampaignState.RUNNING,
+    (Intent.RUN, Progress.FINISHING, False): None,
+    (Intent.RUN, Progress.FINISHING, True): CampaignState.FINISHING,
+    (Intent.RUN, Progress.SETTLED, False): CampaignState.COMPLETE,
+    (Intent.RUN, Progress.SETTLED, True): None,
+    (Intent.HOLD, Progress.UNTOUCHED, False): CampaignState.PAUSED,
+    (Intent.HOLD, Progress.UNTOUCHED, True): None,
+    (Intent.HOLD, Progress.OPEN, False): CampaignState.PAUSED,
+    # Units are left to queue, but jobs are still draining.
+    (Intent.HOLD, Progress.OPEN, True): CampaignState.PAUSING,
+    (Intent.HOLD, Progress.FINISHING, False): None,
+    (Intent.HOLD, Progress.FINISHING, True): CampaignState.PAUSING,
+    (Intent.HOLD, Progress.SETTLED, False): CampaignState.COMPLETE,
+    (Intent.HOLD, Progress.SETTLED, True): None,
+}
+
+
+def test_every_combination_has_an_expectation():
+    assert set(NAMED_STATE) == set(
+        itertools.product(Intent, Progress, (False, True))
+    )
+
+
+def test_every_campaign_state_is_reachable():
+    assert set(NAMED_STATE.values()) - {None} == set(CampaignState)
+
+
+@pytest.mark.parametrize(
+    "intent_, progress_, busy",
+    [key for key, state in NAMED_STATE.items() if state is not None],
+    ids=str,
+)
+def test_campaign_state_names_a_reachable_combination(
+    intent_, progress_, busy
+):
+    expected = NAMED_STATE[(intent_, progress_, busy)]
+
+    assert campaign_state(intent_, progress_, busy) == expected
+
+
+@pytest.mark.parametrize(
+    "intent_, progress_, busy",
+    [key for key, state in NAMED_STATE.items() if state is None],
+    ids=str,
+)
+def test_campaign_state_refuses_an_unreachable_combination(
+    intent_, progress_, busy
+):
+    with pytest.raises(CampaignError, match="inconsistent"):
+        campaign_state(intent_, progress_, busy)
+
+
+def test_state_of_reads_the_records():
+    records = [
+        *plan(UNIT_A, UNIT_B),
+        IntentRecord(Intent.HOLD, AT),
+        start(UNIT_A, FIRST_JOB),
+    ]
+
+    assert state_of(records) == CampaignState.PAUSING
 
 
 class TestFilters:
     def test_state_filter_applies_to_current_state(self):
         statuses = reduce_units(
-            [
-                PlanRecord(UNIT_A),
-                PlanRecord(UNIT_B),
-                attempt(UNIT_A, "failed", "job-1"),
-            ]
+            [*plan(UNIT_A, UNIT_B), *tried(UNIT_A, FIRST_JOB, "failed")]
         )
         filters = Filters(state=("failed",))
 
@@ -267,20 +383,19 @@ class TestFilters:
         assert kept == [UNIT_A]
 
     def test_counts_cover_every_state(self):
-        counts = count_states(reduce_units([PlanRecord(UNIT_A)]))
+        counts = count_states(reduce_units(plan(UNIT_A)))
 
+        assert set(counts) == {state.value for state in UnitState}
         assert counts["unattempted"] == 1
-        assert counts["passed"] == 0
 
-    def test_running_and_problems_extract_matching_statuses(self):
+    def test_in_flight_and_problems_extract_matching_statuses(self):
         statuses = reduce_units(
             [
-                PlanRecord(UNIT_A),
-                PlanRecord(UNIT_B),
-                attempt(UNIT_A, "running", "job-1"),
-                attempt(UNIT_B, "failed", "job-2"),
+                *plan(UNIT_A, UNIT_B),
+                start(UNIT_A, FIRST_JOB),
+                *tried(UNIT_B, SECOND_JOB, "failed"),
             ]
         )
 
-        assert [s.unit for s in running(statuses)] == [UNIT_A]
+        assert [s.unit for s in in_flight(statuses)] == [UNIT_A]
         assert [s.unit for s in problems(statuses)] == [UNIT_B]

@@ -38,7 +38,7 @@ Small collaborators are passed as plain callables, not ports: the clock (`now_ut
 
 | Change | Put it in |
 | --- | --- |
-| A rule about units, attempts, lifecycle, scheduling, classification or log parsing | the module for that concern in the package's `domain/` |
+| A rule about units, attempts, campaign states, scheduling, classification or log parsing | the module for that concern in the package's `domain/` |
 | How a result is shown to a caller or written for a reviewer | the package's views |
 | A new kind of external interaction | a `Protocol` in `ports.py`, an adapter in `adapters.py`, and a fake for tests |
 | What a tool or command does | the service method |
@@ -59,18 +59,18 @@ Everything the server writes lives under `<repo_root>/.mcp_server_behave/`, or u
 | `jobs/<job_id>_report.json` | behave's JSON report | the behave subprocess |
 | `jobs/<job_id>_meta.json` | the job record (`JobRecord`) | `BehaveService` |
 | `jobs/index.jsonl` | one `started` and one `completed` row per job | `BehaveService` |
-| `campaigns/<id>.jsonl` | the campaign record: header, plan, started, finished, lifecycle and retry records, append only | `CampaignService`, `CampaignRunner`, CLI |
+| `campaigns/<id>.jsonl` | the campaign record: header, plan, started, finished, interrupted, intent and retry records, append only | `CampaignService` (create), `CampaignRunner` |
 | `campaigns/<id>.events.jsonl` | numbered events | `JsonlEventLog` |
 | `campaigns/<id>.lock` | the run lock (`flock`) while a campaign schedules | `FileCampaignRunLock` |
 | `exports/<id>.tar.gz` | the evidence bundle | CLI `export` |
 
-A campaign's state is never stored. It is rebuilt by replaying its record file through `domain.reduce_units` and `domain.lifecycle`.
+Only a campaign's intent is written. Its unit states, progress and named state are rebuilt by replaying its record file through `domain/state.py` (`reduce_units`, `progress`, `state_of`).
 
 ## Process model
 
 - One long-lived server process, serving MCP over streamable HTTP at `http://MCP_HOST:MCP_PORT/mcp`. FastMCP runs tool calls on worker threads.
 - `server.py` holds the long-lived objects: one `BehaveService`, one `InMemoryJobRegistry`, one `CampaignRunner` and one `JsonlEventLog`. `CampaignService` is built per call.
-- One daemon ticker thread calls `CampaignRunner.tick` every 2 s for the one active campaign. The runner's guard serialises ticks and control verbs.
+- One daemon ticker thread calls `CampaignRunner.tick` every 2 s for the one campaign that is scheduling: running, finishing or pausing. It stops, and the run lock is released, once that campaign is paused or complete. The runner's guard serialises ticks and the `run`, `pause` and `retry_units` commands.
 - Each behave job is a `tox -e behave` subprocess in its own session, with stdin from `/dev/null`. `kill_job` signals the whole process group.
 
 ## Surface rules
@@ -104,7 +104,7 @@ The test tree mirrors the source tree, so a failing file names the module that b
 | --- | --- |
 | `tests/behave_mcp/` | one file per `behave_mcp` module, with `domain/` mirrored as a directory, plus `test_golden.py` for on-disk byte shapes and `test_startup.py` for configuration at import |
 | `tests/behave_campaign/` | one file per `behave_campaign` module, with `domain/` and `views/` mirrored as directories |
-| `tests/mcp_surface/` | the tools over the real MCP protocol, and the two e2e tests |
+| `tests/mcp_surface/` | the tools over the real MCP protocol, and the e2e tests |
 
 A test file holds the tests of one module. Helpers and constants it needs are defined in it, so the file reads on its own.
 

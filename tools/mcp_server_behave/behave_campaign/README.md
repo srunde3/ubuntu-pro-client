@@ -11,7 +11,7 @@ A **test unit** is one behave scenario for one release on one `machine_type`.
 ## Storage
 
 One append-only JSON Lines file per campaign, replayed in full to get the
-current state. Six record types:
+current state. Seven record types:
 
 | type | written when | says |
 | --- | --- | --- |
@@ -19,7 +19,8 @@ current state. Six record types:
 | `plan` | once per unit, at creation | this unit is in scope |
 | `started` | a lane opens | a job began for this unit, and what it installs from |
 | `finished` | that job ends | what it established: `passed`, `failed`, `skipped` or `error` |
-| `lifecycle` | a control verb | the campaign was started, paused, cancelled or reopened, and why |
+| `interrupted` | a pause with kill stops the job | the job ended without an outcome, and why |
+| `intent` | `run`, `pause` or `retry_units` | what the caller asked the campaign to do: `run` or `hold` |
 | `retry` | `retry_units` | someone asked for another go at a unit |
 
 One try at a unit is one job, written as two records. Both are needed: the
@@ -28,9 +29,10 @@ is an attempt on its own -- an **attempt** is the pair, matched on `job_id`,
 and that is what `attempts` and `attempt_count` report. A unit tried twice has
 two attempts, not four.
 
-`running` is therefore not an outcome. A unit is running when its latest
-attempt has no `finished` record yet, which is a fact about the attempt rather
-than a result the job reported.
+`in_flight` is therefore not an outcome. A unit is in flight while an attempt
+has neither a `finished` nor an `interrupted` record, which is a fact about the
+attempt rather than a result the job reported. An interrupted attempt
+established nothing: it closes the attempt and leaves the unit to run again.
 
 The `campaign` header captures how the campaign was built, so it can be
 recreated and audited later: the campaign id, the filters used, the checkout it
@@ -44,11 +46,17 @@ live in MCP job history that expires.
 
 A unit's state is derived, never stored:
 
-- No attempts at all is `unattempted`.
-- Any passing attempt makes and keeps the unit `passed`.
-- An unfinished latest attempt is `running`.
-- Otherwise the latest attempt's outcome wins: `failed`, `skipped` or
-  `error`.
+- An attempt with neither a finish nor an interruption makes it `in_flight`,
+  whatever came before, including a pass being retried.
+- Otherwise any passing attempt makes and keeps the unit `passed`.
+- Otherwise the latest finished attempt's outcome wins: `failed`, `skipped`
+  or `error`.
+- With no finished attempt, it is `unattempted`.
+
+A unit is **queueable** -- the scheduler may start an attempt at it -- when it
+is not in flight and it is unattempted, has a retry requested since its last
+attempt, or its latest attempt was interrupted. A problem unit is not
+queueable on its own.
 
 ## Scope
 
@@ -88,16 +96,7 @@ uv run behave-campaign create --campaign-id 1234567
 uv run behave-campaign create --campaign-id 1234567 \
   --install-from proposed --lxd-lanes 6 --cloud-lanes 4 --wsl-lanes 1
 
-# Record started and finished attempts in batches.
-uv run behave-campaign record --campaign-id 1234567 --install-from proposed \
-  --input attempts.json
-
-# Or hand the MCP's own start/wait payloads straight to the tool.
-uv run behave-campaign record --campaign-id 1234567 --install-from proposed \
-  --from-mcp --input results.json
-
-# Ask what to run next, then inspect results.
-uv run behave-campaign next --campaign-id 1234567 --limit 4
+# Inspect a campaign a server is running.
 uv run behave-campaign status --campaign-id 1234567 --state failed
 uv run behave-campaign status --campaign-id 1234567 --group-by scenario
 uv run behave-campaign units --campaign-id 1234567 --state failed --format csv
@@ -107,18 +106,17 @@ uv run behave-campaign history --campaign-id 1234567 \
 # Follow a campaign a server is running, from a terminal.
 uv run behave-campaign events --campaign-id 1234567 --kinds actionable --follow
 
-# Close a campaign recorded by hand, then bundle its evidence.
-uv run behave-campaign complete --campaign-id 1234567
+# Bundle a complete campaign's evidence.
 uv run behave-campaign export --campaign-id 1234567
 
 # A campaign file anywhere else: its id is the file's name.
 uv run behave-campaign status --campaign /tmp/T.jsonl
 ```
 
-All commands read `--input` from stdin by default and print JSON to stdout;
-`units`, `next` and `history` also take `--format csv`, one row per unit (or
-per attempt, for `history`). `status`, `units`, `next`, and `history` accept
-the same filters plus `--state`, repeatable to allow several values.
+All commands print JSON to stdout; `units` and `history` also take
+`--format csv`, one row per unit (or per attempt, for `history`). `status`,
+`units` and `history` accept the same filters plus `--state`, repeatable to
+allow several values.
 
 A campaign is named the way the server names it: `--campaign-id 1234567`
 is `<repo>/.mcp_server_behave/campaigns/1234567.jsonl` (or under
@@ -130,15 +128,15 @@ always the file's name. `--repo-root` defaults to `$UBUNTU_PRO_CLIENT_REPO`.
 (`1234567.events.jsonl`); it needs no server of its own. `--since-seq` and
 `--kinds` work as they do for `await_campaign_events`. With `--follow` it
 prints one batch per line as events arrive, polling every `--interval`
-seconds, and returns once the campaign is complete or cancelled with no
-lane in flight. Control verbs have no CLI form: the scheduler and its run
-lock live in the server process.
+seconds, and returns once the campaign is paused or complete. The CLI records
+no results and has no control verbs: the scheduler, which records every
+result, and its run lock live in the server process.
 
 The CLI prints the same response shapes the MCP tools return. `create` and
 `status` carry the campaign's header (how it was built: scope, checkout,
-install source, lanes) under `campaign` and its state (lifecycle, lanes in
-flight, counts by unit state) under `state`; every other response carries
-the state fields alone, since the header never changes. `status` reports
+install source, lanes) under `campaign` and its summary (state, intent,
+progress, lanes in flight, counts by unit state) under `summary`; every other
+response carries the summary fields alone, since the header never changes. `status` reports
 counts, in-flight units and problems; `units` and `history` list individual
 units, capped at `--limit` and saying so.
 
@@ -167,17 +165,14 @@ The tool fails loudly instead of guessing:
 - A campaign can only be created once; it is not edited afterwards.
 - An unknown release, machine type, or feature in `create` is rejected rather
   than silently matching nothing.
-- Recording an attempt for a unit that was never planned is rejected.
 - Attempt state must be one of the known states.
-- An MCP result that is not a clean pass, failure, or skip is rejected.
+- A record a campaign could not have written, such as an attempt on a
+  campaign that never ran, is reported as inconsistent rather than read.
 
 ## MCP results
 
-`record` takes completed tries: `[{unit..., "job_id": ..., "outcome": ...}]`,
-and writes both halves for each, since a caller recording out of band is
-describing a whole attempt. `--from-mcp` takes
-`[{"unit": {...}, "result": <MCP payload>}]` instead and reads the outcome out
-of the payload. Each job covers exactly one unit, so the mapping is:
+The scheduler records each finished job as the outcome of one attempt. Each
+job covers exactly one unit, so the mapping is:
 
 | MCP payload | Outcome |
 | --- | --- |
@@ -186,22 +181,16 @@ of the payload. Each job covers exactly one unit, so the mapping is:
 | `completed`, only skips | `skipped` |
 | `completed`, no parseable report (`summary: null`) | `error` |
 
-A job still in flight cannot be recorded this way. The scheduler owns those:
-it wrote the `started` record itself and will write the finish.
-
 Anything else -- a scenario status outside passed/failed/skipped, no scenario
 counts at all, or a pass contradicted by `ok: false` -- cannot be classified.
 A skipped Examples row alongside a passing one is not one of these: that run
-passed.
-
-The CLI rejects an unclassifiable result so it gets looked at rather than
-silently recorded. A scheduler has nobody to raise at, so it records the
-attempt as `error` and keeps the reason, rather than stopping the campaign.
+passed. The scheduler records an unclassifiable result as `error`, keeps the
+reason, and goes on rather than stopping the campaign.
 
 ## MCP tools
 
-The server exposes the campaign through three tools so far. They read and
-write the same files the CLI does, under the directory named by
+The server exposes campaigns through these tools. They read and write the
+same files the CLI does, under the directory named by
 `MCP_STATE_DIR` (default `<repo_root>/.mcp_server_behave`), in its
 `campaigns/` subdirectory.
 
@@ -219,17 +208,17 @@ write the same files the CLI does, under the directory named by
   scenario failing on every release reads at a glance. Either list is capped
   at `problems_limit` (50 over MCP; the CLI lists all) with `problems_total`
   alongside. Individual units are `unit_history`'s job.
-- `control_campaign` -- one tool, four actions. `start` begins scheduling:
-  the server then keeps each pool's lanes full and fills a lane as
-  soon as one frees, with no further calls needed to keep it moving. `pause`
-  and `resume` stop and restart lane opening. `cancel` closes a campaign to
-  further scheduling, including one that has already finished.
-- `reopen_campaign` -- take a cancellation back, for one made by mistake.
+- `control_campaign` -- `run` or `pause`, from any state. `run` sets the
+  intent to run: the server then keeps each pool's lanes full and fills a
+  lane as soon as one frees, with no further calls needed to keep it moving.
+  `pause` sets the intent to hold; with `kill: true` it also kills the jobs
+  in flight. See [States](#states).
 - `await_campaign_events` -- wait for news, with a cursor.
 - `unit_history` -- every attempt at each selected unit: job, install
   source, timestamps and outcome. How a unit got to where it is, without
   reading the event stream.
-- `retry_units` -- ask for another attempt at units that already had one.
+- `retry_units` -- ask for another attempt at units that already had one,
+  and set the intent to run.
 - `kill_job` -- terminate a job that has hung.
 
 ## Events
@@ -239,9 +228,14 @@ is how a watcher hears about it promptly.
 
 | Family | Kinds |
 | --- | --- |
-| `campaign.*` | `created`, `started`, `paused`, `resumed`, `cancelled`, `reopened`, `complete` |
+| `campaign.*` | `created`, `running`, `finishing`, `complete`, `pausing`, `paused` |
 | `lane.*` | `started`, `overdue` |
-| `unit.*` | `passed`, `failed`, `skipped`, `errored`, `unclassifiable`, `retried` |
+| `unit.*` | `passed`, `failed`, `skipped`, `errored`, `unclassifiable`, `interrupted`, `retried` |
+
+A `campaign.<state>` event is emitted each time the campaign's named state
+changes, and only then. Its data says the state it came `from`, the `intent`
+and `progress` now, the `cause` (`run`, `pause`, `retry` or `scheduler`) and
+the `counts` by unit state.
 | `anomaly.*` | `repeated_scenario_failure`, `repeated_skips`, `capacity_starved` |
 
 Subscribe by exact kind, by family (`unit.*`), or by preset: `actionable`
@@ -270,62 +264,66 @@ to decide. Each is reported once per condition rather than every tick, keyed
 on the condition itself, so a lane that stays slow does not flood the stream.
 
 There is deliberately no heartbeat. Every response carries the campaign's
-counts and lifecycle, so a batch that came back empty on timeout still says
+counts and state, so a batch that came back empty on timeout still says
 where things stand, and an agent that has stopped polling would not receive a
 heartbeat anyway.
 
-## Lifecycle
+## States
 
-A campaign is `created` until it is started, then `running`, and `complete`
-once nothing is unattempted, in flight, or waiting on a retry. Every state but
-`created` is a written `lifecycle` record. The server writes `complete` on the
-tick where the last lane finishes; for a campaign recorded by hand,
-`behave-campaign complete` writes it, and refuses while work is left.
-`paused` and `cancelled` are asked for.
+A campaign's state has three parts. Only the first is written:
 
-The latest `lifecycle` record is the current state, so a state is a position
-rather than a door that locks behind you. `reopen_campaign` uses that: it
-appends a `running` record after a `cancelled` one -- or `complete`, when
-nothing is left -- leaving both in the file, so a campaign closed by mistake
-reads as one that was closed and reopened.
+| Part | Values | Comes from |
+| --- | --- | --- |
+| intent | `never_run`, `run`, `hold` | the latest `intent` record; `never_run` is its absence |
+| progress | `untouched`, `open`, `finishing`, `settled` | the units |
+| counts | units per state | the units |
 
-Both `pause` and `cancel` **drain**: they stop opening lanes, but jobs already
-in flight run to completion and their results are still recorded. `lanes_busy`
-in the response says how many are still draining. Nothing kills a job.
+Progress is `untouched` while no unit has an attempt, `open` while any unit
+is queueable, `finishing` while nothing is queueable but a job is in flight,
+and `settled` otherwise. The named state is read off intent, progress and
+whether any job is in flight:
+
+| State | Intent | Progress | What the scheduler does |
+| --- | --- | --- | --- |
+| `created` | never run | untouched | nothing |
+| `running` | run | untouched or open | records exits, starts queueable units on free lanes |
+| `finishing` | run | finishing | records exits |
+| `complete` | run or hold | settled | nothing |
+| `pausing` | hold | open or finishing, with a job in flight | records exits, starts nothing |
+| `paused` | hold | untouched or open, nothing in flight | nothing |
+
+The commands:
+
+- `run` sets the intent to run, from any state. On a complete campaign it
+  changes nothing: there is no work to schedule.
+- `pause` sets the intent to hold, from any state. Jobs in flight finish and
+  are recorded, so the campaign is `pausing` until they do. With `kill`, each
+  job in flight is signalled and its attempt is recorded as `interrupted` at
+  once, so the campaign is paused at once and those units run again on the
+  next `run`. A job the server cannot signal, such as one started by an
+  earlier server process, is named in `unsignalled`.
+- `retry_units` requests another attempt at the selected units and sets the
+  intent to run, in any state.
+
+`complete` is not something anyone writes or asks for. It is when the
+evidence is final, so it gates export, and when a watcher can stop. It is not
+terminal: `retry_units` on a complete campaign gives it work and sets it
+running.
 
 The scheduler never retries. A unit that failed, was skipped, or errored stays
 that way until someone asks for another attempt, because judging a failure
-flaky-or-real is not something an unattended loop should decide.
+flaky-or-real is not something an unattended loop should decide. A `retry`
+record makes the unit queueable until its next attempt starts; the file still
+says who asked and when.
 
-`retry_units` is how that ask is made. It appends a `retry` record, so a unit
-becomes schedulable again when it carries one newer than its last attempt --
-the file still says who asked and when, and running it appends a `running`
-attempt that clears the request. Retrying a `complete` campaign writes
-`running` and starts it scheduling again; a paused one accepts the request
-and stays paused.
+One campaign schedules at a time. It holds the run lock while it is running,
+finishing or pausing, and releases it once paused or complete, so a paused
+campaign never blocks another.
 
-Cancelling is what closes a campaign against being picked up this way, which
-is the only thing `cancel` does that `pause` cannot -- a finished campaign
-cannot be paused. So cancel a run to say it is over, not to stop it for now.
-A campaign cancelled by mistake is not lost: `reopen_campaign` puts it back
-where it stood. One with units still unattempted starts scheduling again; one
-whose units were all attempted comes back `complete`, and `retry_units` then
-reaches its failed and skipped units as before.
-
-Reopening does not recover jobs, only the campaign. A cancel that left lanes
-in flight and then outlived its server leaves units `running` against jobs
-nothing will ever report on, and `reopen_campaign` refuses while it can see
-them rather than scheduling around units that can never resolve. Naming
-`abandon_in_flight` records them as `error`, with `abandoned_on_reopen` on
-the `unit.errored` event, which makes them retryable like any other
-failure.
-
-Lane state lives in the record, not in memory: a unit in flight is one whose
-latest attempt is `running`, written before the lane is released. That is what
-lets a tick pick up where the last one left off, and why a campaign left
-running by a server that went away can be recovered at all -- it comes back
-`paused`, with `server_restart` as the reason, so whoever is watching decides
-whether those jobs are still alive.
+Lane state lives in the record, not in memory: a unit in flight is one with
+an attempt that has neither finished nor been interrupted, written before the
+lane is released. That is what lets a tick pick up where the last one left
+off.
 
 ## Types
 
@@ -335,17 +333,20 @@ that silently matches nothing:
 
 | enum | values | module |
 | --- | --- | --- |
-| `RecordType` | the six record types above | `domain/records.py` |
+| `RecordType` | the seven record types above | `domain/records.py` |
 | `Outcome` | `passed`, `failed`, `skipped`, `error` | `domain/records.py` |
-| `UnitState` | those four, plus `unattempted` and `running` | `domain/records.py` |
-| `Lifecycle` | `created`, `running`, `paused`, `cancelled`, `complete` | `domain/records.py` |
+| `UnitState` | those four, plus `unattempted` and `in_flight` | `domain/records.py` |
+| `Intent` | `never_run`, `run`, `hold` | `domain/records.py` |
+| `Progress` | `untouched`, `open`, `finishing`, `settled` | `domain/records.py` |
+| `CampaignState` | `created`, `running`, `finishing`, `complete`, `pausing`, `paused` | `domain/records.py` |
 | `GroupBy` | `unit`, `scenario` | `domain/state.py` |
-| `ControlAction` | `start`, `pause`, `resume`, `cancel` | `domain/schedule.py` |
+| `ControlAction` | `run`, `pause` | `domain/schedule.py` |
 | `EventKind` | every event, with a `family` property | `domain/events.py` |
+| `Cause` | `run`, `pause`, `retry`, `scheduler` | `domain/events.py` |
 | `EventFamily` | `campaign`, `lane`, `unit`, `anomaly` | `domain/events.py` |
 
 They all subclass `StringEnum`, so a member reads and serialises as its
-value (`"paused"`, not `"Lifecycle.PAUSED"`) and compares equal to the plain
+value (`"hold"`, not `"Intent.HOLD"`) and compares equal to the plain
 string a caller sent. Plain-string tuples are derived from each (`OUTCOMES`,
 `STATES` and so on) for argparse choices and error messages.
 
@@ -358,12 +359,13 @@ packages with one module per concern.
 
 - `records.py`: the record types, enums and filters, and how records are
   read and written.
-- `state.py`: what the records say now: unit states, lifecycle, remaining
-  work, problems.
+- `state.py`: what the records say now: unit states, intent, progress, the
+  named state, problems.
 - `schedule.py`: what a tick decides. `plan_tick` chooses which finished
   lanes to record and which units to start.
 - `classify.py`: what a finished MCP job established for its unit.
-- `events.py`: event kinds, subscription presets and matching.
+- `events.py`: event kinds, subscription presets and matching, and the
+  event a change of state announces.
 - `signals.py`: derived observations such as repeated failures and overdue
   lanes.
 - `discovery.py`: builds units from the feature files through
@@ -390,8 +392,9 @@ The other modules:
 - `repo.py`: reads the checkout state a campaign was built from.
 - `service.py`: `CampaignService`, driven by both the MCP tool wrappers and
   the CLI. Behaviour changes belong here.
-- `runner.py`: `CampaignRunner`, which opens lanes, records what finishes,
-  and holds the run lock for the one campaign that may be active. It is the
+- `runner.py`: `CampaignRunner`, which handles `run`, `pause` and
+  `retry_units`, opens lanes, records what finishes, and holds the run lock
+  for the one campaign that may be scheduling. It is the
   only module that starts a thread, and it makes no scheduling decisions:
   those are `schedule.plan_tick`, so the scheduler is testable without a
   thread. `ThreadTicker` is the `Ticker` port's real implementation; tests
@@ -401,7 +404,7 @@ The other modules:
   `service.py`, so the CLI and the MCP tools cannot drift apart.
 
 The run lock is an advisory `flock` on `<campaign_id>.lock`, held for as long
-as a campaign is actively scheduling, so a second server cannot schedule it
+as a campaign is scheduling, so a second server cannot schedule it
 too. The CLI does not take it. The kernel drops it if the holder dies.
 
 ## Build, test, lint

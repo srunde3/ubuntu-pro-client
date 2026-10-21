@@ -434,6 +434,9 @@ class ServiceLaneRunner:
             return None
         return status.model_dump()
 
+    def kill(self, job_id: str) -> bool:
+        return bool(self._service.kill_job(job_id).killed)
+
 
 class FileCampaignRunLock:
     """Advisory ``flock`` on ``<campaign_id>.lock`` in the campaign dir.

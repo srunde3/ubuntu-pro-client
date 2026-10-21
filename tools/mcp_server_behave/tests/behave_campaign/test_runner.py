@@ -4,6 +4,7 @@ The thread is tested separately and holds no logic, so everything about
 scheduling behaviour is exercised synchronously here.
 """
 
+import itertools
 import threading
 import time
 from typing import NamedTuple
@@ -12,24 +13,34 @@ import pytest
 
 from behave_campaign.adapters import JsonlCampaignStore, JsonlEventLog
 from behave_campaign.domain.records import (
+    AttemptFinished,
+    AttemptStarted,
     CampaignError,
     CampaignHeader,
+    CampaignState,
     Filters,
-    Lifecycle,
-    LifecycleRecord,
+    Intent,
+    IntentRecord,
     PlanRecord,
     RepoState,
     RetryRecord,
     Unit,
+    UnitState,
 )
-from behave_campaign.domain.schedule import ControlAction
-from behave_campaign.domain.state import lifecycle, reduce_units
+from behave_campaign.domain.state import reduce_units, state_of
 from behave_campaign.ports import CampaignLockedError
-from behave_campaign.runner import RESTART_REASON, CampaignRunner, ThreadTicker
+from behave_campaign.runner import KILLED_REASON, CampaignRunner, ThreadTicker
 from behave_mcp.domain.pools import Pool
 from tests.conftest import FakeLanes, FakeLock, FakeTicker
 
 AT = "2026-09-12T12:00:00Z"
+
+
+# An SRU bug number, as campaigns are named; any valid id will do.
+CAMPAIGN = "1234567"
+
+
+OTHER_CAMPAIGN = "7654321"
 
 
 def _wait_until(predicate, timeout=20.0):
@@ -51,11 +62,11 @@ WSL_UNITS = [
 ]
 
 
-def written_states(store, campaign_id="1234567"):
+def written_intents(store, campaign_id=CAMPAIGN):
     return [
-        record.state
+        record.intent
         for record in store.replay(campaign_id)
-        if isinstance(record, LifecycleRecord)
+        if isinstance(record, IntentRecord)
     ]
 
 
@@ -96,7 +107,19 @@ def runner(store, lanes, lock, ticker, events):
     )
 
 
-def create(store, campaign_id="1234567", units=None, lxd_lanes=2, lanes=None):
+def make_runner(store, lanes=None, lock=None, **kwargs):
+    return CampaignRunner(
+        store=store,
+        lanes=lanes if lanes is not None else FakeLanes(),
+        lock=lock if lock is not None else FakeLock(),
+        events=kwargs.pop("events", None) or JsonlEventLog(store.root),
+        now=kwargs.pop("now", lambda: AT),
+        ticker=kwargs.pop("ticker", None) or FakeTicker(),
+        **kwargs,
+    )
+
+
+def create(store, campaign_id=CAMPAIGN, units=None, lxd_lanes=2, lanes=None):
     units = UNITS if units is None else units
     header = CampaignHeader(
         at=AT,
@@ -112,107 +135,140 @@ def create(store, campaign_id="1234567", units=None, lxd_lanes=2, lanes=None):
     return campaign_id
 
 
-class TestStart:
-    def test_it_takes_the_lock_and_marks_the_campaign_running(
+def state(store, campaign_id=CAMPAIGN):
+    return state_of(store.replay(campaign_id))
+
+
+class TestRun:
+    def test_it_takes_the_lock_and_runs_the_campaign(
         self, runner, store, lock
     ):
         create(store)
 
-        response = runner.start("1234567")
+        response = runner.run(CAMPAIGN)
 
-        assert response.lifecycle == Lifecycle.RUNNING
-        assert lock.acquired == ["1234567"]
+        assert response.state == CampaignState.RUNNING
+        assert response.intent == Intent.RUN
+        assert lock.acquired == [CAMPAIGN]
 
-    def test_a_second_campaign_cannot_run_at_the_same_time(
+    def test_running_twice_writes_the_intent_once(self, runner, store):
+        create(store)
+        runner.run(CAMPAIGN)
+
+        runner.run(CAMPAIGN)
+
+        assert written_intents(store) == [Intent.RUN]
+
+    def test_a_second_campaign_cannot_schedule_at_the_same_time(
         self, runner, store
     ):
-        create(store, "111")
-        create(store, "222")
-        runner.start("111")
+        create(store, CAMPAIGN)
+        create(store, OTHER_CAMPAIGN)
+        runner.run(CAMPAIGN)
 
-        with pytest.raises(CampaignError) as error:
-            runner.start("222")
+        with pytest.raises(CampaignError, match="only one campaign"):
+            runner.run(OTHER_CAMPAIGN)
 
-        assert "only one campaign" in str(error.value)
-
-    def test_a_cancelled_campaign_cannot_be_restarted(self, runner, store):
-        create(store)
-        runner.cancel("1234567")
-
-        with pytest.raises(CampaignError) as error:
-            runner.start("1234567")
-
-        assert "cancelled" in str(error.value)
-
-    def test_a_finished_campaign_cannot_be_started(self, runner, store, lanes):
+    def test_running_a_complete_campaign_schedules_nothing(
+        self, runner, store, lanes, lock
+    ):
         create(store, units=[UNITS[0]], lxd_lanes=1)
-        runner.start("1234567")
-        runner.tick("1234567")
+        runner.run(CAMPAIGN)
+        runner.tick(CAMPAIGN)
         lanes.finish("job1")
-        runner.tick("1234567")
-        assert lifecycle(store.replay("1234567")) == Lifecycle.COMPLETE
+        runner.tick(CAMPAIGN)
+        runner.pause(CAMPAIGN)
 
-        with pytest.raises(CampaignError) as error:
-            runner.start("1234567")
+        response = runner.run(CAMPAIGN)
 
-        assert "no work left" in str(error.value)
+        assert response.state == CampaignState.COMPLETE
+        assert runner.active_campaign() is None
+        assert lock.acquired == [CAMPAIGN]
 
-    def test_a_lock_held_elsewhere_refuses_the_start(self, store, lanes):
+    def test_a_complete_campaign_may_run_while_another_schedules(
+        self, runner, store, lanes, ticker
+    ):
+        create(store, CAMPAIGN, units=[UNITS[0]], lxd_lanes=1)
+        create(store, OTHER_CAMPAIGN)
+        lanes.auto_finish = {}
+        runner.run(CAMPAIGN)
+        ticker.drive()
+        runner.run(OTHER_CAMPAIGN)
+
+        response = runner.run(CAMPAIGN)
+
+        assert response.state == CampaignState.COMPLETE
+        assert runner.active_campaign() == OTHER_CAMPAIGN
+
+    def test_a_lock_held_elsewhere_refuses_and_writes_nothing(self, store):
         create(store)
-        runner = CampaignRunner(
-            store=store,
-            lanes=lanes,
-            lock=FakeLock(taken_by_other=True),
-            events=JsonlEventLog(store.root),
-            now=lambda: AT,
-            ticker=FakeTicker(),
-        )
+        runner = make_runner(store, lock=FakeLock(taken_by_other=True))
 
         with pytest.raises(CampaignLockedError):
-            runner.start("1234567")
+            runner.run(CAMPAIGN)
 
-        # Nothing was recorded, so the campaign is untouched.
-        assert lifecycle(store.replay("1234567")) == Lifecycle.CREATED
+        assert state(store) == CampaignState.CREATED
+
+    def test_a_failed_write_gives_the_lock_back(self, runner, store, lock):
+        create(store)
+        store.path_for(CAMPAIGN).chmod(0o444)
+
+        with pytest.raises(OSError):
+            runner.run(CAMPAIGN)
+
+        assert lock.held == set()
+        assert runner.active_campaign() is None
+
+    def test_shutdown_lets_go_without_changing_the_campaign(
+        self, runner, store, lock
+    ):
+        create(store)
+        runner.run(CAMPAIGN)
+
+        runner.shutdown()
+
+        assert runner.active_campaign() is None
+        assert lock.held == set()
+        assert state(store) == CampaignState.RUNNING
 
 
 class TestTick:
     def test_a_created_campaign_starts_nothing(self, runner, store, lanes):
         create(store)
 
-        report = runner.tick("1234567")
+        report = runner.tick(CAMPAIGN)
 
         assert lanes.started == []
-        assert report.lifecycle == Lifecycle.CREATED
+        assert report.state == CampaignState.CREATED
 
     def test_a_running_campaign_fills_its_lanes(self, runner, store, lanes):
         create(store, lxd_lanes=2)
-        runner.start("1234567")
+        runner.run(CAMPAIGN)
 
-        report = runner.tick("1234567")
+        report = runner.tick(CAMPAIGN)
 
         assert len(lanes.started) == 2
         assert report.started == 2
         assert report.lanes_busy == 2
 
-    def test_it_records_a_running_attempt_for_each_lane(
+    def test_it_records_an_attempt_in_flight_for_each_lane(
         self, runner, store, lanes
     ):
         create(store, lxd_lanes=2)
-        runner.start("1234567")
-        runner.tick("1234567")
+        runner.run(CAMPAIGN)
+        runner.tick(CAMPAIGN)
 
-        statuses = reduce_units(store.replay("1234567"))
-        running = [s for s in statuses if s.state == "running"]
+        statuses = reduce_units(store.replay(CAMPAIGN))
+        busy = [s for s in statuses if s.state == UnitState.IN_FLIGHT]
 
-        assert len(running) == 2
-        assert {s.job_id for s in running} == {"job1", "job2"}
+        assert {s.job_id for s in busy} == {"job1", "job2"}
 
     def test_lanes_carry_the_campaign_install_source_and_repo(
         self, runner, store, lanes
     ):
         create(store, lxd_lanes=1)
-        runner.start("1234567")
-        runner.tick("1234567")
+        runner.run(CAMPAIGN)
+        runner.tick(CAMPAIGN)
 
         _, _, install_from, repo_root = lanes.started[0]
 
@@ -221,10 +277,10 @@ class TestTick:
 
     def test_a_full_window_starts_nothing_more(self, runner, store, lanes):
         create(store, lxd_lanes=2)
-        runner.start("1234567")
-        runner.tick("1234567")
+        runner.run(CAMPAIGN)
+        runner.tick(CAMPAIGN)
 
-        report = runner.tick("1234567")
+        report = runner.tick(CAMPAIGN)
 
         assert len(lanes.started) == 2
         assert report.started == 0
@@ -233,11 +289,11 @@ class TestTick:
         self, runner, store, lanes
     ):
         create(store, lxd_lanes=1)
-        runner.start("1234567")
-        runner.tick("1234567")
+        runner.run(CAMPAIGN)
+        runner.tick(CAMPAIGN)
         lanes.finish("job1")
 
-        report = runner.tick("1234567")
+        report = runner.tick(CAMPAIGN)
 
         assert report.recorded == 1
         assert report.started == 1
@@ -247,13 +303,13 @@ class TestTick:
         self, runner, store, lanes
     ):
         create(store, lxd_lanes=1)
-        runner.start("1234567")
-        runner.tick("1234567")
+        runner.run(CAMPAIGN)
+        runner.tick(CAMPAIGN)
         lanes.finish("job1", passed=0, failed=1)
 
-        report = runner.tick("1234567")
+        report = runner.tick(CAMPAIGN)
 
-        statuses = reduce_units(store.replay("1234567"))
+        statuses = reduce_units(store.replay(CAMPAIGN))
         assert [s.state for s in statuses if s.unit == UNITS[0]] == ["failed"]
         assert report.started == 1
 
@@ -261,23 +317,23 @@ class TestTick:
         self, runner, store, lanes
     ):
         create(store, units=[UNITS[0]], lxd_lanes=1)
-        runner.start("1234567")
-        runner.tick("1234567")
+        runner.run(CAMPAIGN)
+        runner.tick(CAMPAIGN)
         lanes.finish("job1", passed=0, failed=1)
-        runner.tick("1234567")
+        runner.tick(CAMPAIGN)
 
-        report = runner.tick("1234567")
+        report = runner.tick(CAMPAIGN)
 
         assert lanes.started_units == [UNITS[0]]
         assert report.started == 0
-        assert report.lifecycle == Lifecycle.COMPLETE
+        assert report.state == CampaignState.COMPLETE
 
     def test_an_unclassifiable_result_is_reported_as_a_problem(
         self, runner, store, lanes
     ):
         create(store, units=[UNITS[0]], lxd_lanes=1)
-        runner.start("1234567")
-        runner.tick("1234567")
+        runner.run(CAMPAIGN)
+        runner.tick(CAMPAIGN)
         lanes.results["job1"] = {
             "status": "completed",
             "ok": True,
@@ -288,33 +344,23 @@ class TestTick:
             },
         }
 
-        report = runner.tick("1234567")
+        report = runner.tick(CAMPAIGN)
 
         assert report.problems
         assert report.recorded == 1
-        statuses = reduce_units(store.replay("1234567"))
+        statuses = reduce_units(store.replay(CAMPAIGN))
         assert statuses[0].state == "error"
 
-    def test_a_refused_lane_leaves_the_unit_for_a_later_tick(
-        self, store, lock
-    ):
-        lanes = FakeLanes(max_starts=1)
-        runner = CampaignRunner(
-            store=store,
-            lanes=lanes,
-            lock=lock,
-            events=JsonlEventLog(store.root),
-            now=lambda: AT,
-            ticker=FakeTicker(),
-        )
+    def test_a_refused_lane_leaves_the_unit_for_a_later_tick(self, store):
+        runner = make_runner(store, lanes=FakeLanes(max_starts=1))
         create(store, lxd_lanes=3)
-        runner.start("1234567")
+        runner.run(CAMPAIGN)
 
-        report = runner.tick("1234567")
+        report = runner.tick(CAMPAIGN)
 
         assert report.started == 1
         assert report.problems
-        statuses = reduce_units(store.replay("1234567"))
+        statuses = reduce_units(store.replay(CAMPAIGN))
         assert sum(1 for s in statuses if s.state == "unattempted") == 2
 
     def test_each_pool_fills_its_own_lanes(self, runner, store, lanes):
@@ -323,9 +369,9 @@ class TestTick:
             units=[*WSL_UNITS, *UNITS],
             lanes={Pool.LXD: 2, Pool.WSL: 1},
         )
-        runner.start("1234567")
+        runner.run(CAMPAIGN)
 
-        report = runner.tick("1234567")
+        report = runner.tick(CAMPAIGN)
 
         pools = [unit.pool for unit in lanes.started_units]
         assert report.started == 3
@@ -338,41 +384,34 @@ class TestTick:
             units=[*WSL_UNITS, *UNITS],
             lanes={Pool.LXD: 3, Pool.WSL: 1},
         )
-        runner.start("1234567")
-        runner.tick("1234567")
+        runner.run(CAMPAIGN)
+        runner.tick(CAMPAIGN)
         lanes.finish("job2")
 
-        runner.tick("1234567")
+        runner.tick(CAMPAIGN)
 
         started_wsl = [
             unit for unit in lanes.started_units if unit.pool == Pool.WSL
         ]
         assert started_wsl == [WSL_UNITS[0]]
 
-    def test_a_full_pool_does_not_hold_back_the_others(self, store, lock):
+    def test_a_full_pool_does_not_hold_back_the_others(self, store):
         lanes = FakeLanes(full_pools={Pool.WSL})
         events = JsonlEventLog(store.root)
-        runner = CampaignRunner(
-            store=store,
-            lanes=lanes,
-            lock=lock,
-            events=events,
-            now=lambda: AT,
-            ticker=FakeTicker(),
-        )
+        runner = make_runner(store, lanes=lanes, events=events)
         create(
             store,
             units=[*WSL_UNITS, *UNITS],
             lanes={Pool.LXD: 3, Pool.WSL: 1},
         )
-        runner.start("1234567")
+        runner.run(CAMPAIGN)
 
-        report = runner.tick("1234567")
+        report = runner.tick(CAMPAIGN)
 
         assert report.started == 3
         assert lanes.refusals == 1
         starved = events.read(
-            "1234567",
+            CAMPAIGN,
             since_seq=0,
             kinds=["anomaly.capacity_starved"],
             limit=10,
@@ -380,355 +419,738 @@ class TestTick:
         assert [event.data["pool"] for event in starved] == ["wsl"]
 
     def test_the_last_lane_finishing_completes_the_campaign(
-        self, runner, store, lanes
+        self, runner, store, lanes, lock
     ):
         create(store, units=[UNITS[0]], lxd_lanes=1)
-        runner.start("1234567")
-        runner.tick("1234567")
+        runner.run(CAMPAIGN)
+        runner.tick(CAMPAIGN)
         lanes.finish("job1")
 
-        report = runner.tick("1234567")
+        report = runner.tick(CAMPAIGN)
 
-        assert report.lifecycle == Lifecycle.COMPLETE
+        assert report.state == CampaignState.COMPLETE
         assert report.finished
         assert report.lanes_busy == 0
-        assert written_states(store) == [
-            Lifecycle.RUNNING,
-            Lifecycle.COMPLETE,
-        ]
+        # Complete is derived; nothing but the caller's intent is written.
+        assert written_intents(store) == [Intent.RUN]
 
     def test_a_campaign_with_work_left_is_not_finished(
         self, runner, store, lanes
     ):
         create(store, lxd_lanes=1)
-        runner.start("1234567")
+        runner.run(CAMPAIGN)
 
-        assert not runner.tick("1234567").finished
+        assert not runner.tick(CAMPAIGN).finished
+
+    def test_a_retried_pass_is_watched_until_its_job_ends(
+        self, runner, store, lanes
+    ):
+        # A pass sticks, so the unit reads passed again afterwards, but its
+        # new job is still polled and recorded.
+        create(store, units=[UNITS[0]], lxd_lanes=1)
+        runner.run(CAMPAIGN)
+        runner.tick(CAMPAIGN)
+        lanes.finish("job1")
+        runner.tick(CAMPAIGN)
+        runner.retry_units(CAMPAIGN, filters=Filters(state=("passed",)))
+        runner.tick(CAMPAIGN)
+
+        assert state(store) == CampaignState.FINISHING
+
+        lanes.finish("job2", passed=0, failed=1)
+        report = runner.tick(CAMPAIGN)
+
+        assert report.recorded == 1
+        assert report.state == CampaignState.COMPLETE
 
 
-class TestPauseAndResume:
-    def test_pause_stops_new_lanes_but_keeps_the_running_one(
+class TestPause:
+    def test_pause_stops_new_lanes_but_keeps_the_one_in_flight(
         self, runner, store, lanes
     ):
         create(store, lxd_lanes=1)
-        runner.start("1234567")
-        runner.tick("1234567")
+        runner.run(CAMPAIGN)
+        runner.tick(CAMPAIGN)
 
-        response = runner.pause("1234567")
+        response = runner.pause(CAMPAIGN)
 
-        assert response.lifecycle == Lifecycle.PAUSED
+        assert response.state == CampaignState.PAUSING
         assert response.lanes_busy == 1
 
-    def test_a_paused_campaign_drains_rather_than_abandoning_work(
-        self, runner, store, lanes
+    def test_a_pausing_campaign_drains_then_is_paused(
+        self, runner, store, lanes, lock
     ):
         create(store, lxd_lanes=1)
-        runner.start("1234567")
-        runner.tick("1234567")
-        runner.pause("1234567")
+        runner.run(CAMPAIGN)
+        runner.tick(CAMPAIGN)
+        runner.pause(CAMPAIGN)
         lanes.finish("job1")
 
-        report = runner.tick("1234567")
+        report = runner.tick(CAMPAIGN)
 
         assert report.recorded == 1
         assert report.started == 0
-        statuses = reduce_units(store.replay("1234567"))
-        assert statuses[0].state == "passed"
-
-    def test_resume_starts_lanes_again(self, runner, store, lanes):
-        create(store, lxd_lanes=1)
-        runner.start("1234567")
-        runner.pause("1234567")
-
-        runner.resume("1234567")
-        report = runner.tick("1234567")
-
-        assert report.started == 1
-
-    def test_pausing_a_created_campaign_is_rejected(self, runner, store):
-        create(store)
-
-        with pytest.raises(CampaignError) as error:
-            runner.pause("1234567")
-
-        assert "created" in str(error.value)
-
-    def test_resuming_a_running_campaign_is_rejected(self, runner, store):
-        create(store)
-        runner.start("1234567")
-
-        with pytest.raises(CampaignError) as error:
-            runner.resume("1234567")
-
-        assert "not paused" in str(error.value)
-
-
-class TestCancel:
-    def test_cancel_closes_the_campaign_to_scheduling(
-        self, runner, store, lanes
-    ):
-        create(store, lxd_lanes=1)
-        runner.start("1234567")
-
-        response = runner.cancel("1234567")
-        report = runner.tick("1234567")
-
-        assert response.lifecycle == Lifecycle.CANCELLED
-        assert report.started == 0
-        assert lanes.started == []
-
-    def test_cancel_drains_a_lane_already_in_flight(
-        self, runner, store, lanes
-    ):
-        create(store, lxd_lanes=1)
-        runner.start("1234567")
-        runner.tick("1234567")
-        response = runner.cancel("1234567")
-        assert response.lanes_busy == 1
-
-        lanes.finish("job1")
-        report = runner.tick("1234567")
-
-        assert report.recorded == 1
+        assert report.state == CampaignState.PAUSED
         assert report.finished
 
-    def test_cancelling_with_nothing_in_flight_releases_the_lock(
+    def test_pausing_with_nothing_in_flight_releases_the_scheduler(
         self, runner, store, lock
     ):
         create(store)
-        runner.start("1234567")
+        runner.run(CAMPAIGN)
 
-        runner.cancel("1234567")
+        response = runner.pause(CAMPAIGN)
 
-        assert "1234567" not in lock.held
+        assert response.state == CampaignState.PAUSED
+        assert runner.active_campaign() is None
+        assert lock.released == [CAMPAIGN]
 
-    def test_a_cancelled_campaign_cannot_be_cancelled_again(
-        self, runner, store
+    def test_a_paused_campaign_does_not_block_another(self, runner, store):
+        create(store, CAMPAIGN)
+        create(store, OTHER_CAMPAIGN)
+        runner.run(CAMPAIGN)
+        runner.pause(CAMPAIGN)
+
+        response = runner.run(OTHER_CAMPAIGN)
+
+        assert response.state == CampaignState.RUNNING
+
+    def test_a_pausing_campaign_still_holds_the_scheduler(self, runner, store):
+        create(store, CAMPAIGN)
+        create(store, OTHER_CAMPAIGN)
+        runner.run(CAMPAIGN)
+        runner.tick(CAMPAIGN)
+        runner.pause(CAMPAIGN)
+
+        with pytest.raises(CampaignError, match="only one campaign"):
+            runner.run(OTHER_CAMPAIGN)
+
+    def test_run_after_pause_starts_lanes_again(self, runner, store, lanes):
+        create(store, lxd_lanes=1)
+        runner.run(CAMPAIGN)
+        runner.pause(CAMPAIGN)
+
+        runner.run(CAMPAIGN)
+        report = runner.tick(CAMPAIGN)
+
+        assert report.started == 1
+
+
+class TestPauseWithKill:
+    def test_it_kills_every_job_in_flight(self, runner, store, lanes):
+        create(store, lxd_lanes=2)
+        runner.run(CAMPAIGN)
+        runner.tick(CAMPAIGN)
+
+        runner.pause(CAMPAIGN, kill=True)
+
+        assert lanes.killed == ["job1", "job2"]
+
+    def test_the_killed_units_are_interrupted_and_queueable(
+        self, runner, store, lanes
     ):
-        create(store)
-        runner.cancel("1234567")
+        create(store, lxd_lanes=2)
+        runner.run(CAMPAIGN)
+        runner.tick(CAMPAIGN)
 
-        with pytest.raises(CampaignError):
-            runner.cancel("1234567")
+        response = runner.pause(CAMPAIGN, kill=True)
+
+        statuses = reduce_units(store.replay(CAMPAIGN))
+        killed = [s for s in statuses if s.attempts]
+        assert [u.job_id for u in response.interrupted] == ["job1", "job2"]
+        assert all(s.attempts[-1].interrupted for s in killed)
+        assert all(s.queueable for s in killed)
+
+    def test_the_campaign_is_paused_at_once(self, runner, store, lanes, lock):
+        create(store, lxd_lanes=2)
+        runner.run(CAMPAIGN)
+        runner.tick(CAMPAIGN)
+
+        response = runner.pause(CAMPAIGN, kill=True)
+
+        assert response.state == CampaignState.PAUSED
+        assert runner.active_campaign() is None
+        assert lock.released == [CAMPAIGN]
+
+    def test_a_killed_job_is_never_recorded_as_an_outcome(
+        self, runner, store, lanes
+    ):
+        create(store, units=[UNITS[0]], lxd_lanes=1)
+        runner.run(CAMPAIGN)
+        runner.tick(CAMPAIGN)
+        runner.pause(CAMPAIGN, kill=True)
+
+        report = runner.tick(CAMPAIGN)
+
+        assert report.recorded == 0
+        finished = [
+            r for r in store.replay(CAMPAIGN) if isinstance(r, AttemptFinished)
+        ]
+        assert finished == []
+
+    def test_a_job_it_cannot_signal_is_reported(self, store):
+        lanes = FakeLanes(unkillable={"job1"})
+        runner = make_runner(store, lanes=lanes)
+        create(store, lxd_lanes=2)
+        runner.run(CAMPAIGN)
+        runner.tick(CAMPAIGN)
+
+        response = runner.pause(CAMPAIGN, kill=True)
+
+        assert response.unsignalled == ["job1"]
+
+    def test_running_again_reruns_the_interrupted_units(
+        self, runner, store, lanes
+    ):
+        create(store, units=[UNITS[0]], lxd_lanes=1)
+        runner.run(CAMPAIGN)
+        runner.tick(CAMPAIGN)
+        runner.pause(CAMPAIGN, kill=True)
+        runner.run(CAMPAIGN)
+
+        report = runner.tick(CAMPAIGN)
+
+        assert report.started == 1
+        assert lanes.started_units == [UNITS[0], UNITS[0]]
 
 
-class TestReopen:
-    """Taking a cancellation back, for one made by mistake."""
+class TestTheWholeLoop:
+    """The real ticker driving a real store, with only the jobs faked.
+
+    This is the one test that exercises the scheduler as it actually runs:
+    a thread, a sliding window, and a campaign that finishes on its own.
+    """
+
+    def test_a_campaign_runs_itself_to_completion(self, store):
+        units = [
+            Unit("features/f{}.feature".format(n), "S", "jammy", "lxd-vm")
+            for n in range(12)
+        ]
+        create(store, units=units, lxd_lanes=4)
+        lanes = FakeLanes(auto_finish={})
+        runner = make_runner(
+            store, lanes=lanes, ticker=ThreadTicker(interval=0.01)
+        )
+
+        runner.run(CAMPAIGN)
+        # Wait for the runner to let go, not just for the store to read
+        # complete: the ticker releases the campaign after the tick that
+        # finished it, so the two are not simultaneous.
+        _wait_until(lambda: runner.active_campaign() is None)
+
+        statuses = reduce_units(store.replay(CAMPAIGN))
+
+        assert state(store) == CampaignState.COMPLETE
+        assert len(lanes.started) == 12
+        assert all(s.state == "passed" for s in statuses)
+
+    def test_it_never_exceeds_the_lane_limit(self, store):
+        """Every unit is started exactly once, never twice."""
+        units = [
+            Unit("features/f{}.feature".format(n), "S", "jammy", "lxd-vm")
+            for n in range(20)
+        ]
+        create(store, units=units, lxd_lanes=3)
+        lanes = FakeLanes(auto_finish={})
+        runner = make_runner(
+            store, lanes=lanes, ticker=ThreadTicker(interval=0.005)
+        )
+
+        runner.run(CAMPAIGN)
+        _wait_until(lambda: runner.active_campaign() is None)
+
+        started = lanes.started_units
+
+        assert state(store) == CampaignState.COMPLETE
+        assert len(started) == len(set(started)) == 20
+
+    def test_pausing_a_live_campaign_stops_it_opening_lanes(self, store):
+        units = [
+            Unit("features/f{}.feature".format(n), "S", "jammy", "lxd-vm")
+            for n in range(40)
+        ]
+        create(store, units=units, lxd_lanes=2)
+        lanes = FakeLanes(auto_finish={})
+        runner = make_runner(
+            store, lanes=lanes, ticker=ThreadTicker(interval=0.01)
+        )
+
+        runner.run(CAMPAIGN)
+        _wait_until(lambda: len(lanes.started) >= 2)
+        response = runner.pause(CAMPAIGN)
+        _wait_until(lambda: runner.active_campaign() is None)
+        settled = len(lanes.started)
+        time.sleep(0.1)
+
+        assert response.intent == Intent.HOLD
+        assert state(store) == CampaignState.PAUSED
+        assert len(lanes.started) == settled
+        assert settled < len(units)
+
+
+class TestEvents:
+    """What the runner announces as it goes."""
 
     @staticmethod
-    def _restarted(store, lanes, lock, events):
-        """A second runner over the same files: a server that came back."""
-        return CampaignRunner(
-            store=store,
-            lanes=lanes,
-            lock=lock,
-            events=events,
-            now=lambda: AT,
-            ticker=FakeTicker(),
-        )
-
-    def test_it_puts_a_cancelled_campaign_back_to_work(
-        self, runner, store, lanes
-    ):
-        create(store, lxd_lanes=1)
-        runner.start("1234567")
-        runner.cancel("1234567")
-
-        response = runner.reopen("1234567", reason="cancelled by mistake")
-        report = runner.tick("1234567")
-
-        assert response.lifecycle == Lifecycle.RUNNING
-        assert response.rescheduling
-        assert report.started == 1
-
-    def test_the_cancellation_stays_in_the_record(self, runner, store):
-        create(store)
-        runner.start("1234567")
-        runner.cancel("1234567")
-
-        runner.reopen("1234567", reason="cancelled by mistake")
-
-        assert [
-            record.state
-            for record in store.replay("1234567")
-            if isinstance(record, LifecycleRecord)
-        ] == [Lifecycle.RUNNING, Lifecycle.CANCELLED, Lifecycle.RUNNING]
-
-    def test_the_reason_is_what_the_campaign_now_reports(self, runner, store):
-        create(store)
-        runner.start("1234567")
-        runner.cancel("1234567")
-
-        response = runner.reopen("1234567", reason="cancelled by mistake")
-
-        assert response.reason == "cancelled by mistake"
-
-    def test_it_takes_the_lock_again(self, runner, store, lock):
-        create(store)
-        runner.start("1234567")
-        runner.cancel("1234567")
-        assert "1234567" not in lock.held
-
-        runner.reopen("1234567")
-
-        assert "1234567" in lock.held
-
-    def test_a_finished_campaign_comes_back_complete_and_retryable(
-        self, runner, store, lanes
-    ):
-        create(store, units=[UNITS[0]], lxd_lanes=1)
-        runner.start("1234567")
-        runner.tick("1234567")
-        lanes.finish("job1", passed=0, failed=1)
-        runner.tick("1234567")
-        runner.cancel("1234567")
-
-        response = runner.reopen("1234567")
-
-        # Nothing to schedule until someone asks for the failure again,
-        # which is exactly what reopening it was for.
-        assert response.lifecycle == Lifecycle.COMPLETE
-        assert not response.rescheduling
-        assert written_states(store)[-1] == Lifecycle.COMPLETE
-        assert runner.retry_units("1234567").requeued == 1
-
-    def test_reopening_a_campaign_that_was_not_cancelled_is_rejected(
-        self, runner, store
-    ):
-        create(store)
-        runner.start("1234567")
-
-        with pytest.raises(CampaignError) as error:
-            runner.reopen("1234567")
-
-        assert "not cancelled" in str(error.value)
-
-    def test_lanes_still_draining_are_left_to_report_themselves(
-        self, runner, store, lanes
-    ):
-        create(store, lxd_lanes=1)
-        runner.start("1234567")
-        runner.tick("1234567")
-        runner.cancel("1234567")
-
-        response = runner.reopen("1234567")
-        lanes.finish("job1")
-        report = runner.tick("1234567")
-
-        assert response.abandoned == []
-        assert response.lanes_busy == 1
-        assert report.recorded == 1
-
-    def test_jobs_nothing_is_watching_stop_a_reopen(
-        self, runner, store, lanes, lock, events
-    ):
-        create(store, lxd_lanes=1)
-        runner.start("1234567")
-        runner.tick("1234567")
-        runner.cancel("1234567")
-        restarted = self._restarted(store, lanes, lock, events)
-
-        with pytest.raises(CampaignError) as error:
-            restarted.reopen("1234567")
-
-        assert "nothing is watching" in str(error.value)
-        assert UNITS[0].scenario in str(error.value)
-
-    def test_abandoning_them_records_them_as_errored(
-        self, runner, store, lanes, lock, events
-    ):
-        create(store, units=[UNITS[0]], lxd_lanes=1)
-        runner.start("1234567")
-        runner.tick("1234567")
-        runner.cancel("1234567")
-        restarted = self._restarted(store, lanes, lock, events)
-
-        response = restarted.reopen("1234567", abandon_in_flight=True)
-
-        assert [unit.scenario for unit in response.abandoned] == [
-            UNITS[0].scenario
+    def kinds(events, family="", campaign_id=CAMPAIGN):
+        return [
+            e.kind
+            for e in events.read(campaign_id, since_seq=0, kinds=[], limit=100)
+            if e.kind.startswith(family)
         ]
-        assert response.counts.running == 0
-        assert response.counts.error == 1
-        assert [
-            status.state for status in reduce_units(store.replay("1234567"))
-        ] == ["error"]
 
-
-class TestRecover:
-    def test_a_campaign_left_running_comes_back_paused(self, runner, store):
-        create(store)
-        runner.start("1234567")
-
-        # A fresh process: nothing in memory, only what is on disk.
-        fresh = CampaignRunner(
-            store=store,
-            lanes=FakeLanes(),
-            lock=FakeLock(),
-            events=JsonlEventLog(store.root),
-            now=lambda: AT,
-            ticker=FakeTicker(),
-        )
-        paused = fresh.recover()
-
-        assert paused == ["1234567"]
-        records = store.replay("1234567")
-        assert lifecycle(records) == Lifecycle.PAUSED
-
-    def test_the_pause_says_why(self, runner, store):
-        from behave_campaign.domain.state import last_state_reason
-
-        create(store)
-        runner.start("1234567")
-        CampaignRunner(
-            store=store,
-            lanes=FakeLanes(),
-            lock=FakeLock(),
-            events=JsonlEventLog(store.root),
-            now=lambda: AT,
-            ticker=FakeTicker(),
-        ).recover()
-
-        assert last_state_reason(store.replay("1234567")) == RESTART_REASON
-
-    def test_campaigns_that_were_not_running_are_left_alone(
-        self, runner, store
+    def test_run_and_pause_announce_each_state_reached(
+        self, runner, store, events
     ):
-        create(store, "111")
-        create(store, "222")
-        runner.start("111")
-        runner.pause("111")
+        create(store)
+        runner.run(CAMPAIGN)
+        runner.pause(CAMPAIGN)
+        runner.run(CAMPAIGN)
 
-        paused = CampaignRunner(
-            store=store,
-            lanes=FakeLanes(),
-            lock=FakeLock(),
-            events=JsonlEventLog(store.root),
-            now=lambda: AT,
-            ticker=FakeTicker(),
-        ).recover()
+        assert self.kinds(events) == [
+            "campaign.running",
+            "campaign.paused",
+            "campaign.running",
+        ]
 
-        assert paused == []
-
-    def test_a_recovered_campaign_can_be_resumed(self, runner, store, lanes):
+    def test_a_drain_is_announced_as_pausing_then_paused(
+        self, runner, store, events, lanes
+    ):
         create(store, lxd_lanes=1)
-        runner.start("1234567")
-        fresh_lanes = FakeLanes()
-        fresh = CampaignRunner(
-            store=store,
-            lanes=fresh_lanes,
-            lock=FakeLock(),
-            events=JsonlEventLog(store.root),
-            now=lambda: AT,
-            ticker=FakeTicker(),
+        runner.run(CAMPAIGN)
+        runner.tick(CAMPAIGN)
+        runner.pause(CAMPAIGN)
+        lanes.finish("job1")
+        runner.tick(CAMPAIGN)
+
+        assert self.kinds(events, "campaign.") == [
+            "campaign.running",
+            "campaign.pausing",
+            "campaign.paused",
+        ]
+
+    def test_the_last_jobs_are_announced_as_finishing_then_complete(
+        self, runner, store, events, lanes
+    ):
+        create(store, units=[UNITS[0]], lxd_lanes=1)
+        runner.run(CAMPAIGN)
+        runner.tick(CAMPAIGN)
+        lanes.finish("job1")
+        runner.tick(CAMPAIGN)
+
+        assert self.kinds(events, "campaign.") == [
+            "campaign.running",
+            "campaign.finishing",
+            "campaign.complete",
+        ]
+
+    def test_a_state_event_says_what_caused_it(self, runner, store, events):
+        create(store)
+        runner.run(CAMPAIGN)
+
+        (running,) = events.read(
+            CAMPAIGN, since_seq=0, kinds=["campaign.running"], limit=10
         )
-        fresh.recover()
 
-        fresh.resume("1234567")
-        report = fresh.tick("1234567")
+        assert running.data["cause"] == "run"
+        assert running.data["from"] == "created"
 
-        assert report.lifecycle == Lifecycle.RUNNING
+    def test_completion_is_announced_with_the_counts(
+        self, runner, store, events, lanes
+    ):
+        create(store, units=[UNITS[0]], lxd_lanes=1)
+        runner.run(CAMPAIGN)
+        runner.tick(CAMPAIGN)
+        lanes.finish("job1")
+        runner.tick(CAMPAIGN)
+
+        (done,) = events.read(
+            CAMPAIGN, since_seq=0, kinds=["campaign.complete"], limit=10
+        )
+
+        assert done.data["counts"]["passed"] == 1
+        assert done.data["cause"] == "scheduler"
+
+    def test_a_kill_announces_each_interrupted_unit(
+        self, runner, store, events, lanes
+    ):
+        create(store, units=[UNITS[0]], lxd_lanes=1)
+        runner.run(CAMPAIGN)
+        runner.tick(CAMPAIGN)
+
+        runner.pause(CAMPAIGN, kill=True)
+
+        (interrupted,) = events.read(
+            CAMPAIGN, since_seq=0, kinds=["unit.interrupted"], limit=10
+        )
+        assert interrupted.data["job_id"] == "job1"
+        assert interrupted.data["reason"] == KILLED_REASON
+
+    def test_an_opened_lane_is_announced_with_its_job(
+        self, runner, store, events, lanes
+    ):
+        create(store, lxd_lanes=1)
+        runner.run(CAMPAIGN)
+        runner.tick(CAMPAIGN)
+
+        opened = events.read(
+            CAMPAIGN, since_seq=0, kinds=["lane.started"], limit=10
+        )
+
+        assert len(opened) == 1
+        assert opened[0].data["job_id"] == "job1"
+        assert opened[0].data["release"] == UNITS[0].release
+        assert opened[0].data["install_from"] == "proposed"
+
+    def test_a_passing_unit_is_announced(self, runner, store, events, lanes):
+        create(store, units=[UNITS[0]], lxd_lanes=1)
+        runner.run(CAMPAIGN)
+        runner.tick(CAMPAIGN)
+        lanes.finish("job1")
+        runner.tick(CAMPAIGN)
+
+        assert "unit.passed" in self.kinds(events)
+
+    def test_a_failing_unit_carries_its_failing_steps(
+        self, runner, store, events, lanes
+    ):
+        create(store, units=[UNITS[0]], lxd_lanes=1)
+        runner.run(CAMPAIGN)
+        runner.tick(CAMPAIGN)
+        lanes.results["job1"] = {
+            "status": "completed",
+            "ok": False,
+            "job_id": "job1",
+            "summary": {
+                "scenarios": {"passed": 0, "failed": 1, "skipped": 0},
+                "features": {},
+            },
+            "failures": [
+                {
+                    "step": "Then it works",
+                    "status": "failed",
+                    "error_message": "it did not",
+                }
+            ],
+        }
+        runner.tick(CAMPAIGN)
+
+        failed = events.read(
+            CAMPAIGN, since_seq=0, kinds=["unit.failed"], limit=10
+        )
+
+        assert len(failed) == 1
+        assert failed[0].data["failures"][0]["step"] == "Then it works"
+        assert failed[0].data["failures"][0]["error_message"] == "it did not"
+
+    def test_an_unclassifiable_result_has_its_own_kind_and_reason(
+        self, runner, store, events, lanes
+    ):
+        create(store, units=[UNITS[0]], lxd_lanes=1)
+        runner.run(CAMPAIGN)
+        runner.tick(CAMPAIGN)
+        lanes.results["job1"] = {
+            "status": "completed",
+            "ok": True,
+            "job_id": "job1",
+            "summary": {
+                "scenarios": {"passed": 1, "unknown": 1},
+                "features": {},
+            },
+        }
+        runner.tick(CAMPAIGN)
+
+        odd = events.read(
+            CAMPAIGN, since_seq=0, kinds=["unit.unclassifiable"], limit=10
+        )
+
+        assert len(odd) == 1
+        assert odd[0].data["problem"]
+
+
+class TestRetryUnits:
+    """Nothing re-runs a failure on its own; this is the only way."""
+
+    def _finish(self, runner, lanes, job_id, **kwargs):
+        runner.tick(CAMPAIGN)
+        lanes.finish(job_id, **kwargs)
+        runner.tick(CAMPAIGN)
+
+    def test_retrying_a_complete_campaign_runs_it_again(
+        self, runner, store, lanes
+    ):
+        create(store, units=[UNITS[0]], lxd_lanes=1)
+        runner.run(CAMPAIGN)
+        self._finish(runner, lanes, "job1", passed=0, failed=1)
+        assert state(store) == CampaignState.COMPLETE
+
+        response = runner.retry_units(CAMPAIGN)
+
+        assert response.requeued == 1
+        assert response.state == CampaignState.RUNNING
+        assert runner.active_campaign() == CAMPAIGN
+
+    def test_retrying_a_paused_campaign_sets_intent_to_run(
+        self, runner, store, lanes
+    ):
+        create(store, units=[UNITS[0], UNITS[1]], lxd_lanes=1)
+        runner.run(CAMPAIGN)
+        self._finish(runner, lanes, "job1", passed=0, failed=1)
+        lanes.finish("job2")
+        runner.tick(CAMPAIGN)
+        runner.pause(CAMPAIGN)
+
+        response = runner.retry_units(CAMPAIGN)
+
+        assert response.intent == Intent.RUN
+        assert written_intents(store) == [Intent.RUN, Intent.HOLD, Intent.RUN]
+        assert runner.tick(CAMPAIGN).started == 1
+
+    def test_the_retried_unit_actually_runs_again(self, runner, store, lanes):
+        create(store, units=[UNITS[0]], lxd_lanes=1)
+        runner.run(CAMPAIGN)
+        self._finish(runner, lanes, "job1", passed=0, failed=1)
+        runner.retry_units(CAMPAIGN)
+
+        report = runner.tick(CAMPAIGN)
+
         assert report.started == 1
+        assert lanes.started_units == [UNITS[0], UNITS[0]]
+
+    def test_a_retry_can_turn_a_failure_into_a_pass(
+        self, runner, store, lanes
+    ):
+        create(store, units=[UNITS[0]], lxd_lanes=1)
+        runner.run(CAMPAIGN)
+        self._finish(runner, lanes, "job1", passed=0, failed=1)
+        runner.retry_units(CAMPAIGN)
+        self._finish(runner, lanes, "job2")
+
+        statuses = reduce_units(store.replay(CAMPAIGN))
+
+        assert statuses[0].state == "passed"
+        assert not statuses[0].retry_pending
+
+    def test_the_request_is_recorded_with_its_reason(
+        self, runner, store, lanes
+    ):
+        create(store, units=[UNITS[0]], lxd_lanes=1)
+        runner.run(CAMPAIGN)
+        self._finish(runner, lanes, "job1", passed=0, failed=1)
+
+        runner.retry_units(CAMPAIGN, reason="looked flaky")
+
+        retries = [
+            r for r in store.replay(CAMPAIGN) if isinstance(r, RetryRecord)
+        ]
+        assert retries[-1].reason == "looked flaky"
+
+    def test_it_defaults_to_the_problem_states(self, runner, store, lanes):
+        create(store, lxd_lanes=3)
+        runner.run(CAMPAIGN)
+        runner.tick(CAMPAIGN)
+        lanes.finish("job1", passed=0, failed=1)
+        lanes.finish("job2")
+        lanes.finish("job3", passed=0, failed=1)
+        runner.tick(CAMPAIGN)
+
+        response = runner.retry_units(CAMPAIGN)
+
+        # The passing unit is left alone.
+        assert response.requeued == 2
+        assert all(u.state == "failed" for u in response.units)
+
+    def test_a_passing_unit_can_be_retried_when_named(
+        self, runner, store, lanes
+    ):
+        create(store, units=[UNITS[0]], lxd_lanes=1)
+        runner.run(CAMPAIGN)
+        self._finish(runner, lanes, "job1")
+
+        response = runner.retry_units(
+            CAMPAIGN, filters=Filters(state=("passed",))
+        )
+
+        assert response.requeued == 1
+
+    def test_filters_narrow_the_selection(self, runner, store, lanes):
+        create(store, lxd_lanes=3)
+        runner.run(CAMPAIGN)
+        runner.tick(CAMPAIGN)
+        for job in ("job1", "job2", "job3"):
+            lanes.finish(job, passed=0, failed=1)
+        runner.tick(CAMPAIGN)
+
+        response = runner.retry_units(
+            CAMPAIGN, filters=Filters(release=("jammy",))
+        )
+
+        assert {u.release for u in response.units} == {"jammy"}
+
+    def test_a_unit_in_flight_is_never_selected(self, runner, store, lanes):
+        create(store, units=[UNITS[0]], lxd_lanes=1)
+        runner.run(CAMPAIGN)
+        runner.tick(CAMPAIGN)
+
+        with pytest.raises(CampaignError):
+            runner.retry_units(
+                CAMPAIGN, filters=Filters(state=(UnitState.IN_FLIGHT,))
+            )
+
+    def test_matching_nothing_is_rejected(self, runner, store):
+        create(store)
+        runner.run(CAMPAIGN)
+
+        with pytest.raises(CampaignError, match="nothing was re-queued"):
+            runner.retry_units(CAMPAIGN)
+
+    def test_retrying_is_announced(self, runner, store, lanes, events):
+        create(store, units=[UNITS[0]], lxd_lanes=1)
+        runner.run(CAMPAIGN)
+        self._finish(runner, lanes, "job1", passed=0, failed=1)
+
+        runner.retry_units(CAMPAIGN, reason="flaky")
+
+        retried = events.read(
+            CAMPAIGN, since_seq=0, kinds=["unit.retried"], limit=10
+        )
+        assert len(retried) == 1
+        assert retried[0].data["previous_state"] == "failed"
+        assert retried[0].data["reason"] == "flaky"
+
+
+class TestSignals:
+    """Derived signals reach the event log, and are said once."""
+
+    def test_a_hung_lane_is_reported_once(self, store, lanes, events):
+        runner = make_runner(
+            store,
+            lanes=lanes,
+            events=events,
+            now=lambda: "2026-09-12T12:00:00Z",
+            overdue_seconds=60,
+        )
+        create(store, units=[UNITS[0]], lxd_lanes=1)
+        runner.run(CAMPAIGN)
+        runner.tick(CAMPAIGN)
+
+        # Time moves on while the job does not.
+        runner._now = lambda: "2026-09-12T13:00:00Z"
+        runner.tick(CAMPAIGN)
+        runner.tick(CAMPAIGN)
+
+        overdue = events.read(
+            CAMPAIGN, since_seq=0, kinds=["lane.overdue"], limit=10
+        )
+
+        assert len(overdue) == 1
+        assert overdue[0].data["job_id"] == "job1"
+        assert overdue[0].data["elapsed_seconds"] == 3600
+
+    def test_a_refused_lane_is_reported_as_starvation(self, store, events):
+        runner = make_runner(
+            store, lanes=FakeLanes(max_starts=1), events=events
+        )
+        create(store, lxd_lanes=3)
+        runner.run(CAMPAIGN)
+
+        runner.tick(CAMPAIGN)
+
+        starved = events.read(
+            CAMPAIGN,
+            since_seq=0,
+            kinds=["anomaly.capacity_starved"],
+            limit=10,
+        )
+
+        assert len(starved) == 1
+        assert starved[0].data["reason"]
+
+    def test_starvation_is_reported_once_per_episode(self, store, events):
+        lanes = FakeLanes(full_pools={Pool.LXD})
+        runner = make_runner(store, lanes=lanes, events=events)
+        campaign_id = create(store, lxd_lanes=1)
+        runner.run(campaign_id)
+
+        def starved():
+            return events.read(
+                campaign_id,
+                since_seq=0,
+                kinds=["anomaly.capacity_starved"],
+                limit=10,
+            )
+
+        runner.tick(campaign_id)
+        runner.tick(campaign_id)
+        runner.tick(campaign_id)
+        assert len(starved()) == 1
+
+        lanes.full_pools.clear()
+        runner.tick(campaign_id)
+        (_, opened_job, _, _) = lanes.started[-1]
+        lanes.finish(opened_job)
+        lanes.full_pools.add(Pool.LXD)
+        runner.tick(campaign_id)
+        runner.tick(campaign_id)
+
+        assert len(starved()) == 2
+
+    def test_a_tick_waits_for_a_control_verb_in_progress(self, runner, store):
+        create(store)
+        runner.run(CAMPAIGN)
+        ticked = threading.Event()
+
+        with runner._guard:
+            thread = threading.Thread(
+                target=lambda: (runner.tick(CAMPAIGN), ticked.set())
+            )
+            thread.start()
+            assert not ticked.wait(0.2)
+
+        assert ticked.wait(5)
+        thread.join(5)
+
+    def test_a_scenario_failing_across_releases_is_reported(
+        self, runner, store, lanes
+    ):
+        units = [
+            Unit("features/a.feature", "A", release, "lxd-vm")
+            for release in ("focal", "jammy", "noble")
+        ]
+        create(store, units=units, lxd_lanes=3)
+        runner.run(CAMPAIGN)
+        runner.tick(CAMPAIGN)
+        for job in ("job1", "job2", "job3"):
+            lanes.finish(job, passed=0, failed=1)
+        runner.tick(CAMPAIGN)
+
+        reported = runner._events.read(
+            CAMPAIGN,
+            since_seq=0,
+            kinds=["anomaly.*"],
+            limit=10,
+        )
+
+        assert [e.kind for e in reported] == [
+            "anomaly.repeated_scenario_failure"
+        ]
+        assert reported[0].data["releases"] == ["focal", "jammy", "noble"]
+
+    def test_a_healthy_campaign_reports_no_anomalies(
+        self, runner, store, lanes
+    ):
+        create(store, lxd_lanes=3)
+        runner.run(CAMPAIGN)
+        runner.tick(CAMPAIGN)
+        for job in ("job1", "job2", "job3"):
+            lanes.finish(job)
+        runner.tick(CAMPAIGN)
+
+        reported = runner._events.read(
+            CAMPAIGN, since_seq=0, kinds=["anomaly.*"], limit=10
+        )
+
+        assert reported == []
 
 
 class TestThreadTicker:
@@ -798,668 +1220,130 @@ class TestThreadTicker:
         ticker.stop()
 
 
-class TestTheWholeLoop:
-    """The real ticker driving a real store, with only the jobs faked.
+# Each named state, arranged on a two-unit campaign of units A and B.
+IN_FLIGHT_JOB = "job-in-flight"
 
-    This is the one test that exercises the scheduler as it actually runs:
-    a thread, a sliding window, and a campaign that finishes on its own.
-    """
 
-    def test_a_campaign_runs_itself_to_completion(self, store, tmp_path):
-        units = [
-            Unit("features/f{}.feature".format(n), "S", "jammy", "lxd-vm")
-            for n in range(12)
-        ]
-        create(store, units=units, lxd_lanes=4)
-        lanes = FakeLanes(auto_finish={})
-        runner = CampaignRunner(
-            store=store,
-            lanes=lanes,
-            lock=FakeLock(),
-            events=JsonlEventLog(store.root),
-            now=lambda: AT,
-            ticker=ThreadTicker(interval=0.01),
-        )
+DONE_JOB = "job-done"
 
-        runner.start("1234567")
-        # Wait for the runner to let go, not just for the store to read
-        # complete: the ticker releases the campaign after the tick that
-        # finished it, so the two are not simultaneous.
-        _wait_until(lambda: runner.active_campaign() is None)
 
-        records = store.replay("1234567")
-        statuses = reduce_units(records)
+def _start(unit, job_id):
+    return AttemptStarted(
+        unit=unit, job_id=job_id, install_from="local", at=AT
+    )
 
-        assert lifecycle(records) == Lifecycle.COMPLETE
-        assert len(lanes.started) == 12
-        assert all(s.state == "passed" for s in statuses)
-        assert runner.active_campaign() is None
 
-    def test_it_never_exceeds_the_lane_limit(self, store):
-        """Every unit is started exactly once, never twice."""
-        units = [
-            Unit("features/f{}.feature".format(n), "S", "jammy", "lxd-vm")
-            for n in range(20)
-        ]
-        create(store, units=units, lxd_lanes=3)
-        lanes = FakeLanes(auto_finish={})
-        runner = CampaignRunner(
-            store=store,
-            lanes=lanes,
-            lock=FakeLock(),
-            events=JsonlEventLog(store.root),
-            now=lambda: AT,
-            ticker=ThreadTicker(interval=0.005),
-        )
+def _tried(unit, job_id, outcome):
+    return [
+        _start(unit, job_id),
+        AttemptFinished(unit=unit, job_id=job_id, outcome=outcome, at=AT),
+    ]
 
-        runner.start("1234567")
-        _wait_until(lambda: runner.active_campaign() is None)
 
-        started = lanes.started_units
+A, B = UNITS[0], UNITS[1]
 
-        assert lifecycle(store.replay("1234567")) == Lifecycle.COMPLETE
-        assert len(started) == len(set(started)) == 20
 
-    def test_pausing_a_live_campaign_stops_it_opening_lanes(self, store):
-        units = [
-            Unit("features/f{}.feature".format(n), "S", "jammy", "lxd-vm")
-            for n in range(40)
-        ]
-        create(store, units=units, lxd_lanes=2)
-        lanes = FakeLanes(auto_finish={})
-        runner = CampaignRunner(
-            store=store,
-            lanes=lanes,
-            lock=FakeLock(),
-            events=JsonlEventLog(store.root),
-            now=lambda: AT,
-            ticker=ThreadTicker(interval=0.01),
-        )
+ARRANGED = {
+    CampaignState.CREATED: [],
+    CampaignState.RUNNING: [
+        IntentRecord(Intent.RUN, AT),
+        _start(A, IN_FLIGHT_JOB),
+    ],
+    CampaignState.FINISHING: [
+        IntentRecord(Intent.RUN, AT),
+        *_tried(A, DONE_JOB, "passed"),
+        _start(B, IN_FLIGHT_JOB),
+    ],
+    CampaignState.COMPLETE: [
+        IntentRecord(Intent.RUN, AT),
+        *_tried(A, DONE_JOB, "passed"),
+        *_tried(B, IN_FLIGHT_JOB, "failed"),
+    ],
+    CampaignState.PAUSING: [
+        IntentRecord(Intent.HOLD, AT),
+        _start(A, IN_FLIGHT_JOB),
+    ],
+    CampaignState.PAUSED: [
+        IntentRecord(Intent.HOLD, AT),
+        *_tried(A, DONE_JOB, "failed"),
+    ],
+}
 
-        runner.start("1234567")
-        _wait_until(lambda: len(lanes.started) >= 2)
-        response = runner.pause("1234567")
-        runner.shutdown()
-        settled = len(lanes.started)
-        time.sleep(0.1)
 
-        assert response.lifecycle == Lifecycle.PAUSED
-        assert len(lanes.started) == settled
-        assert settled < 40
+def test_every_state_has_an_arrangement():
+    assert set(ARRANGED) == set(CampaignState)
 
 
-class TestEvents:
-    """What the runner announces as it goes."""
+@pytest.mark.parametrize("named, records", ARRANGED.items(), ids=str)
+def test_each_arrangement_is_the_state_it_names(store, named, records):
+    campaign_id = create(store, units=[A, B])
 
-    @staticmethod
-    def kinds(events, campaign_id="1234567"):
-        return [
-            e.kind
-            for e in events.read(campaign_id, since_seq=0, kinds=[], limit=100)
-        ]
+    store.append(campaign_id, records)
 
-    def test_starting_and_pausing_are_announced(self, runner, store, events):
-        create(store)
-        runner.start("1234567")
-        runner.pause("1234567")
-        runner.resume("1234567")
-        runner.cancel("1234567")
-
-        assert self.kinds(events) == [
-            "campaign.started",
-            "campaign.paused",
-            "campaign.resumed",
-            "campaign.cancelled",
-        ]
-
-    def test_reopening_is_announced_with_its_reason(
-        self, runner, store, events
-    ):
-        create(store)
-        runner.start("1234567")
-        runner.cancel("1234567")
-        runner.reopen("1234567", reason="cancelled by mistake")
-
-        reopened = events.read(
-            "1234567", since_seq=0, kinds=["campaign.reopened"], limit=10
-        )
-
-        assert len(reopened) == 1
-        assert reopened[0].data["reason"] == "cancelled by mistake"
-        assert reopened[0].data["abandoned"] == 0
-
-    def test_an_abandoned_unit_is_announced_as_errored(
-        self, runner, store, lanes, lock, events
-    ):
-        create(store, units=[UNITS[0]], lxd_lanes=1)
-        runner.start("1234567")
-        runner.tick("1234567")
-        runner.cancel("1234567")
-        restarted = TestReopen._restarted(store, lanes, lock, events)
-
-        restarted.reopen("1234567", abandon_in_flight=True)
-
-        errored = events.read(
-            "1234567", since_seq=0, kinds=["unit.errored"], limit=10
-        )
-
-        assert len(errored) == 1
-        assert errored[0].data["job_id"] == "job1"
-        assert errored[0].data["problem"] == "abandoned_on_reopen"
-
-    def test_an_opened_lane_is_announced_with_its_job(
-        self, runner, store, events, lanes
-    ):
-        create(store, lxd_lanes=1)
-        runner.start("1234567")
-        runner.tick("1234567")
-
-        opened = events.read(
-            "1234567", since_seq=0, kinds=["lane.started"], limit=10
-        )
-
-        assert len(opened) == 1
-        assert opened[0].data["job_id"] == "job1"
-        assert opened[0].data["release"] == UNITS[0].release
-        assert opened[0].data["install_from"] == "proposed"
-
-    def test_a_passing_unit_is_announced(self, runner, store, events, lanes):
-        create(store, units=[UNITS[0]], lxd_lanes=1)
-        runner.start("1234567")
-        runner.tick("1234567")
-        lanes.finish("job1")
-        runner.tick("1234567")
-
-        assert "unit.passed" in self.kinds(events)
-
-    def test_a_failing_unit_carries_its_failing_steps(
-        self, runner, store, events, lanes
-    ):
-        create(store, units=[UNITS[0]], lxd_lanes=1)
-        runner.start("1234567")
-        runner.tick("1234567")
-        lanes.results["job1"] = {
-            "status": "completed",
-            "ok": False,
-            "job_id": "job1",
-            "summary": {
-                "scenarios": {"passed": 0, "failed": 1, "skipped": 0},
-                "features": {},
-            },
-            "failures": [
-                {
-                    "step": "Then it works",
-                    "status": "failed",
-                    "error_message": "it did not",
-                }
-            ],
-        }
-        runner.tick("1234567")
-
-        failed = events.read(
-            "1234567", since_seq=0, kinds=["unit.failed"], limit=10
-        )
-
-        assert len(failed) == 1
-        assert failed[0].data["failures"][0]["step"] == "Then it works"
-        assert failed[0].data["failures"][0]["error_message"] == "it did not"
-
-    def test_an_unclassifiable_result_has_its_own_kind_and_reason(
-        self, runner, store, events, lanes
-    ):
-        create(store, units=[UNITS[0]], lxd_lanes=1)
-        runner.start("1234567")
-        runner.tick("1234567")
-        lanes.results["job1"] = {
-            "status": "completed",
-            "ok": True,
-            "job_id": "job1",
-            "summary": {
-                "scenarios": {"passed": 1, "unknown": 1},
-                "features": {},
-            },
-        }
-        runner.tick("1234567")
-
-        odd = events.read(
-            "1234567", since_seq=0, kinds=["unit.unclassifiable"], limit=10
-        )
-
-        assert len(odd) == 1
-        assert odd[0].data["problem"]
-
-    def test_completion_is_announced_with_the_counts(
-        self, runner, store, events, lanes
-    ):
-        create(store, units=[UNITS[0]], lxd_lanes=1)
-        runner.start("1234567")
-        runner.tick("1234567")
-        lanes.finish("job1")
-        runner.tick("1234567")
-
-        done = events.read(
-            "1234567", since_seq=0, kinds=["campaign.complete"], limit=10
-        )
-
-        assert len(done) == 1
-        assert done[0].data["counts"]["passed"] == 1
-
-    def test_a_restart_pause_says_why(self, runner, store, events):
-        create(store)
-        runner.start("1234567")
-        CampaignRunner(
-            store=store,
-            lanes=FakeLanes(),
-            lock=FakeLock(),
-            events=events,
-            now=lambda: AT,
-            ticker=FakeTicker(),
-        ).recover()
-
-        paused = events.read(
-            "1234567", since_seq=0, kinds=["campaign.paused"], limit=10
-        )
-
-        assert paused[0].data["reason"] == RESTART_REASON
-
-
-class TestRetryUnits:
-    """Nothing re-runs a failure on its own; this is the only way."""
-
-    def _finish(self, runner, lanes, job_id, **kwargs):
-        runner.tick("1234567")
-        lanes.finish(job_id, **kwargs)
-        runner.tick("1234567")
-
-    def test_retrying_a_complete_campaign_writes_running(
-        self, runner, store, lanes
-    ):
-        create(store, units=[UNITS[0]], lxd_lanes=1)
-        runner.start("1234567")
-        self._finish(runner, lanes, "job1", passed=0, failed=1)
-
-        response = runner.retry_units("1234567")
-
-        assert response.rescheduling
-        assert response.lifecycle == Lifecycle.RUNNING
-        assert written_states(store) == [
-            Lifecycle.RUNNING,
-            Lifecycle.COMPLETE,
-            Lifecycle.RUNNING,
-        ]
-
-    def test_a_failed_unit_becomes_schedulable_again(
-        self, runner, store, lanes
-    ):
-        create(store, units=[UNITS[0]], lxd_lanes=1)
-        runner.start("1234567")
-        self._finish(runner, lanes, "job1", passed=0, failed=1)
-        assert lifecycle(store.replay("1234567")) == Lifecycle.COMPLETE
-
-        response = runner.retry_units("1234567")
-
-        assert response.requeued == 1
-        assert response.lifecycle == Lifecycle.RUNNING
-        assert response.rescheduling
-
-    def test_the_retried_unit_actually_runs_again(self, runner, store, lanes):
-        create(store, units=[UNITS[0]], lxd_lanes=1)
-        runner.start("1234567")
-        self._finish(runner, lanes, "job1", passed=0, failed=1)
-        runner.retry_units("1234567")
-
-        report = runner.tick("1234567")
-
-        assert report.started == 1
-        assert lanes.started_units == [UNITS[0], UNITS[0]]
-
-    def test_a_retry_can_turn_a_failure_into_a_pass(
-        self, runner, store, lanes
-    ):
-        create(store, units=[UNITS[0]], lxd_lanes=1)
-        runner.start("1234567")
-        self._finish(runner, lanes, "job1", passed=0, failed=1)
-        runner.retry_units("1234567")
-        self._finish(runner, lanes, "job2")
-
-        statuses = reduce_units(store.replay("1234567"))
-
-        assert statuses[0].state == "passed"
-        assert not statuses[0].retry_pending
-
-    def test_the_request_is_recorded_with_its_reason(
-        self, runner, store, lanes
-    ):
-        create(store, units=[UNITS[0]], lxd_lanes=1)
-        runner.start("1234567")
-        self._finish(runner, lanes, "job1", passed=0, failed=1)
-
-        runner.retry_units("1234567", reason="looked flaky")
-
-        retries = [
-            r for r in store.replay("1234567") if isinstance(r, RetryRecord)
-        ]
-        assert retries[-1].reason == "looked flaky"
-
-    def test_it_defaults_to_the_problem_states(self, runner, store, lanes):
-        create(store, lxd_lanes=3)
-        runner.start("1234567")
-        runner.tick("1234567")
-        lanes.finish("job1", passed=0, failed=1)
-        lanes.finish("job2")
-        lanes.finish("job3", passed=0, failed=1)
-        runner.tick("1234567")
-
-        response = runner.retry_units("1234567")
-
-        # The passing unit is left alone.
-        assert response.requeued == 2
-        assert all(u.state == "failed" for u in response.units)
-
-    def test_a_passing_unit_can_be_retried_when_named(
-        self, runner, store, lanes
-    ):
-        create(store, units=[UNITS[0]], lxd_lanes=1)
-        runner.start("1234567")
-        self._finish(runner, lanes, "job1")
-
-        response = runner.retry_units(
-            "1234567", filters=Filters(state=("passed",))
-        )
-
-        assert response.requeued == 1
-
-    def test_filters_narrow_the_selection(self, runner, store, lanes):
-        create(store, lxd_lanes=3)
-        runner.start("1234567")
-        runner.tick("1234567")
-        for job in ("job1", "job2", "job3"):
-            lanes.finish(job, passed=0, failed=1)
-        runner.tick("1234567")
-
-        response = runner.retry_units(
-            "1234567", filters=Filters(release=("jammy",))
-        )
-
-        assert {u.release for u in response.units} == {"jammy"}
-
-    def test_a_unit_in_flight_is_never_selected(self, runner, store, lanes):
-        create(store, units=[UNITS[0]], lxd_lanes=1)
-        runner.start("1234567")
-        runner.tick("1234567")
-
-        with pytest.raises(CampaignError):
-            runner.retry_units("1234567", filters=Filters(state=("running",)))
-
-    def test_matching_nothing_is_rejected(self, runner, store):
-        create(store)
-        runner.start("1234567")
-
-        with pytest.raises(CampaignError) as error:
-            runner.retry_units("1234567")
-
-        assert "nothing was re-queued" in str(error.value)
-
-    def test_a_cancelled_campaign_refuses_retries(self, runner, store, lanes):
-        create(store, units=[UNITS[0]], lxd_lanes=1)
-        runner.start("1234567")
-        self._finish(runner, lanes, "job1", passed=0, failed=1)
-        runner.cancel("1234567")
-
-        with pytest.raises(CampaignError) as error:
-            runner.retry_units("1234567")
-
-        assert "cancelled" in str(error.value)
-
-    def test_a_paused_campaign_accepts_retries_but_stays_paused(
-        self, runner, store, lanes
-    ):
-        # Two units, so the campaign is still running -- and so pausable --
-        # once the first one has failed.
-        create(store, units=[UNITS[0], UNITS[1]], lxd_lanes=1)
-        runner.start("1234567")
-        self._finish(runner, lanes, "job1", passed=0, failed=1)
-        runner.pause("1234567")
-
-        response = runner.retry_units("1234567")
-
-        assert response.requeued == 1
-        assert response.lifecycle == Lifecycle.PAUSED
-        assert not response.rescheduling
-        assert runner.tick("1234567").started == 0
-
-    def test_cancelling_a_finished_campaign_closes_it_to_retries(
-        self, runner, store, lanes
-    ):
-        create(store, units=[UNITS[0]], lxd_lanes=1)
-        runner.start("1234567")
-        self._finish(runner, lanes, "job1", passed=0, failed=1)
-
-        runner.cancel("1234567")
-
-        with pytest.raises(CampaignError):
-            runner.retry_units("1234567")
-
-    def test_retrying_is_announced(self, runner, store, lanes, events):
-        create(store, units=[UNITS[0]], lxd_lanes=1)
-        runner.start("1234567")
-        self._finish(runner, lanes, "job1", passed=0, failed=1)
-
-        runner.retry_units("1234567", reason="flaky")
-
-        retried = events.read(
-            "1234567", since_seq=0, kinds=["unit.retried"], limit=10
-        )
-        assert len(retried) == 1
-        assert retried[0].data["previous_state"] == "failed"
-        assert retried[0].data["reason"] == "flaky"
-
-
-class TestSignals:
-    """Derived signals reach the event log, and are said once."""
-
-    def test_a_hung_lane_is_reported_once(self, store, lanes, lock, events):
-        runner = CampaignRunner(
-            store=store,
-            lanes=lanes,
-            lock=lock,
-            events=events,
-            now=lambda: "2026-09-12T12:00:00Z",
-            ticker=FakeTicker(),
-            overdue_seconds=60,
-        )
-        create(store, units=[UNITS[0]], lxd_lanes=1)
-        runner.start("1234567")
-        runner.tick("1234567")
-
-        # Time moves on while the job does not.
-        runner._now = lambda: "2026-09-12T13:00:00Z"
-        runner.tick("1234567")
-        runner.tick("1234567")
-
-        overdue = events.read(
-            "1234567", since_seq=0, kinds=["lane.overdue"], limit=10
-        )
-
-        assert len(overdue) == 1
-        assert overdue[0].data["job_id"] == "job1"
-        assert overdue[0].data["elapsed_seconds"] == 3600
-
-    def test_a_refused_lane_is_reported_as_starvation(
-        self, store, lock, events
-    ):
-        lanes = FakeLanes(max_starts=1)
-        runner = CampaignRunner(
-            store=store,
-            lanes=lanes,
-            lock=lock,
-            events=events,
-            now=lambda: AT,
-            ticker=FakeTicker(),
-        )
-        create(store, lxd_lanes=3)
-        runner.start("1234567")
-
-        runner.tick("1234567")
-
-        starved = events.read(
-            "1234567",
-            since_seq=0,
-            kinds=["anomaly.capacity_starved"],
-            limit=10,
-        )
-
-        assert len(starved) == 1
-        assert starved[0].data["reason"]
-
-    def test_starvation_is_reported_once_per_episode(
-        self, store, lock, events
-    ):
-        lanes = FakeLanes(full_pools={Pool.LXD})
-        runner = CampaignRunner(
-            store=store,
-            lanes=lanes,
-            lock=lock,
-            events=events,
-            now=lambda: AT,
-            ticker=FakeTicker(),
-        )
-        campaign_id = create(store, lxd_lanes=1)
-        runner.start(campaign_id)
-
-        def starved():
-            return events.read(
-                campaign_id,
-                since_seq=0,
-                kinds=["anomaly.capacity_starved"],
-                limit=10,
-            )
-
-        runner.tick(campaign_id)
-        runner.tick(campaign_id)
-        runner.tick(campaign_id)
-        assert len(starved()) == 1
-
-        lanes.full_pools.clear()
-        runner.tick(campaign_id)
-        (_, opened_job, _, _) = lanes.started[-1]
-        lanes.finish(opened_job)
-        lanes.full_pools.add(Pool.LXD)
-        runner.tick(campaign_id)
-        runner.tick(campaign_id)
-
-        assert len(starved()) == 2
-
-    def test_a_tick_waits_for_a_control_verb_in_progress(self, runner, store):
-        create(store)
-        runner.start("1234567")
-        ticked = threading.Event()
-
-        with runner._guard:
-            thread = threading.Thread(
-                target=lambda: (runner.tick("1234567"), ticked.set())
-            )
-            thread.start()
-            assert not ticked.wait(0.2)
-
-        assert ticked.wait(5)
-        thread.join(5)
-
-    def test_a_scenario_failing_across_releases_is_reported(
-        self, runner, store, lanes
-    ):
-        units = [
-            Unit("features/a.feature", "A", release, "lxd-vm")
-            for release in ("focal", "jammy", "noble")
-        ]
-        create(store, units=units, lxd_lanes=3)
-        runner.start("1234567")
-        runner.tick("1234567")
-        for job in ("job1", "job2", "job3"):
-            lanes.finish(job, passed=0, failed=1)
-        runner.tick("1234567")
-
-        reported = runner._events.read(
-            "1234567",
-            since_seq=0,
-            kinds=["anomaly.*"],
-            limit=10,
-        )
-
-        assert [e.kind for e in reported] == [
-            "anomaly.repeated_scenario_failure"
-        ]
-        assert reported[0].data["releases"] == ["focal", "jammy", "noble"]
-
-    def test_a_healthy_campaign_reports_no_anomalies(
-        self, runner, store, lanes
-    ):
-        create(store, lxd_lanes=3)
-        runner.start("1234567")
-        runner.tick("1234567")
-        for job in ("job1", "job2", "job3"):
-            lanes.finish(job)
-        runner.tick("1234567")
-
-        reported = runner._events.read(
-            "1234567", since_seq=0, kinds=["anomaly.*"], limit=10
-        )
-
-        assert reported == []
+    assert state(store, campaign_id) == named
 
 
 class Refused(NamedTuple):
     reason: str
 
 
-# What each control verb does to a campaign in each lifecycle state. start
-# on a paused campaign resumes it; start on a running one picks up a
-# campaign this process is not scheduling yet.
-CONTROL = {
-    (Lifecycle.CREATED, ControlAction.START): Lifecycle.RUNNING,
-    (Lifecycle.CREATED, ControlAction.PAUSE): Refused("cannot pause"),
-    (Lifecycle.CREATED, ControlAction.RESUME): Refused("not paused"),
-    (Lifecycle.CREATED, ControlAction.CANCEL): Lifecycle.CANCELLED,
-    (Lifecycle.RUNNING, ControlAction.START): Lifecycle.RUNNING,
-    (Lifecycle.RUNNING, ControlAction.PAUSE): Lifecycle.PAUSED,
-    (Lifecycle.RUNNING, ControlAction.RESUME): Refused("not paused"),
-    (Lifecycle.RUNNING, ControlAction.CANCEL): Lifecycle.CANCELLED,
-    (Lifecycle.PAUSED, ControlAction.START): Lifecycle.RUNNING,
-    (Lifecycle.PAUSED, ControlAction.PAUSE): Refused("cannot pause"),
-    (Lifecycle.PAUSED, ControlAction.RESUME): Lifecycle.RUNNING,
-    (Lifecycle.PAUSED, ControlAction.CANCEL): Lifecycle.CANCELLED,
-    (Lifecycle.CANCELLED, ControlAction.START): Refused("reopen it first"),
-    (Lifecycle.CANCELLED, ControlAction.PAUSE): Refused("cannot pause"),
-    (Lifecycle.CANCELLED, ControlAction.RESUME): Refused("not paused"),
-    (Lifecycle.CANCELLED, ControlAction.CANCEL): Refused("cannot cancel"),
-    (Lifecycle.COMPLETE, ControlAction.START): Refused("no work left"),
-    (Lifecycle.COMPLETE, ControlAction.PAUSE): Refused("cannot pause"),
-    (Lifecycle.COMPLETE, ControlAction.RESUME): Refused("not paused"),
-    (Lifecycle.COMPLETE, ControlAction.CANCEL): Lifecycle.CANCELLED,
+VERBS = {
+    "run": lambda runner, campaign_id: runner.run(campaign_id),
+    "pause": lambda runner, campaign_id: runner.pause(campaign_id),
+    "pause-kill": lambda runner, campaign_id: runner.pause(
+        campaign_id, kill=True
+    ),
+    "retry": lambda runner, campaign_id: runner.retry_units(campaign_id),
 }
 
 
-def test_every_state_and_action_has_an_expectation():
-    assert set(CONTROL) == {
-        (state, action) for state in Lifecycle for action in ControlAction
-    }
+# What each verb leaves each named state in. Retry with no filter selects
+# the problem units, so it is refused where there are none.
+CONTROL = {
+    (CampaignState.CREATED, "run"): CampaignState.RUNNING,
+    (CampaignState.CREATED, "pause"): CampaignState.PAUSED,
+    (CampaignState.CREATED, "pause-kill"): CampaignState.PAUSED,
+    (CampaignState.CREATED, "retry"): Refused("no units matched"),
+    (CampaignState.RUNNING, "run"): CampaignState.RUNNING,
+    (CampaignState.RUNNING, "pause"): CampaignState.PAUSING,
+    (CampaignState.RUNNING, "pause-kill"): CampaignState.PAUSED,
+    (CampaignState.RUNNING, "retry"): Refused("no units matched"),
+    (CampaignState.FINISHING, "run"): CampaignState.FINISHING,
+    (CampaignState.FINISHING, "pause"): CampaignState.PAUSING,
+    (CampaignState.FINISHING, "pause-kill"): CampaignState.PAUSED,
+    (CampaignState.FINISHING, "retry"): Refused("no units matched"),
+    (CampaignState.COMPLETE, "run"): CampaignState.COMPLETE,
+    (CampaignState.COMPLETE, "pause"): CampaignState.COMPLETE,
+    (CampaignState.COMPLETE, "pause-kill"): CampaignState.COMPLETE,
+    (CampaignState.COMPLETE, "retry"): CampaignState.RUNNING,
+    (CampaignState.PAUSING, "run"): CampaignState.RUNNING,
+    (CampaignState.PAUSING, "pause"): CampaignState.PAUSING,
+    (CampaignState.PAUSING, "pause-kill"): CampaignState.PAUSED,
+    (CampaignState.PAUSING, "retry"): Refused("no units matched"),
+    (CampaignState.PAUSED, "run"): CampaignState.RUNNING,
+    (CampaignState.PAUSED, "pause"): CampaignState.PAUSED,
+    (CampaignState.PAUSED, "pause-kill"): CampaignState.PAUSED,
+    (CampaignState.PAUSED, "retry"): CampaignState.RUNNING,
+}
+
+
+def test_every_state_and_verb_has_an_expectation():
+    assert set(CONTROL) == set(itertools.product(CampaignState, VERBS))
 
 
 @pytest.mark.parametrize(
-    "state, action, expected",
-    [(state, action, want) for (state, action), want in CONTROL.items()],
+    "named, verb, expected",
+    [(named, verb, want) for (named, verb), want in CONTROL.items()],
     ids=str,
 )
-def test_control_verbs_by_lifecycle(runner, store, state, action, expected):
-    campaign_id = create(store)
-    if state != Lifecycle.CREATED:
-        store.append(campaign_id, [LifecycleRecord(state=state, at=AT)])
-    verb = getattr(runner, action.value)
+def test_verbs_by_state(runner, store, named, verb, expected):
+    campaign_id = create(store, units=[A, B])
+    store.append(campaign_id, ARRANGED[named])
 
     if isinstance(expected, Refused):
         with pytest.raises(CampaignError, match=expected.reason):
-            verb(campaign_id)
-        assert lifecycle(store.replay(campaign_id)) == state
+            VERBS[verb](runner, campaign_id)
+        assert state(store, campaign_id) == named
     else:
-        verb(campaign_id)
-        assert lifecycle(store.replay(campaign_id)) == expected
+        VERBS[verb](runner, campaign_id)
+        assert state(store, campaign_id) == expected

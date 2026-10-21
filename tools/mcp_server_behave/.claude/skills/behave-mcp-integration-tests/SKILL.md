@@ -65,10 +65,10 @@ CLI tests run `behave_campaign.cli.main(argv)` over real files, and check the ex
 Good: the exit code, the message a person reads, and proof that nothing was written.
 
 ```python
-error = run(["record"], [unplanned], expect=2)
+error = run(["create", "--release", "bogus"], expect=2)
 
-assert "unplanned units" in error
-assert campaign_file.read_text() == original
+assert "unknown release: bogus" in error
+assert not campaign_file.exists()
 ```
 
 Bad: calling `CampaignService` from a CLI test. That is a service unit test in the wrong file, and it never exercises argument parsing.

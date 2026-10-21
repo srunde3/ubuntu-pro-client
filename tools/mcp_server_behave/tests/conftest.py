@@ -224,9 +224,18 @@ class FakeLanes:
     seen running at least once.
     """
 
-    def __init__(self, *, max_starts=None, full_pools=(), auto_finish=None):
+    def __init__(
+        self,
+        *,
+        max_starts=None,
+        full_pools=(),
+        auto_finish=None,
+        unkillable=(),
+    ):
         self.started = []
         self.results = {}
+        self.killed = []
+        self.unkillable = set(unkillable)
         self.max_starts = max_starts
         self.full_pools = set(full_pools)
         self.auto_finish = auto_finish
@@ -254,6 +263,19 @@ class FakeLanes:
 
     def finish(self, job_id, **kwargs):
         self.results[job_id] = job_result(job_id=job_id, **kwargs)
+
+    def kill(self, job_id):
+        """Signal a job; a killed job reports a failure on its next poll.
+
+        Returns False for a job that already finished, or one in
+        ``unkillable``, as the real runner does for a job it holds no
+        handle on.
+        """
+        self.killed.append(job_id)
+        if job_id in self.results or job_id in self.unkillable:
+            return False
+        self.finish(job_id, passed=0, failed=1)
+        return True
 
     @property
     def started_units(self):

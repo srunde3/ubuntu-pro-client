@@ -71,21 +71,36 @@ run next. The server's job history is a bounded window, so an SRU campaign that
 runs for days is recorded there instead.
 
 `create_campaign` plans one and stores it without starting anything;
-`list_campaigns` and `campaign_status` report on them. `control_campaign`
-with `action: start` then schedules it: the server keeps up to the campaign's
-`lanes` behave jobs in flight in each pool, records every outcome, and fills a lane as
-soon as one frees, with no further calls needed to keep it moving. The same
-tool's `pause`, `resume` and `cancel` actions control it; pause and cancel
-both let in-flight jobs finish rather than killing them. `reopen_campaign`
-takes a cancellation back, for one made by mistake.
+`list_campaigns` and `campaign_status` report on them. A campaign's state is
+its intent -- what the caller last asked for: `never_run`, `run` or `hold` --
+plus its progress, read off its units. `control_campaign` takes two actions:
+
+- `run` sets the intent to run. The server keeps up to the campaign's `lanes`
+  behave jobs in flight in each pool, records every outcome, and fills a lane
+  as soon as one frees, with no further calls needed to keep it moving.
+- `pause` sets the intent to hold. No new job starts, and jobs in flight
+  finish and are recorded. With `kill: true` the jobs in flight are killed
+  instead: their attempts are recorded as interrupted, and their units run
+  again on the next `run`.
+
+The named states follow from the two: `created`, `running`, `finishing` (the
+last jobs are in flight), `complete` (every unit has an outcome; nothing writes
+this), `pausing` (on hold, jobs still draining) and `paused`. A complete
+campaign is never closed: `retry_units` gives it work and sets it running
+again.
 
 Only one campaign schedules at a time, held by an advisory lock so a second
-server cannot schedule it too. The CLI does not take the lock.
+server cannot schedule it too. A paused or complete campaign releases it. The
+CLI does not take the lock.
+
+Campaign files written before this state model are not read. Delete
+`.mcp_server_behave/campaigns` after upgrading.
 
 `await_campaign_events` is how a caller follows a running campaign: it blocks
 until something happens, returns every event after a cursor, and always
-reports the campaign's state -- lifecycle, lanes in flight, counts by unit
-state -- so an empty batch is still informative. Events are filtered by kind (`unit.failed`) or family
+reports the campaign's state -- state, intent, progress, lanes in flight,
+counts by unit state -- so an empty batch is still informative. Each change of
+state is announced as `campaign.<state>`. Events are filtered by kind (`unit.failed`) or family
 (`unit.*`), and a `unit.failed` event carries the failing steps so a failure
 can be judged without fetching the job's report. `anomaly.*` events and
 `lane.overdue` are derived signals offered for judgement -- repeated skips,
@@ -97,7 +112,8 @@ as, what it installed from, and its outcome -- so how a unit got to where it
 is can be read without scanning the event stream.
 
 `retry_units` asks for another attempt at units that already had one, which
-is the only way a non-passing unit is ever re-run. `kill_job` terminates a
+is the only way a non-passing unit is ever re-run. It always sets the
+campaign's intent to run. `kill_job` terminates a
 job that has hung, so its lane is recorded and freed instead of held open.
 
 The package is also usable on its own through the `behave-campaign` CLI,

@@ -7,8 +7,8 @@ from behave_campaign.domain.records import (
     AttemptStarted,
     CampaignError,
     Filters,
-    Lifecycle,
-    LifecycleRecord,
+    Intent,
+    IntentRecord,
     RepoState,
     Unit,
 )
@@ -82,13 +82,19 @@ def create(service, **overrides):
     return service.create_campaign(**fields)
 
 
+def ran(store):
+    """Set intent to run, as the runner does before any attempt."""
+    store.append("1234567", [IntentRecord(Intent.RUN, AT)])
+
+
 class TestCreateCampaign:
     def test_it_plans_every_matching_unit(self, service):
         result = create(service)
 
         assert result.campaign.total_units == 3
-        assert result.state.counts.unattempted == 3
-        assert result.state.counts.passed == 0
+        assert result.summary.counts.unattempted == 3
+        assert result.summary.counts.passed == 0
+        assert result.summary.state == "created"
 
     def test_it_records_how_the_campaign_was_built(self, service):
         result = create(
@@ -260,7 +266,7 @@ class TestListCampaigns:
 
         assert [c.campaign_id for c in result.campaigns] == ["111", "222"]
         assert [c.total_units for c in result.campaigns] == [3, 2]
-        assert [c.lifecycle for c in result.campaigns] == ["created"] * 2
+        assert [c.state for c in result.campaigns] == ["created"] * 2
         # A row says how wide the scope is, not what is in it.
         assert [c.scope_size.releases for c in result.campaigns] == [0, 1]
         assert not hasattr(result.campaigns[0], "scope")
@@ -284,8 +290,8 @@ class TestCampaignStatus:
 
         status = service.campaign_status(campaign_id="1234567")
 
-        assert status.state.counts.unattempted == 3
-        assert status.running == []
+        assert status.summary.counts.unattempted == 3
+        assert status.in_flight == []
         assert status.problems == []
 
     def test_status_never_lists_individual_units(self, service):
@@ -295,10 +301,11 @@ class TestCampaignStatus:
 
         assert not hasattr(status, "units")
 
-    def test_running_and_problem_units_are_always_reported(
+    def test_in_flight_and_problem_units_are_always_reported(
         self, service, store
     ):
         create(service)
+        ran(store)
         store.append(
             "1234567",
             [
@@ -316,16 +323,19 @@ class TestCampaignStatus:
 
         status = service.campaign_status(campaign_id="1234567")
 
-        assert [u.job_id for u in status.running] == ["job1"]
+        assert [u.job_id for u in status.in_flight] == ["job1"]
         assert [u.job_id for u in status.problems] == ["job2"]
-        assert status.state.counts.running == 1
-        assert status.state.counts.failed == 1
-        assert status.state.counts.unattempted == 1
+        assert status.summary.counts.in_flight == 1
+        assert status.summary.counts.failed == 1
+        assert status.summary.counts.unattempted == 1
+        assert status.summary.state == "running"
+        assert status.summary.progress == "open"
         assert status.problem_scenarios is None
 
     def test_it_counts_busy_lanes_in_each_pool(self, tmp_path, events, store):
         service = _service_over(tmp_path, events, MIXED_UNITS)
         create(service)
+        ran(store)
         store.append(
             "1234567",
             [
@@ -344,6 +354,7 @@ class TestCampaignStatus:
 
     def test_problems_can_be_grouped_by_scenario(self, service, store):
         create(service)
+        ran(store)
         store.append(
             "1234567",
             [
@@ -382,6 +393,7 @@ class TestCampaignStatus:
 
     def test_problems_are_capped_but_counted(self, service, store):
         create(service)
+        ran(store)
         store.append(
             "1234567",
             [
@@ -418,7 +430,7 @@ class TestCampaignStatus:
             campaign_id="1234567", filters=Filters(release=("noble",))
         )
 
-        assert status.state.counts.unattempted == 1
+        assert status.summary.counts.unattempted == 1
 
     def test_a_state_filter_selects_units(self, service, store):
         create(service)
@@ -459,162 +471,12 @@ class TestDimensions:
         ]
 
 
-def record(service, unit, outcome, job_id, **kwargs):
-    fields = {
-        "campaign_id": "1234567",
-        "payload": [
-            {
-                "feature": unit.feature,
-                "scenario": unit.scenario,
-                "release": unit.release,
-                "machine_type": unit.machine_type,
-                "outcome": outcome,
-                "job_id": job_id,
-            }
-        ],
-        "install_from": "proposed",
-    }
-    fields.update(kwargs)
-    return service.record_attempts(**fields)
-
-
-class TestRecordAttempts:
-    def test_an_attempt_updates_the_unit_state(self, service):
-        create(service)
-
-        result = record(service, UNITS[0], "failed", "job1")
-
-        assert result.recorded == 1
-        assert result.counts.failed == 1
-        assert [u.job_id for u in result.problems] == ["job1"]
-
-    def test_it_stamps_the_install_source_and_time(self, service, store):
-        create(service)
-        record(service, UNITS[0], "passed", "job1")
-
-        started, finished = store.replay("1234567")[-2:]
-
-        # A completed try is written as both halves, with the source on the
-        # start -- that is what the job actually ran with.
-        assert started.install_from == "proposed"
-        assert started.at == AT
-        assert finished.outcome == "passed"
-        assert finished.job_id == started.job_id
-
-    def test_a_pass_supersedes_an_earlier_failure(self, service):
-        create(service)
-        record(service, UNITS[0], "failed", "job1")
-
-        result = record(service, UNITS[0], "passed", "job2")
-
-        assert result.counts.passed == 1
-        assert result.counts.failed == 0
-
-    def test_an_unplanned_unit_is_rejected(self, service, store):
-        create(service)
-        before = store.replay("1234567")
-        stranger = Unit("features/z.feature", "Z", "focal", "lxd-vm")
-
-        with pytest.raises(CampaignError) as error:
-            record(service, stranger, "failed", "job1")
-
-        assert "unplanned units" in str(error.value)
-        assert store.replay("1234567") == before
-
-    def test_an_unknown_install_source_is_rejected(self, service):
-        create(service)
-
-        with pytest.raises(CampaignError) as error:
-            record(service, UNITS[0], "passed", "job1", install_from="nope")
-
-        assert "install source" in str(error.value)
-
-    def test_an_empty_payload_is_rejected(self, service):
-        create(service)
-
-        with pytest.raises(CampaignError):
-            service.record_attempts(
-                campaign_id="1234567", payload=[], install_from="proposed"
-            )
-
-    def test_mcp_results_are_classified(self, service):
-        create(service)
-        unit = UNITS[0]
-
-        result = service.record_attempts(
-            campaign_id="1234567",
-            payload=[
-                {
-                    "unit": {
-                        "feature": unit.feature,
-                        "scenario": unit.scenario,
-                        "release": unit.release,
-                        "machine_type": unit.machine_type,
-                    },
-                    "result": {
-                        "status": "completed",
-                        "ok": True,
-                        "job_id": "job-abc",
-                        "summary": {
-                            "scenarios": {"passed": 1},
-                            "features": {"passed": 1},
-                        },
-                    },
-                }
-            ],
-            install_from="proposed",
-            from_mcp=True,
-        )
-
-        assert result.counts.passed == 1
-
-
-class TestNextUnits:
-    def test_unattempted_units_come_before_problems(self, service):
-        create(service)
-        record(service, UNITS[0], "failed", "job1")
-
-        result = service.next_units(campaign_id="1234567", limit=5)
-
-        assert [u.state for u in result.units] == [
-            "unattempted",
-            "unattempted",
-            "failed",
-        ]
-
-    def test_a_passing_unit_is_never_returned(self, service):
-        create(service)
-        record(service, UNITS[0], "passed", "job1")
-
-        result = service.next_units(campaign_id="1234567", limit=5)
-
-        assert UNITS[0] not in [
-            Unit(u.feature, u.scenario, u.release, u.machine_type)
-            for u in result.units
-        ]
-
-    def test_the_limit_caps_the_selection(self, service):
-        create(service)
-
-        assert (
-            len(service.next_units(campaign_id="1234567", limit=2).units) == 2
-        )
-
-    def test_filters_narrow_the_selection(self, service):
-        create(service)
-
-        result = service.next_units(
-            campaign_id="1234567", filters=Filters(release=("noble",)), limit=5
-        )
-
-        assert [u.release for u in result.units] == ["noble"]
-
-
 class TestUnitHistory:
-    def test_every_attempt_is_listed_oldest_first(self, service):
+    def test_every_attempt_is_listed_oldest_first(self, service, store):
         create(service)
-        record(service, UNITS[0], "failed", "job1")
-        record(service, UNITS[0], "passed", "job2")
+        ran(store)
+        finish(store, UNITS[0], "job1", "failed")
+        finish(store, UNITS[0], "job2", "passed")
 
         result = service.unit_history(
             campaign_id="1234567", filters=Filters(release=("jammy",))
@@ -716,7 +578,9 @@ class TestAwaitEvents:
         assert result.events == []
         assert result.timed_out
         assert result.counts.unattempted == 3
-        assert result.lifecycle == "created"
+        assert result.state == "created"
+        assert result.intent == "never_run"
+        assert result.progress == "untouched"
         assert result.lanes_busy == 0
 
     def test_a_filter_selects_kinds(self, service):
@@ -756,12 +620,11 @@ def finish(store, unit, job_id, outcome):
 def completed(service, store):
     """A campaign that ran, retried one unit, and finished."""
     create(service, install_from="proposed")
-    store.append("1234567", [LifecycleRecord(state=Lifecycle.RUNNING, at=AT)])
+    ran(store)
     finish(store, UNITS[0], "a1", "failed")
     finish(store, UNITS[0], "a2", "passed")
     finish(store, UNITS[1], "n1", "passed")
     finish(store, UNITS[2], "b1", "error")
-    service.complete_campaign(campaign_id="1234567")
     return "1234567"
 
 
@@ -779,12 +642,27 @@ def export(service, tmp_path, jobs=None, writer=None):
 class TestExportCampaign:
     def test_only_a_complete_campaign_exports(self, service, store, tmp_path):
         create(service)
-        store.append(
-            "1234567", [LifecycleRecord(state=Lifecycle.RUNNING, at=AT)]
-        )
+        ran(store)
         finish(store, UNITS[0], "a1", "passed")
 
-        with pytest.raises(CampaignError, match="2 unattempted"):
+        with pytest.raises(CampaignError, match="is running .* 2 queueable"):
+            export(service, tmp_path)
+
+    def test_a_refused_export_names_the_jobs_in_flight(
+        self, service, store, tmp_path
+    ):
+        create(service)
+        store.append("1234567", [IntentRecord(Intent.HOLD, AT)])
+        store.append(
+            "1234567",
+            [
+                AttemptStarted(
+                    unit=UNITS[0], job_id="a1", install_from="local", at=AT
+                )
+            ],
+        )
+
+        with pytest.raises(CampaignError, match="is pausing .*jobs a1"):
             export(service, tmp_path)
 
     def test_bundles_every_attempt_and_the_raw_records(
@@ -826,58 +704,3 @@ class TestExportCampaign:
         assert "jobs/b1/report.json" not in writer.entries
         summary = writer.entries["SUMMARY.md"].data.decode()
         assert "(error, job b1, files missing)" in summary
-
-
-class TestCompleteCampaign:
-    def test_marks_a_campaign_with_no_work_left_complete(
-        self, service, store, events
-    ):
-        create(service)
-        for number, unit in enumerate(UNITS):
-            finish(store, unit, "j{}".format(number), "failed")
-
-        state = service.complete_campaign(campaign_id="1234567")
-
-        assert state.lifecycle == "complete"
-        assert store.replay("1234567")[-1] == LifecycleRecord(
-            state=Lifecycle.COMPLETE, at=AT
-        )
-        done = events.read(
-            "1234567", since_seq=0, kinds=["campaign.complete"], limit=10
-        )
-        assert done[0].data["counts"]["failed"] == 3
-
-    def test_refuses_while_units_are_left(self, service, store):
-        create(service)
-        finish(store, UNITS[0], "j1", "passed")
-
-        with pytest.raises(CampaignError, match="2 unit"):
-            service.complete_campaign(campaign_id="1234567")
-
-        assert "complete" not in [
-            getattr(r, "state", None) for r in store.replay("1234567")
-        ]
-
-    def test_refuses_a_cancelled_campaign(self, service, store):
-        create(service)
-        store.append(
-            "1234567", [LifecycleRecord(state=Lifecycle.CANCELLED, at=AT)]
-        )
-
-        with pytest.raises(CampaignError, match="reopen"):
-            service.complete_campaign(campaign_id="1234567")
-
-    def test_completing_twice_writes_once(self, service, store):
-        create(service)
-        for number, unit in enumerate(UNITS):
-            finish(store, unit, "j{}".format(number), "passed")
-
-        service.complete_campaign(campaign_id="1234567")
-        service.complete_campaign(campaign_id="1234567")
-
-        written = [
-            r
-            for r in store.replay("1234567")
-            if isinstance(r, LifecycleRecord)
-        ]
-        assert len(written) == 1

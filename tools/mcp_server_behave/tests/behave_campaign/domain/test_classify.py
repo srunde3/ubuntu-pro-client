@@ -2,11 +2,7 @@
 
 import pytest
 
-from behave_campaign.domain.classify import (
-    classify_result,
-    finished_from_mcp,
-    finished_from_mcp_payload,
-)
+from behave_campaign.domain.classify import classify_result, finished_from_mcp
 from behave_campaign.domain.records import CampaignError, Outcome, Unit
 
 AT = "2026-09-12T12:00:00Z"
@@ -96,9 +92,6 @@ def test_an_unclassifiable_result_keeps_the_job_id_and_says_why():
     assert "classify" in classified.problem
 
 
-UNIT_B = Unit("features/b.feature", "B", "noble", "lxd-vm")
-
-
 class TestMcpResultAdapter:
     def completed(self, scenarios, **overrides):
         result = {
@@ -177,30 +170,3 @@ class TestMcpResultAdapter:
 
         with pytest.raises(CampaignError, match="capacity_exceeded"):
             finished_from_mcp(UNIT_A, rejected)
-
-    def test_entries_pair_units_with_results(self):
-        finished = finished_from_mcp_payload(
-            [
-                {
-                    "unit": UNIT_A.as_dict(),
-                    "result": self.completed({"passed": 1}),
-                },
-                {
-                    "unit": UNIT_B.as_dict(),
-                    "result": self.completed(
-                        {"passed": 0, "failed": 1}, ok=False, job_id="job-2"
-                    ),
-                },
-            ]
-        )
-
-        assert [(f.unit, f.outcome, f.job_id) for f in finished] == [
-            (UNIT_A, "passed", "job-1"),
-            (UNIT_B, "failed", "job-2"),
-        ]
-
-    def test_entry_without_a_unit_is_rejected(self):
-        with pytest.raises(CampaignError, match="missing fields: unit"):
-            finished_from_mcp_payload(
-                [{"result": self.completed({"passed": 1})}]
-            )

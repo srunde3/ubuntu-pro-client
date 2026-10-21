@@ -27,13 +27,13 @@ def test_the_actionable_preset(kind, actionable):
 Bad: acts and asserts interleaved. The test checks four behaviours, and the first failure hides the rest.
 
 ```python
-def test_lifecycle(runner):
-    runner.start(campaign_id)
-    assert lifecycle(store.replay(campaign_id)) == Lifecycle.RUNNING
+def test_run_and_pause(runner):
+    runner.run(campaign_id)
+    assert state_of(store.replay(campaign_id)) == CampaignState.RUNNING
     runner.pause(campaign_id)
-    assert lifecycle(store.replay(campaign_id)) == Lifecycle.PAUSED
-    runner.resume(campaign_id)
-    assert lifecycle(store.replay(campaign_id)) == Lifecycle.RUNNING
+    assert state_of(store.replay(campaign_id)) == CampaignState.PAUSED
+    runner.run(campaign_id)
+    assert state_of(store.replay(campaign_id)) == CampaignState.RUNNING
 ```
 
 Write one test per behaviour, or a table when the behaviours are cases of one rule. When the behaviour is itself a sequence, such as what repeated ticks do, the earlier steps are part of the arrangement. Name the test after the sequence: `test_starvation_is_reported_once_per_episode`.
@@ -53,7 +53,7 @@ _signals(pid=RECORDED_PID, alive=True)
 
 ```python
 campaign_id = create(store)
-store.append(campaign_id, [LifecycleRecord(state=state, at=AT)])
+store.append(campaign_id, [IntentRecord(Intent.HOLD, AT)])
 ```
 
 Good: two ids whose names say which is which.
@@ -81,7 +81,7 @@ Good: the rule and its input are visible, and nothing else runs.
 def test_a_busy_wsl_lane_does_not_hold_back_lxd(self):
     records = [
         *plan(UNIT_W1, UNIT_W2, UNIT_A, UNIT_B),
-        LifecycleRecord(Lifecycle.RUNNING, AT),
+        IntentRecord(Intent.RUN, AT),
         attempt(UNIT_W1, "running"),
     ]
     lanes = [Lane(unit=UNIT_W1, job_id="job1")]
@@ -98,7 +98,7 @@ Bad: the same rule tested through the runner and a store. A failure could be the
 ```python
 def test_wsl_does_not_block_lxd(runner, store, lanes):
     campaign_id = create(store, units=[*WSL_UNITS, *UNITS], lanes={Pool.LXD: 2, Pool.WSL: 1})
-    runner.start(campaign_id)
+    runner.run(campaign_id)
     runner.tick(campaign_id)
     assert len(lanes.started) == 3
 ```
@@ -146,7 +146,7 @@ Bad: a real thread and a sleep. The test is slow, and it fails when the machine 
 
 ```python
 runner = CampaignRunner(..., ticker=ThreadTicker(interval=0.1))
-runner.start(campaign_id)
+runner.run(campaign_id)
 time.sleep(1)
 assert len(lanes.started) == 2
 ```
@@ -233,36 +233,33 @@ def test_each_outcome_announces_its_own_event(outcome, kind):
     assert unit_event_kind(outcome) == kind
 ```
 
-Good: two dimensions. The table is keyed by every combination, and the completeness test builds the full product. The test ids read like `failed-True-True`.
+Good: several dimensions. The table is keyed by every combination, and the completeness test builds the full product. A combination that cannot arise is in the table too, marked `None`, so the test says it is refused rather than leaving it out. The test ids read like `hold-open-True`.
 
 ```python
-SCHEDULABLE = {
-    (UnitState.UNATTEMPTED, False): True,
-    (UnitState.UNATTEMPTED, True): True,
-    (UnitState.RUNNING, False): False,
-    (UnitState.RUNNING, True): False,
-    (UnitState.FAILED, False): False,
-    (UnitState.FAILED, True): True,
-    # ... one row for every state and flag
+NAMED_STATE = {
+    (Intent.NEVER_RUN, Progress.UNTOUCHED, False): CampaignState.CREATED,
+    (Intent.NEVER_RUN, Progress.OPEN, False): None,
+    (Intent.RUN, Progress.OPEN, True): CampaignState.RUNNING,
+    (Intent.HOLD, Progress.OPEN, True): CampaignState.PAUSING,
+    # ... one row for every intent, progress and in-flight flag
 }
 
 
-def test_every_state_and_retry_flag_has_an_expectation():
-    assert set(SCHEDULABLE) == {
-        (state, retry) for state in UnitState for retry in (False, True)
-    }
+def test_every_combination_has_an_expectation():
+    assert set(NAMED_STATE) == set(
+        itertools.product(Intent, Progress, (False, True))
+    )
 
 
 @pytest.mark.parametrize(
-    "state, retry_pending, expected",
-    [(state, retry, want) for (state, retry), want in SCHEDULABLE.items()],
+    "intent_, progress_, busy",
+    [key for key, state in NAMED_STATE.items() if state is not None],
     ids=str,
 )
-def test_schedulable_by_state_and_retry(state, retry_pending, expected):
-    status = UnitStatus(
-        unit=UNIT, state=state, job_id=None, attempts=(), retry_pending=retry_pending
-    )
-    assert is_schedulable(status) is expected
+def test_campaign_state_names_a_reachable_combination(intent_, progress_, busy):
+    expected = NAMED_STATE[(intent_, progress_, busy)]
+
+    assert campaign_state(intent_, progress_, busy) == expected
 ```
 
 Good: a decision function whose result is an enum. Name each case with `pytest.param(..., id=...)`, and check that the cases reach every result.

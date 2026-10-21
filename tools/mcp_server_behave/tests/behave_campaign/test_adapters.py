@@ -12,6 +12,7 @@ from behave_campaign.adapters import (
     JsonlCampaignStore,
     JsonlEventLog,
     NullEventLog,
+    ServiceLaneRunner,
     SingleFileCampaignStore,
     TarBundleWriter,
 )
@@ -32,7 +33,15 @@ from behave_campaign.ports import (
     CampaignLockedError,
     CampaignNotFoundError,
 )
+from behave_mcp.adapters import (
+    InMemoryJobRegistry,
+    LocalFeatureFileReader,
+    LocalJobResultStoreFactory,
+)
+from behave_mcp.config import Settings
 from behave_mcp.domain.pools import Pool
+from behave_mcp.service import BehaveService
+from tests.conftest import FakeLauncher, FakeProcessHandle, FakeWorkspace
 
 UNIT_A = Unit("features/a.feature", "A", "jammy", "lxd-container")
 UNIT_B = Unit("features/b.feature", "B", "noble", "lxd-vm")
@@ -599,3 +608,63 @@ class TestNullEventLog:
             log.wait("c1", since_seq=0, kinds=[], limit=10, timeout=0.01) == []
         )
         assert log.latest_seq("c1") == 0
+
+
+FEATURE_A = """Feature: A feature
+
+  Scenario Outline: A
+    Given a `<release>` `<machine_type>` machine
+
+    Examples: ubuntu release
+      | release | machine_type  |
+      | jammy   | lxd-container |
+"""
+
+
+class TestServiceLaneRunner:
+    """Lanes opened, polled and killed through a real BehaveService."""
+
+    @staticmethod
+    def lane_runner(tmp_path, handle):
+        repo_root = tmp_path / "repo"
+        (repo_root / "features").mkdir(parents=True)
+        (repo_root / "features" / "a.feature").write_text(FEATURE_A)
+        (repo_root / "tox.ini").write_text("[tox]\n")
+        service = BehaveService(
+            workspace=FakeWorkspace(repo_root=repo_root, log_dir=tmp_path),
+            settings=Settings(
+                pool_limits={Pool.LXD: 1, Pool.CLOUD: 0, Pool.WSL: 1},
+                campaign_poll_timeout=60,
+                host="127.0.0.1",
+                port=8000,
+            ),
+            feature_reader=LocalFeatureFileReader(),
+            results=LocalJobResultStoreFactory(),
+            registry=InMemoryJobRegistry(),
+            launcher=FakeLauncher(handle=handle),
+            monotonic=lambda: 0.0,
+            sleep=lambda seconds: None,
+            now_utc=lambda: AT,
+            new_job_id=lambda: "job-a",
+        )
+        return ServiceLaneRunner(service), repo_root
+
+    def test_a_running_job_is_signalled(self, tmp_path):
+        handle = FakeProcessHandle(returncode=None)
+        lanes, repo_root = self.lane_runner(tmp_path, handle)
+        job_id = lanes.start(UNIT_A, repo_root=repo_root, install_from="local")
+
+        killed = lanes.kill(job_id)
+
+        assert killed is True
+        assert handle.terminated is True
+
+    def test_a_finished_job_is_not_signalled(self, tmp_path):
+        handle = FakeProcessHandle(returncode=0)
+        lanes, repo_root = self.lane_runner(tmp_path, handle)
+        job_id = lanes.start(UNIT_A, repo_root=repo_root, install_from="local")
+
+        killed = lanes.kill(job_id)
+
+        assert killed is False
+        assert handle.terminated is False

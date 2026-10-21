@@ -12,11 +12,13 @@ from behave_campaign.domain.records import CampaignHeader as HeaderRecord
 from behave_campaign.domain.records import Record, UnitStatus, lanes_as_dict
 from behave_campaign.domain.state import (
     busy_by_pool,
+    campaign_state,
     count_states,
     group_by_scenario,
-    lifecycle,
+    in_flight,
+    intent,
+    progress,
     reduce_units,
-    running,
 )
 from behave_campaign.messages import (
     AttemptView,
@@ -24,7 +26,7 @@ from behave_campaign.messages import (
     CampaignListing,
     CampaignRepo,
     CampaignScope,
-    CampaignState,
+    CampaignSummary,
     ProblemUnit,
     ScenarioProblems,
     ScopeSize,
@@ -77,21 +79,26 @@ def campaign_header(
     )
 
 
-def campaign_state(
+def campaign_summary(
     campaign_id: str,
     records: Sequence[Record],
     counted: Sequence[UnitStatus] | None = None,
-) -> CampaignState:
-    """The campaign's state; ``counted`` narrows the counts to a selection.
+) -> CampaignSummary:
+    """The campaign's summary; ``counted`` narrows the counts to a selection.
 
-    ``lifecycle`` and ``lanes_busy`` are facts about the whole campaign and
-    never narrow.
+    The state, intent, progress and ``lanes_busy`` are facts about the
+    whole campaign and never narrow.
     """
     statuses = reduce_units(records)
-    return CampaignState(
+    busy = in_flight(statuses)
+    wanted = intent(records)
+    left = progress(statuses)
+    return CampaignSummary(
         campaign_id=campaign_id,
-        lifecycle=lifecycle(records),
-        lanes_busy=len(running(statuses)),
+        state=campaign_state(wanted, left, bool(busy)),
+        intent=wanted,
+        progress=left,
+        lanes_busy=len(busy),
         counts=StateCounts(
             **count_states(statuses if counted is None else counted)
         ),
@@ -111,7 +118,7 @@ def campaign_listing(
     header = header_of(records) or HeaderRecord()
     scope = header.filters
     return CampaignListing(
-        **campaign_state(campaign_id, records).model_dump(),
+        **campaign_summary(campaign_id, records).model_dump(),
         created_at=header.at,
         install_from=header.install_from,
         lanes=lanes_as_dict(header.lanes),

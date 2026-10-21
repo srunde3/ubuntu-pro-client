@@ -55,6 +55,8 @@ docs/build/
 tools/mcp_server_behave/build/
 tools/mcp_server_behave/.venv/
 tools/mcp_server_behave/.pytest_cache/
+# openspec is a local implementation aid, not a record of the design
+tools/mcp_server_behave/openspec/
 
 # compiled translations
 debian/po/usr

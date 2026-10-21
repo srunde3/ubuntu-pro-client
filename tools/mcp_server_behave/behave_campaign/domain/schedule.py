@@ -8,28 +8,22 @@ from typing import Any, Mapping, Sequence
 from behave_campaign.domain.classify import Classification, classify_result
 from behave_campaign.domain.records import (
     DEFAULT_INSTALL_SOURCE,
-    Lifecycle,
+    CampaignState,
+    Intent,
     Record,
     StringEnum,
     Unit,
     UnitState,
     UnitStatus,
 )
-from behave_campaign.domain.state import lifecycle, outstanding, reduce_units
+from behave_campaign.domain.state import (
+    campaign_state,
+    in_flight,
+    intent,
+    progress,
+    reduce_units,
+)
 from behave_mcp.domain.pools import Pool
-
-
-def is_schedulable(status: UnitStatus) -> bool:
-    """Whether a scheduler may open a lane for this unit.
-
-    Either it has never been attempted, or someone has asked for another go
-    since its last attempt. A failed unit is not schedulable on its own:
-    the scheduler runs unattended, and judging a failure flaky-or-real is
-    for whoever is watching, not for the tick loop.
-    """
-    if status.state == UnitState.RUNNING:
-        return False
-    return status.state == UnitState.UNATTEMPTED or status.retry_pending
 
 
 def select_schedulable(
@@ -40,7 +34,7 @@ def select_schedulable(
     Each pool fills only its own free lanes, so a full pool never holds
     back units bound for another.
     """
-    ready = [s for s in statuses if is_schedulable(s)]
+    ready = [s for s in statuses if s.queueable]
     ready.sort(key=lambda s: s.state != UnitState.UNATTEMPTED)
     taken = {pool: 0 for pool in free}
     selected = []
@@ -53,12 +47,10 @@ def select_schedulable(
 
 
 class ControlAction(StringEnum):
-    """What a caller can ask a running server to do with a campaign."""
+    """What a caller can ask of a campaign. Pause takes an optional kill."""
 
-    START = "start"
+    RUN = "run"
     PAUSE = "pause"
-    RESUME = "resume"
-    CANCEL = "cancel"
 
 
 @dataclass(frozen=True)
@@ -88,14 +80,13 @@ class TickPlan:
 
     ``record`` holds the finished lanes, classified. ``start`` holds the
     units to open new lanes for. Both are empty when there is nothing to do,
-    which is the common case. ``complete`` means a running campaign has no
-    work left and should be marked complete.
+    which is the common case. ``state`` is the campaign's named state once
+    the finished lanes are recorded.
     """
 
     record: tuple[Classification, ...] = ()
     start: tuple[Unit, ...] = ()
-    lifecycle: str = Lifecycle.CREATED
-    complete: bool = False
+    state: CampaignState = CampaignState.CREATED
 
     @property
     def idle(self) -> bool:
@@ -112,9 +103,9 @@ def plan_tick(
     """Decide what to do next. Pure: starts nothing and writes nothing.
 
     Finished lanes are classified first, so the units they free are
-    available to fill in the same tick. New lanes are opened only while the
-    campaign is running, which is what makes a paused campaign drain: its
-    in-flight jobs are still recorded, and nothing new begins.
+    available to fill in the same tick. New lanes are opened only under
+    intent run, which is what makes a paused campaign drain: its in-flight
+    jobs are still recorded, and nothing new begins.
     """
     classified = tuple(
         classify_result(lane.unit, lane.result, at)
@@ -123,13 +114,13 @@ def plan_tick(
     )
 
     after = [*records, *(item.finished for item in classified)]
-    state = lifecycle(after)
-    if state != Lifecycle.RUNNING:
-        return TickPlan(record=classified, lifecycle=state)
-    if not outstanding(after):
-        return TickPlan(
-            record=classified, lifecycle=Lifecycle.COMPLETE, complete=True
-        )
+    statuses = reduce_units(after)
+    wanted = intent(after)
+    state = campaign_state(
+        wanted, progress(statuses), bool(in_flight(statuses))
+    )
+    if wanted != Intent.RUN or state == CampaignState.COMPLETE:
+        return TickPlan(record=classified, state=state)
 
     busy: dict[Pool, int] = {}
     for lane in lanes:
@@ -140,17 +131,15 @@ def plan_tick(
         for pool, limit in lane_limits.items()
     }
     if not any(free.values()):
-        return TickPlan(record=classified, lifecycle=state)
+        return TickPlan(record=classified, state=state)
 
-    # Only units that are untouched or have an explicit retry pending: a
-    # scheduler never re-runs a problem unit on its own. Running units are
-    # excluded too, and every busy lane recorded a running attempt when it
-    # opened, so a unit cannot enter two lanes.
+    # Only queueable units: a scheduler never re-runs a problem unit on its
+    # own. Units in flight are excluded too, and every busy lane recorded
+    # an attempt when it opened, so a unit cannot enter two lanes.
     return TickPlan(
         record=classified,
         start=tuple(
-            status.unit
-            for status in select_schedulable(reduce_units(after), free)
+            status.unit for status in select_schedulable(statuses, free)
         ),
-        lifecycle=state,
+        state=state,
     )

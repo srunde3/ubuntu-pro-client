@@ -6,13 +6,23 @@ import pytest
 
 from behave_campaign.domain.events import (
     ACTIONABLE_PRESET,
+    Cause,
     EventKind,
     event_matches,
     expand_event_kinds,
     failure_details,
+    state_events,
     unit_event_kind,
 )
-from behave_campaign.domain.records import CampaignError, Outcome
+from behave_campaign.domain.records import (
+    CampaignError,
+    CampaignState,
+    Intent,
+    Outcome,
+    Progress,
+)
+
+AT = "2026-09-12T12:00:00Z"
 
 
 class TestEventMatching:
@@ -103,12 +113,11 @@ def test_an_unclassifiable_result_announces_unclassifiable(outcome):
 # a watcher's own retries are left out of what it has to react to.
 ACTIONABLE = {
     EventKind.CAMPAIGN_CREATED: True,
-    EventKind.CAMPAIGN_STARTED: True,
-    EventKind.CAMPAIGN_PAUSED: True,
-    EventKind.CAMPAIGN_RESUMED: True,
-    EventKind.CAMPAIGN_CANCELLED: True,
-    EventKind.CAMPAIGN_REOPENED: True,
+    EventKind.CAMPAIGN_RUNNING: True,
+    EventKind.CAMPAIGN_FINISHING: True,
     EventKind.CAMPAIGN_COMPLETE: True,
+    EventKind.CAMPAIGN_PAUSING: True,
+    EventKind.CAMPAIGN_PAUSED: True,
     EventKind.LANE_STARTED: False,
     EventKind.LANE_OVERDUE: True,
     EventKind.UNIT_PASSED: False,
@@ -116,6 +125,7 @@ ACTIONABLE = {
     EventKind.UNIT_SKIPPED: True,
     EventKind.UNIT_ERRORED: True,
     EventKind.UNIT_UNCLASSIFIABLE: True,
+    EventKind.UNIT_INTERRUPTED: True,
     EventKind.UNIT_RETRIED: False,
     EventKind.ANOMALY_REPEATED_SCENARIO_FAILURE: True,
     EventKind.ANOMALY_REPEATED_SKIPS: True,
@@ -134,6 +144,71 @@ def test_the_actionable_preset(kind, actionable):
     matched = event_matches(kind, patterns)
 
     assert matched is actionable
+
+
+# The event announcing arrival in each named state.
+EVENT_FOR_STATE = {
+    CampaignState.CREATED: EventKind.CAMPAIGN_CREATED,
+    CampaignState.RUNNING: EventKind.CAMPAIGN_RUNNING,
+    CampaignState.FINISHING: EventKind.CAMPAIGN_FINISHING,
+    CampaignState.COMPLETE: EventKind.CAMPAIGN_COMPLETE,
+    CampaignState.PAUSING: EventKind.CAMPAIGN_PAUSING,
+    CampaignState.PAUSED: EventKind.CAMPAIGN_PAUSED,
+}
+
+
+def test_every_campaign_state_has_an_expected_event():
+    assert set(EVENT_FOR_STATE) == set(CampaignState)
+
+
+@pytest.mark.parametrize("state, kind", EVENT_FOR_STATE.items(), ids=str)
+def test_arriving_in_a_state_announces_its_event(state, kind):
+    # Any other state will do as the one left behind.
+    previous = next(other for other in CampaignState if other != state)
+
+    (event,) = state_events(
+        before=previous,
+        after=state,
+        intent=Intent.RUN,
+        progress=Progress.OPEN,
+        cause=Cause.SCHEDULER,
+        at=AT,
+    )
+
+    assert event.kind == kind
+
+
+def test_staying_in_a_state_announces_nothing():
+    events = state_events(
+        before=CampaignState.RUNNING,
+        after=CampaignState.RUNNING,
+        intent=Intent.RUN,
+        progress=Progress.OPEN,
+        cause=Cause.RUN,
+        at=AT,
+    )
+
+    assert events == []
+
+
+def test_a_state_event_says_where_from_and_why():
+    (event,) = state_events(
+        before=CampaignState.RUNNING,
+        after=CampaignState.PAUSING,
+        intent=Intent.HOLD,
+        progress=Progress.OPEN,
+        cause=Cause.PAUSE,
+        at=AT,
+        data={"kill": False},
+    )
+
+    assert event.data == {
+        "from": "running",
+        "intent": "hold",
+        "progress": "open",
+        "cause": "pause",
+        "kill": False,
+    }
 
 
 class TestFailureDetails:

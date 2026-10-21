@@ -24,8 +24,8 @@ from behave_campaign.domain.records import (
     DEFAULT_INSTALL_SOURCE,
     INSTALL_SOURCES,
     STATES,
+    CampaignState,
     Filters,
-    Lifecycle,
 )
 from behave_campaign.domain.state import GROUPINGS, GroupBy
 from behave_mcp.domain import layout
@@ -115,13 +115,6 @@ def _campaign_id(args: argparse.Namespace) -> str:
     return _campaign_file(args).stem
 
 
-def _load_json(source: str) -> Any:
-    if source == "-":
-        return json.load(sys.stdin)
-    with open(source, "r") as stream:
-        return json.load(stream)
-
-
 def _filters(args: argparse.Namespace) -> Filters:
     return Filters(
         feature=tuple(args.feature or ()),
@@ -155,15 +148,6 @@ def _command_create(args: argparse.Namespace) -> BaseModel:
     )
 
 
-def _command_record(args: argparse.Namespace) -> BaseModel:
-    return _service(_campaign_file(args)).record_attempts(
-        campaign_id=_campaign_id(args),
-        payload=_load_json(args.input),
-        install_from=args.install_from,
-        from_mcp=args.from_mcp,
-    )
-
-
 def _command_status(args: argparse.Namespace) -> BaseModel:
     return _service(_campaign_file(args)).campaign_status(
         campaign_id=_campaign_id(args),
@@ -181,25 +165,11 @@ def _command_units(args: argparse.Namespace) -> BaseModel:
     )
 
 
-def _command_next(args: argparse.Namespace) -> BaseModel:
-    return _service(_campaign_file(args)).next_units(
-        campaign_id=_campaign_id(args),
-        filters=_filters(args),
-        limit=args.limit,
-    )
-
-
 def _command_history(args: argparse.Namespace) -> BaseModel:
     return _service(_campaign_file(args)).unit_history(
         campaign_id=_campaign_id(args),
         filters=_filters(args),
         limit=args.limit,
-    )
-
-
-def _command_complete(args: argparse.Namespace) -> BaseModel:
-    return _service(_campaign_file(args)).complete_campaign(
-        campaign_id=_campaign_id(args)
     )
 
 
@@ -237,7 +207,7 @@ def _command_events(args: argparse.Namespace) -> Output:
 
 
 def _follow_events(args: argparse.Namespace) -> Iterator[BaseModel]:
-    """Print each new batch until the campaign has nothing more to say."""
+    """Print each new batch until the campaign stops: paused or complete."""
     since_seq = args.since_seq
     while True:
         batch = _read_events(args, since_seq)
@@ -245,11 +215,7 @@ def _follow_events(args: argparse.Namespace) -> Iterator[BaseModel]:
             yield batch
             since_seq = batch.next_seq
             continue
-        settled = batch.lifecycle in (
-            Lifecycle.COMPLETE,
-            Lifecycle.CANCELLED,
-        )
-        if settled and batch.lanes_busy == 0:
+        if batch.state in (CampaignState.PAUSED, CampaignState.COMPLETE):
             return
         time.sleep(args.interval)
 
@@ -270,6 +236,7 @@ ATTEMPT_COLUMNS = (
     "started_at",
     "outcome",
     "finished_at",
+    "interrupted",
 )
 
 
@@ -422,26 +389,6 @@ def build_parser() -> argparse.ArgumentParser:
             ),
         )
 
-    record = _add_command(
-        subparsers, "record", "append attempt results", _command_record
-    )
-    record.add_argument(
-        "--input", default="-", help="JSON file, or - for stdin (default)"
-    )
-    record.add_argument(
-        "--from-mcp",
-        action="store_true",
-        dest="from_mcp",
-        help="read [{unit, result}] MCP payloads instead of plain attempts",
-    )
-    record.add_argument(
-        "--install-from",
-        required=True,
-        choices=INSTALL_SOURCES,
-        dest="install_from",
-        help="where the job installed ubuntu-pro-client from",
-    )
-
     status = _add_command(
         subparsers, "status", "show current state per unit", _command_status
     )
@@ -470,24 +417,11 @@ def build_parser() -> argparse.ArgumentParser:
     units.add_argument("--limit", type=int, default=DEFAULT_UNITS_LIMIT)
     _add_format(units, _unit_rows)
 
-    following = _add_command(
-        subparsers, "next", "show the units to run next", _command_next
-    )
-    following.add_argument("--limit", type=int, default=1)
-    _add_format(following, _unit_rows)
-
     history = _add_command(
         subparsers, "history", "show every attempt per unit", _command_history
     )
     history.add_argument("--limit", type=int, default=DEFAULT_UNITS_LIMIT)
     _add_format(history, _attempt_rows)
-
-    complete = subparsers.add_parser(
-        "complete",
-        help="mark a campaign complete once no unit is left to run or retry",
-    )
-    _add_campaign(complete)
-    complete.set_defaults(handler=_command_complete)
 
     exported = subparsers.add_parser(
         "export",
@@ -538,7 +472,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help=(
             "keep printing batches, one JSON document per line, until the "
-            "campaign is complete or cancelled with no lane in flight"
+            "campaign is paused or complete"
         ),
     )
     events.add_argument(

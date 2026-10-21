@@ -13,7 +13,7 @@ class StringEnum(str, Enum):
     """A string enum that reads as its value.
 
     ``Enum`` renders a member as ``Class.MEMBER``, which would put
-    "Lifecycle.PAUSED" into error messages a person reads and JSON a caller
+    "Intent.HOLD" into error messages a person reads and JSON a caller
     parses. ``enum.StrEnum`` would do this for us but needs Python 3.11, and
     this package supports 3.10.
     """
@@ -36,16 +36,19 @@ class RecordType(StringEnum):
     # attempt on its own. Attempt pairs them on job_id.
     STARTED = "started"
     FINISHED = "finished"
-    LIFECYCLE = "lifecycle"
+    # A job that ended without establishing an outcome, such as one killed
+    # by a pause. It closes the attempt and leaves the unit queueable.
+    INTERRUPTED = "interrupted"
+    INTENT = "intent"
     RETRY = "retry"
 
 
 class Outcome(StringEnum):
     """What a finished job established.
 
-    "running" is not among them: a unit is running when its latest attempt
-    has no finish yet, which is a fact about the attempt rather than a
-    result the job reported.
+    "in flight" is not among them: a unit is in flight while an attempt has
+    no finish yet, which is a fact about the attempt rather than a result
+    the job reported.
     """
 
     PASSED = "passed"
@@ -55,36 +58,56 @@ class Outcome(StringEnum):
 
 
 class UnitState(StringEnum):
-    """A unit's condition, derived from its attempts rather than stored."""
+    """A unit's condition, derived from its attempts rather than stored.
+
+    IN_FLIGHT wins over the outcome: a passed unit being retried is in
+    flight until that attempt ends, and passed again after it.
+    """
 
     UNATTEMPTED = "unattempted"
-    RUNNING = "running"
+    IN_FLIGHT = "in_flight"
     PASSED = "passed"
     FAILED = "failed"
     SKIPPED = "skipped"
     ERROR = "error"
 
 
-class Lifecycle(StringEnum):
-    """Where a campaign is in its life.
+class Intent(StringEnum):
+    """What the caller last asked a campaign to do. The only state written.
 
-    CREATED is the absence of any lifecycle record; every other state is
-    written.
+    NEVER_RUN is the absence of any intent record.
     """
+
+    NEVER_RUN = "never_run"
+    RUN = "run"
+    HOLD = "hold"
+
+
+WRITABLE_INTENTS = (Intent.RUN, Intent.HOLD)
+
+
+class Progress(StringEnum):
+    """How much work a campaign has left, derived from its units."""
+
+    # No unit has been attempted.
+    UNTOUCHED = "untouched"
+    # At least one unit can be queued.
+    OPEN = "open"
+    # Nothing can be queued, but a job is in flight.
+    FINISHING = "finishing"
+    # Nothing can be queued and nothing is in flight.
+    SETTLED = "settled"
+
+
+class CampaignState(StringEnum):
+    """A campaign's named state: one reachable pair of intent and progress."""
 
     CREATED = "created"
     RUNNING = "running"
-    PAUSED = "paused"
-    CANCELLED = "cancelled"
+    FINISHING = "finishing"
     COMPLETE = "complete"
-
-
-WRITABLE_LIFECYCLE = (
-    Lifecycle.RUNNING,
-    Lifecycle.PAUSED,
-    Lifecycle.CANCELLED,
-    Lifecycle.COMPLETE,
-)
+    PAUSING = "pausing"
+    PAUSED = "paused"
 
 
 # Outcomes worth another look. A unit in one of these is only ever re-run
@@ -102,7 +125,7 @@ OUTCOMES = tuple(outcome.value for outcome in Outcome)
 STATES = tuple(state.value for state in UnitState)
 
 
-LIFECYCLE_STATES = tuple(state.value for state in Lifecycle)
+CAMPAIGN_STATES = tuple(state.value for state in CampaignState)
 
 
 INSTALL_SOURCES = (
@@ -127,14 +150,13 @@ STARTED_FIELDS = (*UNIT_FIELDS, "job_id", "install_from", "at")
 FINISHED_FIELDS = (*UNIT_FIELDS, "job_id", "outcome", "at")
 
 
-# What a caller hands to record_attempts: one completed try.
-FINISHED_INPUT_FIELDS = (*UNIT_FIELDS, "job_id", "outcome")
-
-
 PLAN_FIELDS = (*UNIT_FIELDS, "at")
 
 
-LIFECYCLE_FIELDS = ("state", "at", "reason")
+INTERRUPTED_FIELDS = (*UNIT_FIELDS, "job_id", "at", "reason")
+
+
+INTENT_FIELDS = ("intent", "at")
 
 
 RETRY_FIELDS = (*UNIT_FIELDS, "at", "reason")
@@ -227,6 +249,16 @@ class AttemptFinished:
 
 
 @dataclass(frozen=True)
+class AttemptInterrupted:
+    """That job ended without an outcome; the unit may be queued again."""
+
+    unit: Unit
+    job_id: str
+    at: str = ""
+    reason: str = ""
+
+
+@dataclass(frozen=True)
 class Attempt:
     """One try at a unit: one job, from start to finish.
 
@@ -240,10 +272,11 @@ class Attempt:
     started_at: str = ""
     outcome: str | None = None
     finished_at: str = ""
+    interrupted: bool = False
 
     @property
-    def running(self) -> bool:
-        return self.outcome is None
+    def in_flight(self) -> bool:
+        return self.outcome is None and not self.interrupted
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -252,6 +285,7 @@ class Attempt:
             "started_at": self.started_at,
             "outcome": self.outcome,
             "finished_at": self.finished_at,
+            "interrupted": self.interrupted,
         }
 
 
@@ -265,6 +299,24 @@ class UnitStatus:
     # state still reports what actually happened; this is only about what
     # the scheduler may pick up.
     retry_pending: bool = False
+
+    @property
+    def in_flight(self) -> bool:
+        return self.state == UnitState.IN_FLIGHT
+
+    @property
+    def queueable(self) -> bool:
+        """Whether a scheduler may start an attempt at this unit.
+
+        A problem unit is not queueable on its own: judging a failure
+        flaky or real is for whoever is watching, so it waits for a retry.
+        """
+        if self.in_flight:
+            return False
+        if not self.attempts or self.retry_pending:
+            return True
+        # The attempt asked for never happened, so it is still owed.
+        return self.attempts[-1].interrupted
 
     def as_dict(self, include_attempts: bool = False) -> dict[str, Any]:
         data: dict[str, Any] = self.unit.as_dict()
@@ -339,16 +391,11 @@ class RetryRecord:
 
 
 @dataclass(frozen=True)
-class LifecycleRecord:
-    """A lifecycle transition someone asked for.
+class IntentRecord:
+    """What a caller asked the campaign to do: run, or hold."""
 
-    ``reason`` explains transitions the server made on its own, such as
-    pausing after a restart, and is empty for ones a caller asked for.
-    """
-
-    state: Lifecycle
+    intent: Intent
     at: str = ""
-    reason: str = ""
 
 
 Record = (
@@ -356,7 +403,8 @@ Record = (
     | PlanRecord
     | AttemptStarted
     | AttemptFinished
-    | LifecycleRecord
+    | AttemptInterrupted
+    | IntentRecord
     | RetryRecord
 )
 
@@ -410,16 +458,6 @@ def validate_outcome(value: Any) -> Outcome:
         ) from None
 
 
-def parse_finished(raw: Any) -> AttemptFinished:
-    """Read one completed try as a caller describes it."""
-    body = require_fields(raw, FINISHED_INPUT_FIELDS, "attempt")
-    return AttemptFinished(
-        unit=_unit_from(body, "attempt"),
-        job_id=text_field(body, "job_id", "attempt"),
-        outcome=validate_outcome(body["outcome"]),
-    )
-
-
 def validate_campaign_id(value: str) -> str:
     """Return ``value`` if it is usable as a campaign id and a file name.
 
@@ -470,6 +508,23 @@ def _parse_finished(body: dict[str, Any]) -> AttemptFinished:
         outcome=validate_outcome(body["outcome"]),
         at=text_field(body, "at", "finished"),
     )
+
+
+def _parse_interrupted(body: dict[str, Any]) -> AttemptInterrupted:
+    require_fields(body, INTERRUPTED_FIELDS, "interrupted")
+    return AttemptInterrupted(
+        unit=_unit_from(body, "interrupted"),
+        job_id=text_field(body, "job_id", "interrupted"),
+        at=text_field(body, "at", "interrupted"),
+        reason=_reason_field(body, "interrupted"),
+    )
+
+
+def _reason_field(body: dict[str, Any], label: str) -> str:
+    reason = body["reason"]
+    if not isinstance(reason, str):
+        raise CampaignError("{} field 'reason' must be a string".format(label))
+    return reason
 
 
 def _parse_campaign(body: dict[str, Any]) -> CampaignHeader:
@@ -585,34 +640,27 @@ def parse_record(raw: Any) -> Record:
         return _parse_started(body)
     if kind == RecordType.FINISHED:
         return _parse_finished(body)
+    if kind == RecordType.INTERRUPTED:
+        return _parse_interrupted(body)
     if kind == RecordType.CAMPAIGN:
         return _parse_campaign(body)
     if kind == RecordType.RETRY:
         require_fields(body, RETRY_FIELDS, "retry")
-        reason = body["reason"]
-        if not isinstance(reason, str):
-            raise CampaignError("retry field 'reason' must be a string")
         return RetryRecord(
             unit=parse_unit({f: body[f] for f in UNIT_FIELDS}),
             at=text_field(body, "at", "retry"),
-            reason=reason,
+            reason=_reason_field(body, "retry"),
         )
-    if kind == RecordType.LIFECYCLE:
-        require_fields(body, LIFECYCLE_FIELDS, "lifecycle")
-        state = body["state"]
-        if state not in WRITABLE_LIFECYCLE:
+    if kind == RecordType.INTENT:
+        require_fields(body, INTENT_FIELDS, "intent")
+        intent = body["intent"]
+        if intent not in WRITABLE_INTENTS:
             raise CampaignError(
-                "lifecycle state must be one of: {}".format(
-                    ", ".join(WRITABLE_LIFECYCLE)
-                )
+                "intent must be one of: {}".format(", ".join(WRITABLE_INTENTS))
             )
-        reason = body["reason"]
-        if not isinstance(reason, str):
-            raise CampaignError("lifecycle field 'reason' must be a string")
-        return LifecycleRecord(
-            state=Lifecycle(state),
-            at=text_field(body, "at", "lifecycle"),
-            reason=reason,
+        return IntentRecord(
+            intent=Intent(intent),
+            at=text_field(body, "at", "intent"),
         )
     raise CampaignError(
         "record type must be one of: {}".format(", ".join(RECORD_TYPES))
@@ -631,12 +679,11 @@ def encode_record(record: Record) -> dict[str, Any]:
             "lanes": lanes_as_dict(record.lanes),
         }
 
-    if isinstance(record, LifecycleRecord):
+    if isinstance(record, IntentRecord):
         return {
-            "type": RecordType.LIFECYCLE,
-            "state": record.state,
+            "type": RecordType.INTENT,
+            "intent": record.intent,
             "at": record.at,
-            "reason": record.reason,
         }
 
     if isinstance(record, RetryRecord):
@@ -657,6 +704,11 @@ def encode_record(record: Record) -> dict[str, Any]:
         data["type"] = RecordType.FINISHED
         data["job_id"] = record.job_id
         data["outcome"] = record.outcome
+        return data
+    if isinstance(record, AttemptInterrupted):
+        data["type"] = RecordType.INTERRUPTED
+        data["job_id"] = record.job_id
+        data["reason"] = record.reason
         return data
     data["type"] = RecordType.PLAN
     return data

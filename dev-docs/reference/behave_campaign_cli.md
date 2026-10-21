@@ -1,8 +1,10 @@
 # `behave-campaign` CLI reference
 
-`behave-campaign` reads and writes a behave test campaign: the record of which
-test units are in scope, what has been attempted, and what each attempt
-established. A unit is one scenario for one release on one machine type.
+`behave-campaign` creates, inspects and exports a behave test campaign: the
+record of which test units are in scope, what has been attempted, and what
+each attempt established. A unit is one scenario for one release on one
+machine type. The `behave` MCP server runs a campaign and records every
+attempt; the CLI does neither.
 
 Run it from `tools/mcp_server_behave`:
 
@@ -11,8 +13,8 @@ uv sync --extra test
 uv run behave-campaign <command> [options]
 ```
 
-Every command prints one JSON document to stdout and exits `0`; `units`,
-`next` and `history` also take `--format csv`. An invalid argument, an
+Every command prints one JSON document to stdout and exits `0`; `units` and
+`history` also take `--format csv`. An invalid argument, an
 unknown value, a missing campaign, or an unreadable file prints a message to
 stderr and exits `2`. JSON shapes match the `behave` MCP server's campaign
 tools.
@@ -22,8 +24,13 @@ or `$MCP_STATE_DIR/campaigns/ID.jsonl` when `MCP_STATE_DIR` is set -- the same
 file the `behave` MCP server uses for that id. `--repo-root` defaults to
 `$UBUNTU_PRO_CLIENT_REPO`.
 
-Unit states: `unattempted`, `running`, `passed`, `failed`, `skipped`,
+Unit states: `unattempted`, `in_flight`, `passed`, `failed`, `skipped`,
 `error`.
+
+Campaign states: `created`, `running`, `finishing`, `complete`, `pausing`,
+`paused`. Each response that reports a campaign carries its `state`, its
+`intent` (`never_run`, `run` or `hold`) and its `progress` (`untouched`,
+`open`, `finishing` or `settled`).
 
 Install sources: `local`, `archive`, `daily`, `staging`, `stable`,
 `proposed`.
@@ -82,50 +89,6 @@ uv run behave-campaign create --campaign-id 1234567 --repo-root ../.. \
 Errors: an unknown release, machine type, or feature; a campaign file that
 already exists; no unit matching the filters; lanes for a pool no unit in
 scope draws on; fewer than one lane for a pool, or more than one for `wsl`.
-
-## record
-
-Append completed attempts.
-
-Required arguments:
-
-* One of:
-  * `--campaign-id ID`: The campaign, by the name the server uses.
-  * `--campaign FILE`: A campaign file anywhere; its id is the file's name.
-* `--install-from SOURCE`: Where the jobs installed `ubuntu-pro-client` from.
-
-Optional arguments:
-
-* `--repo-root DIR`: The checkout whose state holds the campaign, for
-  `--campaign-id`. Defaults to `$UBUNTU_PRO_CLIENT_REPO`.
-* `--input FILE`: JSON file to read. Defaults to `-`, standard input.
-* `--from-mcp`: Read `[{"unit": {...}, "result": <MCP payload>}]` instead of
-  plain attempts.
-
-Plain attempt input:
-
-```json
-[
-  {
-    "feature": "features/cli/attach.feature",
-    "scenario": "Attach command in a ubuntu machine",
-    "release": "jammy",
-    "machine_type": "lxd-vm",
-    "outcome": "passed",
-    "job_id": "2f0fbaef"
-  }
-]
-```
-
-`outcome` is one of `passed`, `failed`, `skipped`, `error`.
-
-```bash
-uv run behave-campaign record --campaign-id 1234567 \
-  --install-from proposed --input attempts.json
-```
-
-Errors: a unit the campaign never planned; an unknown outcome; an MCP result
-that is not a clean pass, failure, or skip; a job still in flight.
 
 ## status
 
@@ -188,38 +151,10 @@ uv run behave-campaign units --campaign-id 1234567 --state failed \
   --format csv > failed.csv
 ```
 
-## next
-
-List the units to run next: never-attempted units first, then failed,
-skipped and errored units.
-
-Required arguments:
-
-* One of:
-  * `--campaign-id ID`: The campaign, by the name the server uses.
-  * `--campaign FILE`: A campaign file anywhere; its id is the file's name.
-
-Optional arguments:
-
-* `--repo-root DIR`: The checkout whose state holds the campaign, for
-  `--campaign-id`. Defaults to `$UBUNTU_PRO_CLIENT_REPO`.
-* `--limit N`: Most units to list. Defaults to `1`.
-* `--format json|csv`: Defaults to `json`. CSV is one row per unit, the same
-  columns as `units`.
-* `--feature PATH`: Only this feature file. Repeatable.
-* `--scenario NAME`: Only this exact scenario name. Repeatable.
-* `--release NAME`: Only this release. Repeatable.
-* `--machine-type NAME`: Only this machine type. Repeatable.
-* `--state STATE`: Only units in this state. Repeatable.
-
-```bash
-uv run behave-campaign next --campaign-id 1234567 --limit 4
-```
-
 ## history
 
 List every attempt at each selected unit, oldest first: `job_id`,
-`install_from`, `started_at`, `outcome`, `finished_at`.
+`install_from`, `started_at`, `outcome`, `finished_at`, `interrupted`.
 
 Required arguments:
 
@@ -234,7 +169,8 @@ Optional arguments:
 * `--limit N`: Most units to list. Defaults to `200`; the maximum is `2000`.
 * `--format json|csv`: Defaults to `json`. CSV is one row per attempt with
   the columns `feature, scenario, release, machine_type, state, attempt,
-  job_id, install_from, started_at, outcome, finished_at`; a unit never
+  job_id, install_from, started_at, outcome, finished_at, interrupted`; a
+  unit never
   attempted is one row with the attempt columns empty.
 * `--feature PATH`: Only this feature file. Repeatable.
 * `--scenario NAME`: Only this exact scenario name. Repeatable.
@@ -250,8 +186,8 @@ uv run behave-campaign history --campaign-id 1234567 \
 ## events
 
 Read the events a running server has written beside the campaign file. Each
-response carries the campaign's `lifecycle`, `lanes_busy` and `counts` as
-well as the events.
+response carries the campaign's `state`, `intent`, `progress`, `lanes_busy`
+and `counts` as well as the events.
 
 Required arguments:
 
@@ -270,7 +206,7 @@ Optional arguments:
 * `--limit N`: Most events per response. Defaults to `100`; the maximum is
   `1000`.
 * `--follow`: Keep printing responses, one JSON document per line, until the
-  campaign is complete or cancelled with no lane in flight.
+  campaign is `paused` or `complete`.
 * `--interval SECONDS`: Poll interval with `--follow`. Defaults to `5`.
 
 Families: `campaign`, `lane`, `unit`, `anomaly`. Presets: `actionable`
@@ -283,31 +219,6 @@ uv run behave-campaign events --campaign-id 1234567 \
 ```
 
 Errors: an unknown kind, family, or preset.
-
-## complete
-
-Mark a campaign `complete` once no unit is unattempted, in flight, or waiting
-on a retry. A server writes this itself when its last lane finishes; use this
-command for a campaign recorded with `record`. Completing a campaign that is
-already complete changes nothing.
-
-Required arguments:
-
-* One of:
-  * `--campaign-id ID`: The campaign, by the name the server uses.
-  * `--campaign FILE`: A campaign file anywhere; its id is the file's name.
-
-Optional arguments:
-
-* `--repo-root DIR`: The checkout whose state holds the campaign, for
-  `--campaign-id`. Defaults to `$UBUNTU_PRO_CLIENT_REPO`.
-
-```bash
-uv run behave-campaign complete --campaign-id 1234567
-```
-
-Errors: units left to run or retry, and a cancelled campaign (reopen it
-instead).
 
 ## export
 
@@ -333,7 +244,7 @@ The bundle unpacks to one directory named after the campaign:
 | Path | Contents |
 | --- | --- |
 | `SUMMARY.md` | Counts and scope, then every unit by feature, scenario and release: passed units, then the rest with their state and job id |
-| `campaign.json` | Scope, install source, lanes, lifecycle, counts |
+| `campaign.json` | Scope, install source, lanes, state, counts |
 | `units.csv` | One row per unit: `feature, scenario, release, machine_type, state, job_id, finished_at` |
 | `jobs/<job_id>/` | `meta.json`, `report.json`, `stdout.log` for every attempt, including superseded ones |
 | `audit/campaign.jsonl` | The campaign record as stored |
@@ -349,7 +260,7 @@ identical bytes.
 uv run behave-campaign export --campaign-id 1234567
 ```
 
-Errors: a campaign that is not `complete` (see `complete`), and an output
+Errors: a campaign that is not `complete`, naming its jobs in flight, and an output
 path that already exists. Missing job files are not an error; they are listed in the output
 and marked `files missing` in the summary.
 
@@ -357,7 +268,7 @@ and marked `files missing` in the summary.
 
 | File                          | Written by            | Contents                                   |
 | ----------------------------- | --------------------- | ------------------------------------------ |
-| `<id>.jsonl`                  | `create`, `record`, `complete`, the server | The campaign record, append-only |
+| `<id>.jsonl`                  | `create`, the server  | The campaign record, append-only           |
 | `<id>.events.jsonl`           | the server            | Numbered events; `events` reads it         |
 | `<id>.lock`                   | the server            | Advisory lock while the campaign schedules |
 | `../exports/<id>.tar.gz`      | `export`              | The evidence bundle, by default            |

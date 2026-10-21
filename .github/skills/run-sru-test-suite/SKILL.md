@@ -38,7 +38,7 @@ the lanes asked for is a server setting (`MCP_MAX_LXD_JOBS`,
 
 ## Run it
 
-1. `control_campaign` with `action: start`.
+1. `control_campaign` with `action: run`.
 2. Tell the user they can watch from a terminal without you, from
    `tools/mcp_server_behave`:
    `uv run behave-campaign events --campaign-id <id> --repo-root <checkout> --follow`
@@ -71,14 +71,17 @@ complete picture, not a green one.
 - If one cause is failing every lane, pause, fix it, then `retry_units` in
   a batch with a `reason`.
 
-## Stop, retry, resume
+## Stop, retry, run again
 
-`control_campaign`'s description is the decision table. **pause** a run you
-mean to come back to; **cancel** one that is not worth continuing -- a broken
-checkout, infrastructure that will not recover -- and say why.
+`control_campaign`'s description is the decision table. **pause** a run that
+should stop for now; its jobs in flight finish first, so it is `pausing` until
+they are recorded. Pause with `kill: true` when those jobs are not worth
+waiting for -- a broken checkout, infrastructure that will not recover -- and
+say why. Their units are recorded as interrupted and run again on the next
+`run`. Nothing closes a campaign: one not worth continuing just stays paused.
 
-A campaign the server was running when it last stopped comes back `paused`
-with reason `server_restart`; check its in-flight units before resuming.
+A paused campaign holds nothing, so another can run meanwhile. `run` it again
+to continue; `retry_units` also sets it running.
 
 ## Finish
 

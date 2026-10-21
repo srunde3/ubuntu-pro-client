@@ -97,7 +97,7 @@ class TestCampaignJson:
         )
 
         assert document["install_from"] == "proposed"
-        assert document["lifecycle"] == "complete"
+        assert document["state"] == "complete"
         assert document["counts"]["passed"] == 1
         assert document["scope"]["release"] == ["noble", "jammy"]
         assert "repo" not in document

@@ -5,14 +5,16 @@ import json
 import pytest
 
 from behave_campaign.domain.records import (
-    WRITABLE_LIFECYCLE,
+    WRITABLE_INTENTS,
     AttemptFinished,
+    AttemptInterrupted,
     AttemptStarted,
     CampaignError,
     CampaignHeader,
+    CampaignState,
     Filters,
-    Lifecycle,
-    LifecycleRecord,
+    Intent,
+    IntentRecord,
     Outcome,
     PlanRecord,
     RecordType,
@@ -47,7 +49,9 @@ class TestRecordRoundTrip:
             PlanRecord(UNIT_A, at=AT),
             AttemptStarted(UNIT_A, "job-1", install_from="proposed", at=AT),
             AttemptFinished(UNIT_A, "job-1", "failed", at=AT),
-            LifecycleRecord(state="paused", at=AT, reason="server_restart"),
+            AttemptStarted(UNIT_A, "job-2", install_from="proposed", at=AT),
+            AttemptInterrupted(UNIT_A, "job-2", at=AT, reason="killed"),
+            IntentRecord(intent=Intent.HOLD, at=AT),
             RetryRecord(UNIT_A, at=AT, reason="looked flaky"),
         ]
 
@@ -98,8 +102,9 @@ class TestStringEnums:
         [
             (RecordType.STARTED, "started"),
             (Outcome.PASSED, "passed"),
-            (UnitState.UNATTEMPTED, "unattempted"),
-            (Lifecycle.CANCELLED, "cancelled"),
+            (UnitState.IN_FLIGHT, "in_flight"),
+            (Intent.HOLD, "hold"),
+            (CampaignState.PAUSING, "pausing"),
         ],
     )
     def test_a_member_reads_and_serialises_as_its_value(
@@ -116,9 +121,16 @@ class TestStringEnums:
         assert {o.value for o in Outcome} < {s.value for s in UnitState}
         assert {s.value for s in UnitState} - {o.value for o in Outcome} == {
             "unattempted",
-            "running",
+            "in_flight",
         }
 
-    def test_every_state_but_created_is_written(self):
-        # created is the absence of a record.
-        assert set(WRITABLE_LIFECYCLE) == set(Lifecycle) - {Lifecycle.CREATED}
+    def test_every_intent_but_never_run_is_written(self):
+        # never_run is the absence of a record.
+        assert set(WRITABLE_INTENTS) == set(Intent) - {Intent.NEVER_RUN}
+
+    def test_never_run_is_not_a_writable_intent(self):
+        raw = encode_record(IntentRecord(intent=Intent.RUN, at=AT))
+        raw["intent"] = Intent.NEVER_RUN.value
+
+        with pytest.raises(CampaignError, match="intent must be one of"):
+            parse_record(raw)

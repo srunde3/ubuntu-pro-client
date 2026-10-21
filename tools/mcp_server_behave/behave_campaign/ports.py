@@ -134,6 +134,14 @@ class LaneRunner(Protocol):
         """
         ...
 
+    def kill(self, job_id: str) -> bool:
+        """Ask the job to stop, and return whether a signal was sent.
+
+        False means there was nothing to signal: the job had finished, or
+        this process holds no handle on it.
+        """
+        ...
+
 
 class EventLog(Protocol):
     """Numbered, durable notifications about one campaign.

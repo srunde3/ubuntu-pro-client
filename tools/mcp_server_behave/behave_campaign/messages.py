@@ -52,7 +52,7 @@ class StateCounts(BaseModel):
     """How many units sit in each state."""
 
     unattempted: int = 0
-    running: int = 0
+    in_flight: int = 0
     passed: int = 0
     failed: int = 0
     skipped: int = 0
@@ -93,15 +93,19 @@ class CampaignHeader(BaseModel):
     scope: CampaignScope = CampaignScope()
 
 
-class CampaignState(BaseModel):
+class CampaignSummary(BaseModel):
     """Where a campaign stands now.
 
-    Every response that changes or follows a campaign carries this and no
-    more; the header is one ``campaign_status`` away.
+    ``state`` names the pair of ``intent`` (what the caller asked for) and
+    ``progress`` (how much work is left). Every response that changes or
+    follows a campaign carries this and no more; the header is one
+    ``campaign_status`` away.
     """
 
     campaign_id: str = ""
-    lifecycle: str = ""
+    state: str = ""
+    intent: str = ""
+    progress: str = ""
     lanes_busy: int = 0
     counts: StateCounts = StateCounts()
 
@@ -115,7 +119,7 @@ class ScopeSize(BaseModel):
     machine_types: int = 0
 
 
-class CampaignListing(CampaignState):
+class CampaignListing(CampaignSummary):
     """One row of ``list_campaigns``: enough to tell campaigns apart."""
 
     created_at: str = ""
@@ -129,7 +133,7 @@ class CreateCampaignResponse(BaseModel):
     """Result of creating a campaign. Nothing is running yet."""
 
     campaign: CampaignHeader = CampaignHeader()
-    state: CampaignState = CampaignState()
+    summary: CampaignSummary = CampaignSummary()
 
 
 class ListCampaignsResponse(BaseModel):
@@ -139,18 +143,10 @@ class ListCampaignsResponse(BaseModel):
     campaigns: list[CampaignListing] = []
 
 
-class RecordAttemptsResponse(CampaignState):
-    """Result of appending attempts: how many landed, and the state after."""
-
-    recorded: int = 0
-    running: list[UnitView] = []
-    problems: list[UnitView] = []
-
-
 class CampaignStatusResponse(BaseModel):
     """Current state of one campaign.
 
-    ``running`` and the problems are always present because they are what
+    ``in_flight`` and the problems are always present because they are what
     a caller acts on: ``problems`` lists them one unit per row, or
     ``problem_scenarios`` one scenario per row when grouped that way; the
     other is None. Either list is capped at ``problems_limit`` (units, or
@@ -158,9 +154,9 @@ class CampaignStatusResponse(BaseModel):
     """
 
     campaign: CampaignHeader = CampaignHeader()
-    state: CampaignState = CampaignState()
+    summary: CampaignSummary = CampaignSummary()
     lanes_busy_by_pool: dict[str, int] = {}
-    running: list[UnitView] = []
+    in_flight: list[UnitView] = []
     problems: list[UnitView] | None = None
     problem_scenarios: list[ScenarioProblems] | None = None
     problems_total: int = 0
@@ -191,7 +187,8 @@ class DimensionsResponse(BaseModel):
 class AttemptView(BaseModel):
     """One try at a unit: one job, from start to finish.
 
-    ``outcome`` is None while the job is still running.
+    ``outcome`` is None while the job is in flight, and for an attempt that
+    was ``interrupted``.
     """
 
     job_id: str = ""
@@ -199,18 +196,13 @@ class AttemptView(BaseModel):
     started_at: str = ""
     outcome: str | None = None
     finished_at: str = ""
+    interrupted: bool = False
 
 
 class UnitHistoryView(UnitView):
     """A unit with every attempt against it, oldest first."""
 
     attempts: list[AttemptView] = []
-
-
-class NextUnitsResponse(BaseModel):
-    """Units to run next: never-attempted first, then retryable problems."""
-
-    units: list[UnitView] = []
 
 
 class UnitHistoryResponse(BaseModel):
@@ -221,29 +213,17 @@ class UnitHistoryResponse(BaseModel):
     limit_clamped: bool = False
 
 
-class CampaignControlResponse(CampaignState):
-    """State of a campaign after a control verb.
+class CampaignControlResponse(CampaignSummary):
+    """State of a campaign after run or pause.
 
-    ``lanes_busy`` is what tells a caller whether a pause or cancel has
-    finished draining: both stop opening lanes, but jobs already in flight
-    run to completion and are still recorded.
+    After a pause, ``state`` is pausing while jobs drain and paused once
+    they are recorded. A pause with kill lists the units it ``interrupted``;
+    ``unsignalled`` names their jobs this server could not signal, which
+    may still be running.
     """
 
-    reason: str = ""
-
-
-class ReopenCampaignResponse(CampaignControlResponse):
-    """State of a campaign after a cancellation was reversed.
-
-    ``abandoned`` lists units whose jobs nothing was watching any more:
-    reopening records them as errored, so they are retryable rather than
-    running for good. ``rescheduling`` says whether lanes start filling
-    again -- a campaign whose units were all attempted comes back complete,
-    and needs retry_units to give it work.
-    """
-
-    abandoned: list[UnitView] = []
-    rescheduling: bool = False
+    interrupted: list[UnitView] = []
+    unsignalled: list[str] = []
 
 
 class TickReport(BaseModel):
@@ -254,7 +234,7 @@ class TickReport(BaseModel):
     """
 
     campaign_id: str = ""
-    lifecycle: str = ""
+    state: str = ""
     recorded: int = 0
     started: int = 0
     lanes_busy: int = 0
@@ -271,7 +251,7 @@ class EventView(BaseModel):
     data: dict = {}
 
 
-class AwaitEventsResponse(CampaignState):
+class AwaitEventsResponse(CampaignSummary):
     """A batch of events, plus where the campaign stands.
 
     ``next_seq`` is the cursor to pass back. The state is always present,
@@ -285,16 +265,11 @@ class AwaitEventsResponse(CampaignState):
     timed_out: bool = False
 
 
-class RetryUnitsResponse(CampaignState):
-    """Which units were re-queued, and what the campaign is doing now.
-
-    ``rescheduling`` says whether lanes will actually start filling: a
-    paused campaign accepts retries but stays paused until it is resumed.
-    """
+class RetryUnitsResponse(CampaignSummary):
+    """Which units were re-queued. A retry always sets intent to run."""
 
     requeued: int = 0
     units: list[UnitView] = []
-    rescheduling: bool = False
 
 
 class ExportCampaignResponse(BaseModel):

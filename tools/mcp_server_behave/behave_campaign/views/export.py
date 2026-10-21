@@ -76,7 +76,7 @@ def render_units_csv(statuses: Sequence[UnitStatus]) -> str:
 def render_campaign_json(
     campaign_id: str,
     header: CampaignHeader,
-    lifecycle: str,
+    state: str,
     statuses: Sequence[UnitStatus],
 ) -> str:
     """Scope and outcome; no repo state, as no commit pins the jobs."""
@@ -84,7 +84,7 @@ def render_campaign_json(
         "campaign_id": campaign_id,
         "created_at": header.at,
         "completed_at": completed_at(statuses),
-        "lifecycle": lifecycle,
+        "state": state,
         "install_from": header.install_from,
         "lanes": lanes_as_dict(header.lanes),
         "scope": header.filters.scope_as_dict(),

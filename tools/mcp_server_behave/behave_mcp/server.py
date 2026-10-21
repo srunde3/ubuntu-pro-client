@@ -35,7 +35,6 @@ from behave_campaign.messages import (
     CampaignStatusResponse,
     CreateCampaignResponse,
     ListCampaignsResponse,
-    ReopenCampaignResponse,
     RetryUnitsResponse,
     UnitHistoryResponse,
 )
@@ -767,7 +766,7 @@ def campaign_status(
         list[str],
         Field(
             description=(
-                "Only units in these states: unattempted, running, passed, "
+                "Only units in these states: unattempted, in_flight, passed, "
                 "failed, skipped, error."
             ),
         ),
@@ -832,7 +831,7 @@ def unit_history(
         list[str],
         Field(
             description=(
-                "Only units in these states: unattempted, running, passed, "
+                "Only units in these states: unattempted, in_flight, passed, "
                 "failed, skipped, error."
             ),
         ),
@@ -861,79 +860,44 @@ def unit_history(
 
 @tool(
     description=(
-        "Change what a campaign is doing. Only one campaign schedules at "
-        "a time.\n"
-        "  start   created -> running. Begins scheduling: the server keeps "
-        "its lanes in each pool full and fills a lane as soon as one "
-        "frees, with no further calls needed. A finished campaign has no "
-        "work to start; a cancelled one must be reopened first.\n"
-        "  pause   running -> paused. Stops opening lanes; jobs in flight "
-        "finish and are recorded. lanes_busy says how many are draining.\n"
-        "  resume  paused -> running. Includes a campaign the server paused "
-        "by itself after a restart.\n"
-        "  cancel  any -> cancelled. Closes it to scheduling and to "
-        "retry_units; jobs in flight still finish. For a campaign not "
-        "worth continuing. Undo with reopen_campaign.\n"
-        "Returns lifecycle, lanes_busy and counts. Poll campaign_status or "
-        "await_campaign_events to follow progress."
+        "Run or pause a campaign. A campaign's state is its intent (what "
+        "was last asked: never_run, run or hold) plus its progress (how "
+        "much work is left). Only one campaign schedules at a time.\n"
+        "  run    intent -> run, from any state. The server keeps the "
+        "campaign's lanes full with no further calls: running while units "
+        "are left to start, finishing while the last jobs run, then "
+        "complete. Running a complete campaign changes nothing; use "
+        "retry_units to give it work.\n"
+        "  pause  intent -> hold, from any state. No new job starts; jobs "
+        "in flight finish and are recorded (pausing), then the campaign is "
+        "paused, or complete if nothing is left. With kill=true the jobs "
+        "in flight are killed instead: their units are recorded as "
+        "interrupted and run again on the next run.\n"
+        "Returns state, intent, progress, lanes_busy and counts. Follow "
+        "progress with await_campaign_events or campaign_status."
     )
 )
 def control_campaign(
     campaign_id: CampaignIdArg,
     action: Annotated[
         ControlAction,
-        Field(description="start, pause, resume or cancel; see above."),
+        Field(description="run or pause; see above."),
     ],
-    repo_root: RepoRoot = "",
-) -> CampaignControlResponse:
-    runner = campaign_runner(repo_root)
-    verbs = {
-        ControlAction.START: runner.start,
-        ControlAction.PAUSE: runner.pause,
-        ControlAction.RESUME: runner.resume,
-        ControlAction.CANCEL: runner.cancel,
-    }
-    return verbs[action](campaign_id)
-
-
-@tool(
-    description=(
-        "Take a cancellation back, for a campaign cancelled by mistake. "
-        "The cancel stays in the record and this is appended after it. A "
-        "campaign with units still unattempted starts scheduling again; "
-        "one whose units were all attempted comes back complete, which is "
-        "what lets retry_units reach its failed and skipped units -- so "
-        "reopening is usually followed by retry_units, not "
-        "control_campaign start. "
-        "If a cancel left jobs in flight that no running server is "
-        "watching any more, this refuses and names those units; pass "
-        "abandon_in_flight to record them as errored and reopen anyway."
-    )
-)
-def reopen_campaign(
-    campaign_id: CampaignIdArg,
-    reason: Annotated[
-        str,
-        Field(
-            default="",
-            description="Why the cancellation is being taken back.",
-        ),
-    ] = "",
-    abandon_in_flight: Annotated[
+    kill: Annotated[
         bool,
         Field(
             default=False,
-            description=(
-                "Record units left in flight as errored instead of "
-                "refusing to reopen."
-            ),
+            description="With pause: kill the jobs in flight.",
         ),
     ] = False,
     repo_root: RepoRoot = "",
-) -> ReopenCampaignResponse:
-    return campaign_runner(repo_root).reopen(
-        campaign_id, reason=reason, abandon_in_flight=abandon_in_flight
-    )
+) -> CampaignControlResponse:
+    runner = campaign_runner(repo_root)
+    if action == ControlAction.RUN:
+        if kill:
+            raise ValueError("kill applies only to pause")
+        return runner.run(campaign_id)
+    return runner.pause(campaign_id, kill=kill)
 
 
 @tool(
@@ -1028,9 +992,8 @@ def await_campaign_events(
         "failure gets retried. With no state filter it selects the problem "
         "states -- failed, skipped and errored; name a state to retry "
         "something else, including one that passed. Units in flight are "
-        "never selected. Re-queueing a campaign that had finished starts it "
-        "scheduling again; a paused one accepts the request and stays "
-        "paused, which the response's rescheduling field reports."
+        "never selected. A retry always sets the campaign's intent to run, "
+        "whatever its state, so the selected units start at once."
     )
 )
 def retry_units(
