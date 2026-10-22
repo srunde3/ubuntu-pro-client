@@ -33,7 +33,7 @@ failure classes mean on this host.
 
 If `create_campaign` rejects the scope or the max jobs, resolve it with the
 user; do not work around it. A pool disabled or limited below the max jobs
-asked for is the checkout's config (`behave-tests config set
+asked for is the checkout's config (`pro-behave config set
 max_jobs.<pool> N`), which only the user changes. Other campaigns and
 one-off jobs share the checkout's lanes, so this campaign's jobs may wait
 their turn.
@@ -42,8 +42,8 @@ their turn.
 
 1. `control_campaign` with `action: run`.
 2. Tell the user they can watch from a terminal without you, from
-   `tools/mcp_server_behave`:
-   `uv run behave-tests campaign events --campaign-id <id> --repo-root <checkout> --follow`
+   `tools/pro-behave`:
+   `uv run pro-behave campaign events --campaign-id <id> --repo-root <checkout> --follow`
 3. Delegate the watching to a subagent so the poll loop stays out of this
    conversation. Its prompt is the contents of
    [references/monitor.md](references/monitor.md) with the campaign id

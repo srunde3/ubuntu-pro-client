@@ -5,7 +5,7 @@ description: "Run, discover, and debug the features/ behave integration tests th
 
 # Feature Test Runs
 
-Use the `behave` MCP server (`tools/mcp_server_behave`) for all `features/`
+Use the `behave` MCP server (`tools/pro-behave`) for all `features/`
 discovery and execution. Don't run `tox -e behave` by hand, and don't grep
 `features/*.feature` for scenarios or valid release/machine_type values.
 Each tool's description says how to call it and what it returns.
@@ -65,5 +65,5 @@ not read each log.
   retry it hoping for a different answer.
 - A **skipped** scenario means a config the host lacks. `requires_config`
   on the catalog entry names them; jobs get them only from the checkout's
-  config (`behave-tests config set behave.<name>`), which the user sets.
+  config (`pro-behave config set behave.<name>`), which the user sets.
   Report the option names. Never ask for a secret value in chat.

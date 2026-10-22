@@ -1,1 +1,0 @@
-"""Behave MCP server package."""

@@ -1,0 +1,169 @@
+[project]
+name = "pro-behave"
+version = "0.1.0"
+description = "Run ubuntu-pro-client's behave scenarios and campaigns, from a CLI or over MCP"
+requires-python = ">=3.10"
+dependencies = [
+  "mcp[cli]==1.28.1",
+  "uvicorn>=0.30.0",
+  "behave>=1.2.6",
+  "pydantic>=2,<3",
+]
+
+[project.optional-dependencies]
+test = [
+  "pytest>=8.0",
+  "pytest-asyncio>=0.23",
+  "pytest-cov>=7.1.0",
+]
+# Versions matched to the repo-root tox envs (see /tox.ini) where pinned.
+lint = [
+  "black==24.3.0",
+  "isort==5.12.0",
+  "flake8",
+  "mypy",
+  "import-linter>=2.15",
+]
+
+[project.scripts]
+pro-behave = "pro_behave.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+# Listed explicitly so setuptools' flat-layout auto-discovery cannot pick
+# up another directory that appears here.
+[tool.setuptools.packages.find]
+include = ["pro_behave*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+  "e2e: End-to-end tests that exercise real subprocess-backed MCP flows",
+  "long_running: Tests expected to run for minutes",
+  "integration: real components wired together in process: the MCP protocol, the CLI, startup, real behave or the real features/ corpus",
+]
+
+# black/isort discover the *nearest* pyproject.toml to each file, so
+# without these this package would silently drift to black's 88-char
+# default instead of the repo-wide 79-char convention (see /pyproject.toml).
+[tool.black]
+line-length = 79
+
+[tool.isort]
+profile = "black"
+line_length = 79
+# Without this, isort groups the package by whether it happens to be
+# installed in the running environment, so the same file passes in one
+# checkout and fails in another.
+known_first_party = ["pro_behave", "tests"]
+
+[tool.mypy]
+check_untyped_defs = true
+no_implicit_optional = true
+
+[[tool.mypy.overrides]]
+# Matches the root pyproject.toml override: behave ships no type stubs.
+module = ["behave.*"]
+ignore_missing_imports = "true"
+
+# Run with `uv run lint-imports`. Each contract is a rule from the
+# pro-behave-architecture skill.
+[tool.importlinter]
+root_packages = ["pro_behave"]
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "Front-ends on top, then campaigns, then jobs"
+type = "layers"
+containers = ["pro_behave"]
+layers = [
+  "cli",
+  "mcp",
+  "campaign",
+  "jobs",
+]
+
+[[tool.importlinter.contracts]]
+name = "campaign uses only parser, domain.pools and domain.layout from jobs"
+type = "forbidden"
+source_modules = ["pro_behave.campaign"]
+forbidden_modules = [
+  "pro_behave.jobs.adapters",
+  "pro_behave.jobs.domain.config",
+  "pro_behave.jobs.domain.jobs",
+  "pro_behave.jobs.domain.limits",
+  "pro_behave.jobs.domain.logs",
+  "pro_behave.jobs.domain.queue",
+  "pro_behave.jobs.domain.report",
+  "pro_behave.jobs.job_process",
+  "pro_behave.jobs.messages",
+  "pro_behave.jobs.ports",
+  "pro_behave.jobs.service",
+  "pro_behave.jobs.views",
+]
+
+[[tool.importlinter.contracts]]
+name = "jobs layers"
+type = "layers"
+containers = ["pro_behave.jobs"]
+layers = [
+  "job_process",
+  "service | adapters",
+  "ports | views",
+  "parser",
+  "domain",
+  "messages",
+]
+
+[[tool.importlinter.contracts]]
+name = "campaign layers"
+type = "layers"
+containers = ["pro_behave.campaign"]
+layers = [
+  "service | adapters | repo",
+  "views | ports",
+  "domain | messages",
+]
+
+[[tool.importlinter.contracts]]
+name = "Domain and service modules do no direct I/O"
+type = "forbidden"
+source_modules = [
+  "pro_behave.jobs.domain",
+  "pro_behave.jobs.service",
+  "pro_behave.jobs.views",
+  "pro_behave.campaign.domain",
+  "pro_behave.campaign.service",
+  "pro_behave.campaign.views",
+]
+forbidden_modules = [
+  "fcntl",
+  "gzip",
+  "os",
+  "signal",
+  "subprocess",
+  "tarfile",
+  "tempfile",
+]
+
+[[tool.importlinter.contracts]]
+name = "Only mcp/server.py imports the MCP framework"
+type = "forbidden"
+source_modules = ["pro_behave"]
+forbidden_modules = ["mcp", "starlette", "uvicorn"]
+ignore_imports = [
+  "pro_behave.mcp.server -> mcp",
+  "pro_behave.mcp.server -> starlette",
+]
+
+# A signal, not a gate: no fail_under. `--cov` prints branch coverage and
+# the lines each file misses.
+[tool.coverage.run]
+branch = true
+source = ["pro_behave"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
