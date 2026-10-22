@@ -22,14 +22,14 @@ Both packages use ports and adapters. A layer with more than one concern is a pa
 
 | Layer | `behave_mcp` | `behave_campaign` | Rule |
 | --- | --- | --- | --- |
-| Domain | `domain/`: `jobs`, `queue`, `config`, `report`, `logs`, `limits`, `pools`, `layout` | `domain/`: `records`, `state`, `schedule`, `classify`, `events`, `signals`, `discovery`, `bundle` | Pure rules. No file, process or network I/O, except `discovery` reading feature files through the parser. |
-| Parser | `parser.py` | none | Feature files to structured data. It becomes its own package later. |
+| Domain | `domain/`: `jobs`, `queue`, `config`, `report`, `logs`, `limits`, `pools`, `layout` | `domain/`: `records`, `state`, `schedule`, `classify`, `events`, `feed`, `signals`, `discovery`, `bundle` | Pure rules. No file, process or network I/O, except `discovery` reading feature files through the parser. |
+| Parser | `parser.py` | none | Feature files to structured data. It imports only `behave` and the standard library. |
 | Views | `views.py` | `views/`: `responses`, `export` | Pure projections of domain and parser types into DTOs and export files. A view decides nothing. |
 | Ports | `ports.py` | `ports.py` | `Protocol` interfaces the services depend on. |
 | Adapters | `adapters.py` | `adapters.py`, `repo.py` | Implement the ports with the filesystem, `subprocess`, `fcntl` and git. |
 | Services | `service.py` (`BehaveService`) | `service.py` (`CampaignService`) | Orchestrate domain and ports. Most behaviour changes belong here. |
 | DTOs | `messages.py` | `messages.py` | Pydantic models returned to front-ends. |
-| Front-ends | `server.py`, `job_process.py` | `cli.py` | Entry points. Each builds its own `BehaveService` from the real adapters; the copies are deliberate, and `tests/behave_mcp/test_reconcile.py` checks they act alike. The handlers in `server.py` and `cli.py` parse arguments, call one service method and serialise the result; `job_process.py` is the process each job runs under. |
+| Front-ends | `server.py`, `job_process.py` | `cli.py` | Entry points. Each builds its own `BehaveService` from the real adapters; the copies are deliberate, and `tests/behave_mcp/test_reconcile.py` runs the server's and the CLI's reconcile in their own processes, and a job process's reconcile after it exits. The handlers in `server.py` and `cli.py` parse arguments, call one service method and serialise the result; `job_process.py` is the process each job runs under. |
 | Config | `config.py` | none | The server's own env vars (address, poll timeout) parsed once into `Settings`. The checkout's config is not here: it is `domain/config.py`, stored in `config.json`. |
 
 Small collaborators are passed as plain callables, not ports: the clock (`now_utc`, `now`, `monotonic`), `sleep`, `new_job_id` and the git read (`repo_state`). Tests replace them with lambdas.
@@ -57,20 +57,20 @@ Everything the server writes lives under its own checkout's `.mcp_server_behave/
 | Path | Holds | Written by |
 | --- | --- | --- |
 | `config.json` | the checkout's config (`CheckoutConfig`): max jobs, behave options; owner-only | `behave-tests config` |
-| `reconcile.lock` | held while a process reconciles | whoever reconciles |
-| `jobs/<job_id>/request.json` | what to run (`JobRequest`), written once when queued | `BehaveService.run_job` |
+| `reconcile.lock` | held while a process reconciles or a command writes; re-entrant within a thread | `reconcile`, campaign create/run/pause/retry, `kill_job` on a queued job |
+| `jobs/<job_id>/request.json` | what to run (`JobRequest`), written once when queued | `BehaveService.queue_job` (from `run_job`, and from campaigns) |
 | `jobs/<job_id>/job.json` | the launch record (`JobRecord`), written once while holding `job.lock` | `BehaveService.reconcile` |
-| `jobs/<job_id>/exit.json` | the exit (`JobExit`), written once by rename | the job process |
+| `jobs/<job_id>/exit.json` | the exit (`JobExit`), written once by rename | the job process; `kill_job` for a job still queued |
 | `jobs/<job_id>/job.lock` | held by the job process while the job lives; holds its PID | the job process |
 | `jobs/<job_id>/kill` | left by a kill, for a job process still starting up | `kill_job` |
 | `lanes/<pool>/<n>.lock` | held by the process of the job using that lane | the job process |
-| `jobs/<job_id>/stdout.log` | combined stdout and stderr of the job | the behave subprocess |
+| `jobs/<job_id>/stdout.log` | combined stdout and stderr of the job | the job process (tox's output) |
 | `jobs/<job_id>/report.json` | behave's JSON report | the behave subprocess |
 | `campaigns/<id>/campaign.json` | the header and the units in scope, written once | `CampaignService` (create) |
 | `campaigns/<id>/records.jsonl` | every later record, append only; a torn last line is ignored and cut off by the next append | `CampaignService`, under `reconcile.lock` |
 | `exports/<id>.tar.gz` | the evidence bundle | `export_campaign`, `behave-tests campaign export` |
 
-Only a campaign's intent is written, and events are never stored: `domain/feed.py` derives them from the records on every read. Its unit states, progress and named state are rebuilt by replaying its record file through `domain/state.py` (`reduce_units`, `progress`, `state_of`).
+Only facts are written (the plan, intents, retries, attempts and their outcomes, starved pools and overdue jobs). Events are never stored: `domain/feed.py` derives them from the records on every read. Its unit states, progress and named state are rebuilt by replaying its record file through `domain/state.py` (`reduce_units`, `progress`, `state_of`).
 
 ## Process model
 
@@ -78,7 +78,7 @@ Only a campaign's intent is written, and events are never stored: `domain/feed.p
 - Nothing long-lived drives jobs. `BehaveService.reconcile` starts queued jobs on free lanes, under `reconcile.lock`, from files alone. It runs after every tool call (in the `@tool` decorator), every 5 s in the server, after every CLI command, and in a job's own process after it records its exit and lets go of its lane.
 - Campaigns have no driver either. `CampaignService.reconcile` brings every campaign up to date -- records ended jobs, queues queueable units up to each campaign's max jobs -- and then reconciles the job queue, all under one hold of `reconcile.lock`. The server and the CLI run it; the job process runs only `BehaveService.reconcile`, because the job layer knows nothing of campaigns. Any number of campaigns run at once.
 - `server.py` holds one `BehaveService` and one `JsonlCampaignStore`, shared so a reader waiting for events is woken by this process's appends. `CampaignService` is built per call, with `campaign_jobs()` as its job runner. Nothing about a job or a campaign is held in memory.
-- Each behave job runs under `behave_mcp/job_process.py`, in its own session. The job process holds the job's lane lock (`lanes/<pool>/<n>.lock`) and `jobs/<id>/job.lock` for its whole life, runs `tox -e behave` as a child with a parent-death signal and stdin from `/dev/null`, and writes `exit.json` when tox exits. A job's state is read off those files and locks, from any process: a killed job is interrupted, never failed. `kill_job` sends SIGTERM to the job process, which passes it to tox's process group.
+- Each behave job runs under `behave_mcp/job_process.py`, in its own session. The job process holds the job's lane lock (`lanes/<pool>/<n>.lock`) and `jobs/<id>/job.lock` for its whole life, runs `tox -e behave` as a child with a parent-death signal and stdin from `/dev/null`, and writes `exit.json` when tox exits. A job's state is read off those files and locks, from any process: a killed job is interrupted, never failed. `kill_job` sends SIGTERM to the job process, which passes it to tox's process group. It first leaves `jobs/<id>/kill` for a job process still starting; a queued job gets an `exit.json` marked killed and never starts.
 
 ## Surface rules
 
@@ -110,8 +110,8 @@ The test tree mirrors the source tree, so a failing file names the module that b
 
 | Directory | Holds |
 | --- | --- |
-| `tests/behave_mcp/` | one file per `behave_mcp` module, with `domain/` mirrored as a directory, plus `test_golden.py` for on-disk byte shapes and `test_startup.py` for configuration at import |
-| `tests/behave_campaign/` | one file per `behave_campaign` module, with `domain/` and `views/` mirrored as directories |
+| `tests/behave_mcp/` | one file per `behave_mcp` module, with `domain/` mirrored as a directory, plus `test_golden.py` for on-disk byte shapes, `test_startup.py` for configuration at import, `test_reconcile.py` for reconcile across processes and `test_parser_integration.py` for the real corpus |
+| `tests/behave_campaign/` | one file per `behave_campaign` module, with `domain/` and `views/` mirrored as directories; `test_service.py` and `test_service_commands.py` both test `service.py` |
 | `tests/mcp_surface/` | the tools over the real MCP protocol, and the e2e tests |
 
 A test file holds the tests of one module. Helpers and constants it needs are defined in it, so the file reads on its own.

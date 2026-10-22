@@ -82,8 +82,8 @@ waiting for -- a broken checkout, infrastructure that will not recover -- and
 say why. Their units are recorded as interrupted and run again on the next
 `run`. Nothing closes a campaign: one not worth continuing just stays paused.
 
-A paused campaign holds nothing, so another can run meanwhile. `run` it again
-to continue; `retry_units` also sets it running.
+`run` a paused campaign again to continue; `retry_units` also sets it
+running.
 
 ## Finish
 
@@ -106,11 +106,7 @@ of <total> units. Install source: <install_from>. Checkout: <branch>@<commit>.
 Campaign id: <id>. Job ids above open with job_errors.
 ```
 
-Then write the evidence bundle with the CLI, from `tools/mcp_server_behave`:
-
-```bash
-uv run behave-tests campaign export --campaign-id <id>
-```
+Then write the evidence bundle with `export_campaign` and the campaign id.
 
 Give the user the bundle's `path` to attach to the SRU bug, and pass on any
 `missing_files` it lists. Do not attach it or post to Launchpad yourself.

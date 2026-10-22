@@ -2,9 +2,9 @@
 
 Durable record of behave test units and attempts.
 
-A campaign outlives the MCP's job history. The MCP's `list_jobs`
-window is bounded; an SRU verification runs for days, so what was attempted
-and what it established is recorded here instead.
+A job records one run. A campaign records which units are in scope, every
+attempt at each, and what it established, over an SRU verification that runs
+for days.
 
 A **test unit** is one behave scenario for one release on one `machine_type`.
 
@@ -51,8 +51,7 @@ was built from (root, commit, branch, dirty), and when. The header also records 
 draw on, how many of its jobs may be in flight at once; both are required, so
 a campaign always says how it is meant to be run. Every record carries a
 UTC timestamp, and every attempt records the install source the job ran with --
-the evidence an SRU verification actually rests on, which would otherwise only
-live in MCP job history that expires.
+the evidence an SRU verification rests on.
 
 A unit's state is derived, never stored:
 
@@ -89,21 +88,24 @@ export UBUNTU_PRO_CLIENT_REPO=../..   # or pass --repo-root on each command
 # See which releases and machine types the feature files can run.
 uv run behave-tests dimension list
 
-# Create the campaign: "all the jammy lxd-vm tests". The id names the file
+# Create the campaign: "all the jammy lxd-vm tests". The id names the directory
 # the way the server names it, under <repo>/.mcp_server_behave/campaigns/.
 uv run behave-tests campaign create --campaign-id 1234567 \
   --release jammy --machine-type lxd-vm
 
 # Repeat a filter to cover several values, as a real SRU usually does.
-uv run behave-tests campaign create --campaign-id 1234567 \
+uv run behave-tests campaign create --campaign-id 1234568 \
   --release bionic --release focal --release jammy \
   --release noble --release resolute --release stonking
 
 # With no filters, the campaign covers every feature file.
-uv run behave-tests campaign create --campaign-id 1234567
+uv run behave-tests campaign create --campaign-id 1234569
 
-# Record the install source, and max jobs per pool.
-uv run behave-tests campaign create --campaign-id 1234567 \
+# Record the install source, and max jobs per pool. A campaign's max jobs
+# are within the checkout's, so raise those first.
+uv run behave-tests config set max_jobs.lxd 6
+uv run behave-tests config set max_jobs.cloud 4
+uv run behave-tests campaign create --campaign-id 1234570 \
   --install-from proposed --max-lxd-jobs 6 --max-cloud-jobs 4 --max-wsl-jobs 1
 
 # Run it, and pause it. A server, if one is running, keeps it moving; so
@@ -147,15 +149,17 @@ its id is always the directory's name. `--repo-root` defaults to `$UBUNTU_PRO_CL
 server of its own. `--since-seq` and
 `--kinds` work as they do for `await_campaign_events`. With `--follow` it
 prints one batch per line as events arrive, polling every `--interval`
-seconds, and returns once the campaign is paused or complete. The CLI has no
-control verbs yet, but every command ends with a reconcile, so running one
-moves every campaign on the checkout forward.
+seconds, and returns once the campaign is paused or complete. Every command
+ends with a reconcile, so running any one moves every campaign on the
+checkout forward.
 
 The CLI prints the same response shapes the MCP tools return. `create` and
 `status` carry the campaign's header (how it was built: scope, checkout,
 install source, max jobs) under `campaign` and its summary (state, intent,
-progress, jobs in flight, counts by unit state) under `summary`; every other
-response carries the summary fields alone, since the header never changes. `status` reports
+progress, jobs in flight, counts by unit state) under `summary`. `run`,
+`pause`, `retry` and `events` carry the summary fields at top level beside
+their own; `list` gives each campaign's summary with the header fields that
+identify it; `units`, `history` and `export` carry neither. `status` reports
 counts, in-flight units and problems; `units` and `history` list individual
 units, capped at `--limit` and saying so.
 
@@ -188,7 +192,8 @@ The tool fails loudly instead of guessing:
   exactly one. Rename one of the scenarios, or narrow the scope.
 - An unknown release, machine type, or feature in `create` is rejected rather
   than silently matching nothing.
-- Attempt state must be one of the known states.
+- A record whose outcome, intent, cause or type is not a known value is
+  rejected when the campaign is read.
 - A record a campaign could not have written, such as an attempt on a
   campaign that never ran, is reported as inconsistent rather than read.
 
@@ -234,7 +239,7 @@ checkout whose feature files define the scope and whose jobs run.
   the units in flight, and the units needing action, one unit per row or -- with `group_by=scenario` --
   one scenario per row with its units bucketed by state, which is how a
   scenario failing on every release reads at a glance. Either list is capped
-  at `problems_limit` (50 over MCP; the CLI lists all) with `problems_total`
+  at `problems_limit` (50 over MCP; 2000 from the CLI) with `problems_total`
   alongside. Individual units are `unit_history`'s job.
 - `control_campaign` -- `run` or `pause`, from any state. `run` sets the
   intent to run and queues what the campaign's max jobs allow at once; the
@@ -263,12 +268,12 @@ is how a watcher hears about it promptly.
 | `campaign.*` | `created`, `running`, `finishing`, `complete`, `pausing`, `paused` |
 | `job.*` | `started`, `overdue` |
 | `unit.*` | `passed`, `failed`, `skipped`, `errored`, `unclassifiable`, `interrupted`, `retried` |
+| `anomaly.*` | `repeated_scenario_failure`, `repeated_skips`, `starved` |
 
 A `campaign.<state>` event is emitted each time the campaign's named state
 changes, and only then. Its data says the state it came `from`, the `intent`
 and `progress` now, the `cause` (`run`, `pause`, `retry` or `scheduler`) and
 the `counts` by unit state.
-| `anomaly.*` | `repeated_scenario_failure`, `repeated_skips`, `starved` |
 
 Subscribe by exact kind, by family (`unit.*`), or by preset: `actionable`
 is every non-passing outcome, `anomaly.*`, `job.overdue` and `campaign.*`
@@ -424,7 +429,7 @@ packages with one module per concern.
 `views/` turns records into what a caller or reviewer reads, and decides
 nothing:
 
-- `responses.py`: the response DTOs in `messages.py`.
+- `responses.py`: builds the response DTOs defined in `messages.py`.
 - `export.py`: the bundle's `SUMMARY.md`, `export.json` and `units.csv`.
 
 The other modules:
@@ -439,8 +444,8 @@ The other modules:
   Both share one serialisation path, so there is one on-disk format.
   `behave_mcp.domain.layout` names the directory convention.
 - `repo.py`: reads the checkout state a campaign was built from.
-- `service.py`: `CampaignService`, built per call by every entry point:
-  the MCP server, the CLI and each job process. It creates and reports on
+- `service.py`: `CampaignService`, built per call by the MCP server and the
+  CLI (a job process builds only the job service). It creates and reports on
   campaigns, runs the commands, and reconciles. Behaviour changes belong
   here; its decisions are `schedule.plan_campaign`'s, so tests drive it by
   calling `reconcile` themselves.
@@ -451,18 +456,18 @@ The other modules:
 ## Build, test, lint
 
 Run from `tools/mcp_server_behave`; this package shares that project's
-`pyproject.toml`, virtualenv, and CI job.
+`pyproject.toml` and virtualenv.
 
 ```bash
-uv sync --extra test           # or --extra lint
+uv sync --extra test --extra lint
 uv run pytest -q tests/behave_campaign
 uv run black --check behave_campaign
 uv run isort --check-only behave_campaign
 uv run flake8 behave_campaign
 uv run mypy behave_campaign
+uv run lint-imports
 ```
 
 ## TODOs
 
 - Consider stronger DB than JSONL with various record types
-- Find common data models with the MCP; avoid duplicate serde if we can.

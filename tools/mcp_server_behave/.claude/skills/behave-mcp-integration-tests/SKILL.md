@@ -5,7 +5,7 @@ description: What integration tests in tools/mcp_server_behave test, with good a
 
 # behave MCP integration tests
 
-An integration test proves that real components work together at a boundary a caller uses. The caller is an MCP client, a person at the CLI, or the feature files themselves. Everything inside the test process is real. Nothing starts tox or behave: a test that needs a job fakes `subprocess.Popen`, and a campaign test fakes the runner's lanes and ticker.
+An integration test proves that real components work together at a boundary a caller uses. The caller is an MCP client, a person at the CLI, or the feature files themselves. Everything inside the test process is real. Nothing starts tox. A job tool test replaces `server._service` with `make_service` over a `FakeJobLauncher`, and a campaign tool test replaces `server.campaign_jobs` with a `FakeJobRunner`.
 
 Every integration test carries the `integration` marker. A module of integration tests sets it once at the top, under its imports:
 
@@ -41,7 +41,7 @@ payload = server.await_campaign_events(campaign_id=CAMPAIGN_ID).model_dump()
 
 Bad: re-proving scheduling rules through the protocol, one permutation per test. Each permutation belongs in a `plan_campaign` unit test. One protocol test that shows the tool reports the result is enough.
 
-Bad: a job test without a fake `Popen`. It starts a real `tox -e behave` and turns into an e2e test that no one meant to write.
+Bad: a job test without a `FakeJobLauncher`. It starts a real `tox -e behave` and turns into an e2e test that no one meant to write.
 
 ## Server wiring and startup: how the process is assembled
 
@@ -65,7 +65,7 @@ CLI tests run `behave_campaign.cli.main(argv)` over real files, and check the ex
 Good: the exit code, the message a person reads, and proof that nothing was written.
 
 ```python
-error = run(["create", "--release", "bogus"], expect=2)
+error = run(["campaign", "create", "--release", "bogus"], expect=2)
 
 assert "unknown release: bogus" in error
 assert not campaign_file.exists()

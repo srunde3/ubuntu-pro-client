@@ -46,7 +46,8 @@ changes the config.
 Every command prints one JSON document to stdout and exits `0`;
 `campaign units` and `campaign history` also take `--format csv`. An invalid
 argument, an unknown value, a missing job or campaign, or an unreadable file
-prints a message to stderr and exits `2`.
+prints a message to stderr and exits `2`. `campaign events --follow` prints
+one document per batch, one per line.
 
 After every command, the CLI reconciles the checkout: it brings every
 campaign up to date and starts any queued job whose pool has a free lane,
@@ -55,9 +56,10 @@ as an MCP tool call does.
 Every command takes `--repo-root DIR`, the `ubuntu-pro-client` checkout
 whose feature files and state it uses. It defaults to
 `$UBUNTU_PRO_CLIENT_REPO`. The state directory is
-`<repo-root>/.mcp_server_behave/`, or `$MCP_STATE_DIR` when it is set -- the
-same one the `behave` MCP server uses. `--campaign-id ID` names a campaign
-there.
+`<repo-root>/.mcp_server_behave/`, or `$MCP_STATE_DIR` when it is set. That
+is the `behave` MCP server's own state directory when `--repo-root` is the
+checkout the server serves, or when both share `MCP_STATE_DIR`.
+`--campaign-id ID` names a campaign there.
 
 Unit states: `unattempted`, `in_flight`, `passed`, `failed`, `skipped`,
 `error`.
@@ -177,7 +179,10 @@ uv run behave-tests campaign create --campaign-id 1234567 --repo-root ../.. \
 
 Errors: an unknown release, machine type, or feature; a campaign that already
 exists; no unit matching the filters; max jobs for a pool no unit in
-scope draws on; fewer than one for a pool, or more than one for `wsl`.
+scope draws on; fewer than one for a pool, or more than one for `wsl`; max
+jobs above the checkout's `max_jobs.<pool>`, or units in a disabled pool; a
+unit that two scenarios of the same name both cover; a campaign id with
+characters other than letters, digits, `.`, `_` and `-`.
 
 ## campaign list, run, pause, retry
 
@@ -211,7 +216,7 @@ Optional arguments:
 
 * `--repo-root DIR`: The checkout whose state holds the campaign, for
   `--campaign-id`. Defaults to `$UBUNTU_PRO_CLIENT_REPO`.
-* `--problems N`: List at most `N` problem rows. Defaults to all.
+* `--problems N`: List at most `N` problem rows. Defaults to `2000`.
 * `--group-by unit|scenario`: List problems one unit per row, or one
   scenario per row with its units by state. Defaults to `unit`.
 * `--feature PATH`: Only this feature file. Repeatable.
@@ -278,8 +283,7 @@ Optional arguments:
 * `--format json|csv`: Defaults to `json`. CSV is one row per attempt with
   the columns `feature, scenario, release, machine_type, state, attempt,
   job_id, install_from, started_at, outcome, finished_at, interrupted`; a
-  unit never
-  attempted is one row with the attempt columns empty.
+  unit never attempted is one row with the attempt columns empty.
 * `--feature PATH`: Only this feature file. Repeatable.
 * `--scenario NAME`: Only this exact scenario name. Repeatable.
 * `--release NAME`: Only this release. Repeatable.
@@ -414,11 +418,11 @@ owner.
 
 Each campaign is one directory, `campaigns/<id>/`:
 
-| File                          | Written by            | Contents                                   |
-| ----------------------------- | --------------------- | ------------------------------------------ |
-| `campaign.json`               | `create`, once        | The header and the units in scope          |
-| `records.jsonl`               | every reconcile       | Every later record, append-only            |
-| `../../exports/<id>.tar.gz`   | `export`              | The evidence bundle, by default            |
+| File                        | Written by                               | Contents                          |
+| --------------------------- | ---------------------------------------- | --------------------------------- |
+| `campaign.json`             | `create`, once                           | The header and the units in scope |
+| `records.jsonl`             | `run`, `pause`, `retry`, every reconcile | Every later record, append-only   |
+| `../../exports/<id>.tar.gz` | `export`                                 | The evidence bundle, by default   |
 
 A crash mid-append can leave part of a line at the end of `records.jsonl`.
 Reading ignores it, and the next append cuts it off.

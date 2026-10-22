@@ -1,6 +1,6 @@
 ---
 name: behave-mcp-unit-tests
-description: What unit tests in tools/mcp_server_behave test, layer by layer, with good and bad examples. Use when writing or reviewing tests for domain, service, runner, adapter or config code in behave_mcp or behave_campaign.
+description: What unit tests in tools/mcp_server_behave test, layer by layer, with good and bad examples. Use when writing or reviewing tests for domain, service, reconcile, adapter or config code in behave_mcp or behave_campaign.
 ---
 
 # behave MCP unit tests
@@ -48,12 +48,12 @@ Good: the name says the exact value is irrelevant, and the id comes from the arr
 # Any count: the test is about the limit, not the number.
 SHOWN = 2
 
-result = service.get_results(limit=SHOWN)
+result = service.job_results(limit=SHOWN)
 ```
 
 ```python
 campaign_id = create(store)
-store.append(campaign_id, [IntentRecord(Intent.HOLD, AT)])
+store.append(campaign_id, [IntentRecord(Intent.HOLD, Cause.PAUSE, AT)])
 ```
 
 Good: two ids whose names say which is which.
@@ -66,8 +66,8 @@ OTHER_JOB_ID = "job-from-another-run"
 Bad: bare literals. Is `2` special? Which of `"1"` and `"2"` is the job under test?
 
 ```python
-service.get_results(limit=2)
-service.get_results(job_ids=["1"])
+service.job_results(limit=2)
+service.job_results(job_ids=["1"])
 assert [r.job_id for r in results] == ["1", "2"]
 ```
 
@@ -81,7 +81,7 @@ Good: the rule and its input are visible, and nothing else runs.
 def test_a_busy_wsl_job_does_not_hold_back_lxd(self):
     records = [
         *plan(UNIT_W1, UNIT_W2, UNIT_A, UNIT_B),
-        IntentRecord(Intent.RUN, AT),
+        IntentRecord(Intent.RUN, Cause.RUN, AT),
         attempt(UNIT_W1, "running"),
     ]
     jobs = [InFlightJob(unit=UNIT_W1, job_id="job1")]
@@ -123,10 +123,10 @@ assert launcher.calls == []
 Bad: patching the service's own private method. The test then proves the patch, and breaks on any refactor.
 
 ```python
-monkeypatch.setattr(service, "_scenario_names", lambda *_: set())
+monkeypatch.setattr(service, "_state", lambda *_: JobState.QUEUED)
 ```
 
-Time enters a service through `monotonic`, `sleep`, `now_utc` and `new_job_id`. A test of waiting or timestamps passes lambdas for them. It never sleeps.
+Time enters `BehaveService` through `monotonic`, `sleep`, `now_utc` and `new_job_id`, and `CampaignService` through `now` and `monotonic`. A test of waiting or timestamps passes lambdas for them. It never sleeps.
 
 ## Reconcile: one step at a time
 
@@ -146,7 +146,7 @@ campaigns.reconcile()
 Bad: a background thread and a sleep. The test is slow, and it fails when the machine is busy.
 
 ```python
-threading.Thread(target=reconcile_forever).start()
+threading.Thread(target=server._reconcile_forever, daemon=True).start()
 campaigns.run(campaign_id=campaign_id)
 time.sleep(1)
 assert len(jobs.queued) == 2
@@ -329,4 +329,4 @@ def test_every_outcome():
 - It uses the fakes in `tests/conftest.py`. When a test needs a fake to do more, it extends that fake, so each port keeps exactly one.
 - When a fix changes behaviour that a test pinned, the test changes to the correct behaviour, and its name changes if the name described the old one.
 
-Run the unit tests with `uv run pytest -q -m "not integration and not e2e"`, or one file or test with `uv run pytest -q tests/behave_campaign/test_runner.py -k starvation`.
+Run the unit tests with `uv run pytest -q -m "not integration and not e2e"`, or one file or test with `uv run pytest -q tests/behave_campaign/test_service_commands.py -k starvation`.

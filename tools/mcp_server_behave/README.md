@@ -27,9 +27,9 @@ The server exposes these MCP tools:
 - `list_jobs` -- lists queued and running jobs plus a bounded window of recently ended ones (finished or interrupted), and `pools`: each pool's max jobs and busy lanes, which is why a job is queued.
   - No known `job_id` or access to system processes required.
   - Reads every job off disk, so a job started by another server, by the CLI, or before a restart is listed and its state is current.
-  - Optional `limit` caps how many ended jobs are returned (most recent first). `total_ended` and `truncated` in the response tell you if older jobs were dropped. `limit` must be positive; values above the server max are silently capped, with `limit_clamped` set when that happens.
+  - Optional `limit` caps how many ended jobs are returned: the most recent are kept, listed oldest first after the queued and running ones. `total_ended` and `truncated` in the response tell you if older jobs were dropped. `limit` must be positive; values above the server max are silently capped, with `limit_clamped` set when that happens.
 - `job_results` -- what came of each job: what it ran, `state` and `ok`, behave's own counts, and every failing step with its message.
-  - One `JobResult` per job, most recently started first -- the same shape `wait_for_job` returns for one job.
+  - One `JobResult` per job, most recently queued first -- the same shape `wait_for_job` returns for one job.
   - Optional `job_ids`, `feature`, `scenario` (substring), `release`, `machine_type`, and `state` filters; `limit` caps the jobs listed, with `total` and `truncated` alongside. `limit` must be positive; values above the server max are capped, with `limit_clamped` set.
 - `wait_for_job` -- waits for a queued or running job to end.
   - Returns the job's `JobResult` (plus `returncode` and artifact paths) with `state` `finished` or `interrupted` (with `reason` `killed` or `died`). If the wait runs out first, it returns the job as it stands, `queued` or `running`, with `timed_out: true`.
@@ -40,45 +40,19 @@ The server exposes these MCP tools:
   - With `pattern` (a regex): the matching lines from `start` on, each with `context` lines around it, grep-style, until the next window would exceed `lines`. `matches` counts every match whether or not it fit.
   - Without: `lines` lines from `start`, or the last `lines` when `start` is 0.
   - `truncated` says the `lines` budget cut something; `log_path` is the file itself.
-- `job_artifacts` -- returns a job's file paths, which of them exist, its launch `record` and its `exit` (null until it ends).
+- `job_artifacts` -- returns a job's file paths, which of them exist, its `request`, its launch `record` (null until it starts) and its `exit` (null until it ends).
+- `kill_job` -- kills a queued or running job, whichever process started it. The job ends `interrupted` with `reason` `killed`, never as a failure; `killed` is false when there was nothing to stop.
 
-Release and substrate values are derived by parsing each feature's Gherkin `Examples` tables with the `behave` library, so the catalog always reflects the current feature files (no hardcoded release/substrate lists).
+Campaign tools are listed under [Campaigns](#campaigns).
 
-Everything the server writes lives under one directory in the server's own
-checkout, `.mcp_server_behave`, with a subdirectory per kind of artifact. A
-call that names another checkout with `repo_root` runs there, but its files
-still land here, so one server keeps one set of jobs and campaigns:
-
-```
-.mcp_server_behave/
-  config.json     this checkout's config; see [Configuration](#configuration)
-  reconcile.lock  held while a process reconciles the queue
-  jobs/           one directory per behave job
-  lanes/          one lock file per lane, held by the job using it
-  campaigns/      one directory per campaign: its records
-```
-
-`MCP_STATE_DIR` moves the whole thing; there is no separate variable per kind.
-
-For each job, these files live under `jobs/`:
-
-- `<job_id>/request.json`: what the job is to run -- unit, built command, install source, checkout, queue time. Written once, when it is queued.
-- `<job_id>/job.json`: what the job ran with -- the request, plus its start time, the checkout's git state, every behave option in force (each secret shown only as `<set>`) and artifact paths. Written once, when it starts.
-- `<job_id>/exit.json`: how it ended -- `returncode`, `ok`, `killed`, `finished_at`, and the `error` when tox could not start. Written once, by the job process; a job without one is running, or was interrupted.
-- `<job_id>/job.lock`: held by the job process for as long as it lives, and holding its PID. See [How a job runs](#how-a-job-runs).
-- `<job_id>/stdout.log`: combined stdout/stderr stream
-- `<job_id>/report.json`: behave JSON formatter output
-
-The JSON files are written to a temporary file and renamed into place, so a reader never sees half of one. `list_jobs` lists every directory holding a `request.json`.
-
-It also exposes a health endpoint at `/healthz` for basic checks.
+Release and substrate values are derived by parsing each feature's Gherkin `Examples` tables with the `behave` library, so the catalog always reflects the current feature files. Which machine types a job may run on is fixed in `behave_mcp/domain/pools.py`, copied from `features/machine_types.py`.
 
 ## Campaigns
 
 This project also ships a `behave_campaign` package: the durable record of which test
 units are in scope for a verification run, what has been attempted, and what to
-run next. The server's job history is a bounded window, so an SRU campaign that
-runs for days is recorded there instead.
+run next. A job knows only what it ran; a campaign records what each attempt
+established, across as many jobs and days as it takes.
 
 `create_campaign` plans one and stores it without starting anything;
 `list_campaigns` and `campaign_status` report on them. A campaign's state is
@@ -104,10 +78,6 @@ Any number of campaigns may run at once, sharing the checkout's lanes with
 one-off jobs; see [How a job runs](#how-a-job-runs). A campaign's `max_jobs`
 is its own share, within the checkout's max jobs.
 
-State written in an earlier layout -- flat job files, single-file campaigns,
-or campaigns from before this state model -- is not read. Delete
-`.mcp_server_behave` after upgrading.
-
 `await_campaign_events` is how a caller follows a running campaign: it blocks
 until something happens, returns every event after a cursor, and always
 reports the campaign's state -- state, intent, progress, jobs in flight,
@@ -127,6 +97,8 @@ is can be read without scanning the event stream.
 is the only way a non-passing unit is ever re-run. It always sets the
 campaign's intent to run. `kill_job` kills a job that has hung: the job is
 interrupted, and a running campaign queues its unit again.
+`export_campaign` writes a complete campaign's evidence bundle under
+`exports/`.
 
 Everything is also usable without the server through the `behave-tests`
 CLI, whose commands are the tools' own under noun-first names (`job run`
@@ -172,63 +144,18 @@ Other clients take the same URL, for example:
 }
 ```
 
-## Testing
-
-Run the package tests:
-
-```bash
-uv run pytest -q
-```
-
-Run only fast tests (exclude end-to-end long-running test):
-
-```bash
-uv run pytest -q -m "not e2e"
-```
-
-Run only the long-running end-to-end tests:
-
-```bash
-uv run pytest -q -m "e2e and long_running"
-```
-
-`tests/mcp_surface/test_campaign_e2e.py` holds the e2e tests that need no
-contract token and no LXD. They run real campaigns over
-`features/_version.feature`'s attached-version scenario, which skips for want
-of `contract_token` config, reconciling while they wait as the server's
-timer does. One runs a campaign to completion and checks, from the jobs' own
-start and end times, that three ran at once. The other pauses with kill on a
-real job and runs the campaign to completion. They finish in seconds.
-
-## Linting and type checking
-
-This package is not covered by the repo-root `tox.ini` lint/type envs
-(those only check `uaclient/ features/ lib/`), so it keeps its own
-`lint` dependency group and runs these tools directly via `uv`:
-
-```bash
-uv sync --extra lint
-uv run black --check behave_mcp behave_campaign tests
-uv run isort --check-only behave_mcp behave_campaign tests
-uv run flake8 behave_mcp behave_campaign tests
-uv run mypy behave_mcp behave_campaign
-uv run lint-imports
-```
-
-`lint-imports` checks the import contracts in `pyproject.toml`: which
-modules may import which, within and between the two packages.
-
 ## Configuration
 
-Each checkout has one config, `config.json` in its state directory, set only
-with `behave-tests config`. Every process that starts jobs reads it, so a
+Each state directory has one config, `config.json`, set only with
+`behave-tests config`, run from `tools/mcp_server_behave`. Every process that starts jobs reads it, so a
 job runs the same whoever starts it.
 
 ```bash
-behave-tests config                                   # show it
-behave-tests config set max_jobs.lxd 3
-echo "$TOKEN" | behave-tests config set behave.contract_token -
-behave-tests config unset behave.custom_ppa
+export UBUNTU_PRO_CLIENT_REPO=../..   # or pass --repo-root on each command
+uv run behave-tests config                                   # show it
+uv run behave-tests config set max_jobs.lxd 3
+echo "$TOKEN" | uv run behave-tests config set behave.contract_token -
+uv run behave-tests config unset behave.custom_ppa
 ```
 
 - `max_jobs.<pool>`: how many behave jobs may run at once in that pool.
@@ -273,15 +200,16 @@ The server reads these at startup:
   asked for, in seconds. Defaults to `60`, and must be between 1 and 120 --
   the real ceiling is the MCP client's own request timeout, which varies per
   host. A call asking for longer is rejected rather than quietly shortened.
+- `UBUNTU_PRO_CLIENT_REPO`: the checkout the server serves, and the default
+  `repo_root`. Defaults to the checkout the server runs from.
 - `MCP_STATE_DIR`: where everything is written -- the config, job artifacts
   under `jobs/`, campaign records under `campaigns/`. Defaults to
   `.mcp_server_behave` in the server's checkout (`UBUNTU_PRO_CLIENT_REPO`, or
   the checkout it runs from).
 
-Starting the server with a removed variable (`MCP_MAX_LXD_JOBS`,
-`MCP_MAX_CLOUD_JOBS`, `MCP_MAX_WSL_JOBS`, `MCP_MAX_PARALLEL_JOBS`,
-`MCP_ALLOW_CLOUD_MACHINE_TYPES` or `MCP_TRANSPORT`) is an error that says
-what to use instead.
+Starting the server with any of `MCP_MAX_LXD_JOBS`, `MCP_MAX_CLOUD_JOBS`,
+`MCP_MAX_WSL_JOBS`, `MCP_MAX_PARALLEL_JOBS`, `MCP_ALLOW_CLOUD_MACHINE_TYPES`
+or `MCP_TRANSPORT` set is an error that says what to use instead.
 
 The catalog tools (`list_features`, `describe_feature`, `list_dimensions`,
 `find_scenarios`), `run_job` and `create_campaign` accept a `repo_root`
@@ -332,7 +260,36 @@ writes `job.json` while holding the lock, starts the job process and hands
 it both. The job process holds them while it runs tox as its child, and when
 tox exits it writes `exit.json`.
 
-That is what makes a job's state readable from any process, after any crash:
+Everything the server writes lives under one directory in the server's own
+checkout, `.mcp_server_behave`, with a subdirectory per kind of artifact. A
+call that names another checkout with `repo_root` runs there, but its files
+still land here, so one server keeps one set of jobs and campaigns:
+
+```
+.mcp_server_behave/
+  config.json     the config; see Configuration
+  reconcile.lock  held while a process reconciles, or a command writes
+  jobs/           one directory per behave job
+  lanes/          one lock file per lane, held by the job using it
+  campaigns/      one directory per campaign: its records
+  exports/        campaign evidence bundles, one .tar.gz per export
+```
+
+`MCP_STATE_DIR` moves the whole thing; there is no separate variable per kind.
+
+For each job, these files live under `jobs/`:
+
+- `<job_id>/request.json`: what the job is to run -- unit, built command, install source, checkout, queue time, and the campaign it is an attempt for, if any. Written once, when it is queued.
+- `<job_id>/job.json`: what the job ran with -- the request, plus its start time, the checkout's git state, every behave option in force (each secret shown only as `<set>`) and artifact paths. Written once, when it starts.
+- `<job_id>/exit.json`: how it ended -- `returncode`, `ok`, `killed`, `finished_at`, and the `error` when tox could not start. Written once, by the job process, or by `kill_job` for a job still queued; a job without one is running, or was interrupted.
+- `<job_id>/job.lock`: held by the job process for as long as it lives, and holding its PID.
+- `<job_id>/kill`: left by `kill_job` on a running job, so a job process still starting up sees the kill.
+- `<job_id>/stdout.log`: combined stdout/stderr stream
+- `<job_id>/report.json`: behave JSON formatter output
+
+The JSON files are written to a temporary file and renamed into place, so a reader never sees half of one. `list_jobs` lists every directory holding a `request.json`.
+
+Those three files make a job's state readable from any process, after any crash:
 
 | `exit.json` | `job.json` | `job.lock` held | state |
 | --- | --- | --- | --- |
@@ -354,7 +311,63 @@ made; the exit is recorded with `killed: true`. A hard kill or a reboot can
 leave an instance behind: cleaning those up is pycloudlib's business, not
 this tool's.
 
+## Testing
+
+Run the package tests:
+
+```bash
+uv run pytest -q
+```
+
+Run only fast tests (exclude end-to-end long-running test):
+
+```bash
+uv run pytest -q -m "not e2e"
+```
+
+Run only the integration tests (the real MCP protocol, the CLI, startup and
+the real `features/`):
+
+```bash
+uv run pytest -q -m integration
+```
+
+Run only the long-running end-to-end tests:
+
+```bash
+uv run pytest -q -m "e2e and long_running"
+```
+
+`tests/mcp_surface/test_jobs_e2e.py` and `test_campaign_e2e.py` hold the e2e
+tests that need no contract token and no LXD. They run real jobs of
+`features/_version.feature`'s attached-version scenario, which skips for want
+of `contract_token` config. The job tests kill a running job from another
+process, and run two queued jobs back to back on one lane with nobody
+calling. The campaign tests reconcile while they wait, as the server's timer
+does: one runs a campaign to completion and checks, from the jobs' own start
+and end times, that three ran at once; the other pauses with kill on a real
+job and runs the campaign to completion. Each takes as long as the tox runs
+it starts.
+
+## Linting and type checking
+
+This package is not covered by the repo-root `tox.ini` lint/type envs
+(those only check `uaclient/ features/ lib/`), so it keeps its own
+`lint` extra and runs these tools directly via `uv`:
+
+```bash
+uv sync --extra lint
+uv run black --check behave_mcp behave_campaign tests
+uv run isort --check-only behave_mcp behave_campaign tests
+uv run flake8 behave_mcp behave_campaign tests
+uv run mypy behave_mcp behave_campaign
+uv run lint-imports
+```
+
+`lint-imports` checks the import contracts in `pyproject.toml`: which
+modules may import which, within and between the two packages.
+
 ## TODOs
 
-- Some sort of API config endpoint and tool - can expose to the agent any relevant and non-secret config values. For secret config values like the token and cloud creds, we can indicate if they're set so that the agent can at least correlate skipped tests with missing required config.
+- An MCP tool that returns `behave-tests config`'s view (secrets shown as `<set>`), so an agent can correlate skipped tests with missing config.
 - Take a second look at the response shapes on each endpoint. See if we can reduce the default response size and add flags for more verbose info. It would be great to have a clean integration between the MCP results and the test tracker inputs. Cutting down on response size also reduces token usage.

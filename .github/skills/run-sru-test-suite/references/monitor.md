@@ -24,7 +24,7 @@ Use the `behave` MCP tools; each tool's description says how to call it.
      - **candidate defect**: `ASSERT FAILED` / `AssertionError` with an
        expected-vs-got diff
    - `unit.skipped`: note the missing config names; `find_scenarios` with
-     the scenario name returns its `requires_config`.
+     `text` set to the scenario name returns its `requires_config`.
    - `anomaly.*`, `job.overdue`, `unit.unclassifiable`: note as findings.
 3. Stop and report when any of these holds:
    - `state` is `complete` or `paused`.

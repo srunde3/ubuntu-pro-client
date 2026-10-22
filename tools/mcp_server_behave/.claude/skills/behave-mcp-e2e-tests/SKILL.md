@@ -51,6 +51,7 @@ Bad: it waits a fixed time and then asserts. Real jobs take as long as they take
 From `tools/mcp_server_behave`:
 
 ```bash
+uv run pytest -q -m "e2e and long_running" tests/mcp_surface/test_jobs_e2e.py
 uv run pytest -q -m "e2e and long_running" tests/mcp_surface/test_campaign_e2e.py
 uv run pytest -q -m "e2e and long_running" tests/mcp_surface/test_e2e.py
 ```
