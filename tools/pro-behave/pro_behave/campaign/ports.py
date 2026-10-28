@@ -88,7 +88,7 @@ class CampaignStore(Protocol):
 
 
 class FeatureReader(Protocol):
-    """Reads the behave feature files a campaign draws its units from."""
+    """Reads the checkout's catalog that a campaign draws its units from."""
 
     def discover_units(self, repo_root: Path, scope: Scope) -> list[Unit]:
         """Return every unit in the feature files in ``scope``.
@@ -162,7 +162,7 @@ class JobRunner(Protocol):
 
 
 class JobFiles(Protocol):
-    """Finds what the behave jobs left behind, by job id."""
+    """Finds what a campaign's jobs left behind, by job id."""
 
     def files(self, job_id: str) -> Mapping[str, Path]:
         """Return the job's files that exist, keyed by their bundle name.

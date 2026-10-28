@@ -55,9 +55,21 @@ These come from [designs/framework-seam.md](designs/framework-seam.md).
 | ID | Decision | Why | Source |
 | --- | --- | --- | --- |
 | DEC-22 | The tool, its package, state directory, environment variables, skills and MCP client registration are renamed `pro-e2e`. | The name should say what the tool runs, and stay true after a framework change. | Q1, Q4 |
-| DEC-23 | Behave sits behind one adapter with three seams: catalog, invocation and interpretation. The parser stays behave-specific. | A move to pytest becomes a sibling adapter. A parser is naturally specific to its framework. | |
+| DEC-23 | Built. Behave sits behind one adapter with three seams: catalog, invocation and interpretation. The parser stays behave-specific. | A move to pytest becomes a sibling adapter. A parser is naturally specific to its framework. | |
 | DEC-24 | A job decides its unit's result when it ends, and every reader gets that one result. The result counts only the unit's own instances, which the request records when the job is queued. | A single run and a campaign must report the same outcome. Rows for other combos are not part of the unit. | |
 | DEC-25 | The job process writes the result with the exit, in one file and one write. A failed interpretation becomes an `error` result. | Keeps DEC-04: a finished job always has its result. | Q3 |
 | DEC-26 | Scenario filters match exact names. Substring search by name goes. | Units are selected exactly (DEC-05). | |
 | DEC-27 | A unit passes when at least one of its own instances passes and none fails. Its skipped instances are listed in the result with their skip reasons. A unit whose own instances all skip is `skipped`. | What matters is a pass on the unit that was asked for. | Q2 |
 | DEC-28 | The file that marks a job's end is `result.json`. A killed job's result says `killed`, with no outcome. | Readers look for a job's result there, and a kill is a fair thing for a result to say. | Q5 |
+
+## Built: the framework seam
+
+Step 1 of [designs/framework-seam.md](designs/framework-seam.md). Each decision was reviewed by an independent agent before it was built.
+
+| ID | Decision | Why | Source |
+| --- | --- | --- | --- |
+| DEC-29 | The catalog's types and its queries are framework-neutral, in `jobs/domain/catalog.py`. The parser keeps its own types, and the behave adapter maps them onto the catalog's, guarded by a test that maps a fully populated feature. | The job service and campaigns query the catalog without importing behave, and a pytest parser fills the same types. The parser stays liftable as a library (DEC-21). | |
+| DEC-30 | `match_unit` stays in the domain: a unit's key must name exactly one catalog scenario. | Units are keyed by scenario name under any framework, so the check guards every adapter. | |
+| DEC-31 | The port builds the command at queue time (`invocation`) and the environment at launch (`environment`), in separate methods. `Invocation` holds the command, and step 2 adds the unit's instances to it. | The command is stored in the request. The environment carries secrets, so it is never stored. | |
+| DEC-32 | The job process is a composition root at `pro_behave/job_process.py`. The launcher is given the module to run, and a contract keeps the job process out of `campaign` and the front-ends. | It must build the behave adapter, which `jobs` may not import, and DEC-09 must stay enforced. | |
+| DEC-33 | The campaign domain works on campaign-owned `CatalogScenario` values. Only campaign adapters read the catalog, from the framework the job service uses. | A campaign plans against the same catalog its jobs are validated against, and its domain imports nothing from the catalog. | |

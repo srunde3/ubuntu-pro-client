@@ -18,9 +18,10 @@ from pathlib import Path
 
 import pytest
 
+from pro_behave.behave.framework import BehaveFramework
 from pro_behave.campaign.adapters import (
+    CatalogFeatureReader,
     JsonlCampaignStore,
-    ParserFeatureReader,
     ServiceJobRunner,
     system_now,
 )
@@ -52,7 +53,7 @@ def campaigns_over(service, store):
     """The campaign service every entry point builds, over ``service``."""
     return CampaignService(
         store=store,
-        features=ParserFeatureReader(),
+        features=CatalogFeatureReader(BehaveFramework().catalog),
         now=system_now,
         repo_state=repo_state,
         max_jobs_ceiling=service.read_config().max_jobs,

@@ -259,7 +259,7 @@ coordinate through the lock and the files, and they all read the same
 config.
 
 Each job runs under its own job process,
-`python -m pro_behave.jobs.job_process`, in its own session, so the death of whatever started it, or a signal to it,
+`python -m pro_behave.job_process`, in its own session, so the death of whatever started it, or a signal to it,
 never reaches the job. Reconcile takes a lane and `jobs/<id>/job.lock`,
 writes `job.json` while holding the lock, starts the job process and hands
 it both. The job process holds them while it runs tox as its child, and when

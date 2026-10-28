@@ -7,12 +7,13 @@ import time
 
 import pytest
 
+from pro_behave.behave.framework import BehaveFramework
 from pro_behave.campaign import adapters as adapters_module
 from pro_behave.campaign.adapters import (
     CampaignDirStore,
+    CatalogFeatureReader,
     JobDirFiles,
     JsonlCampaignStore,
-    ParserFeatureReader,
     ServiceJobRunner,
     TarBundleWriter,
 )
@@ -35,6 +36,7 @@ from pro_behave.campaign.ports import (
     QueueRefused,
 )
 from pro_behave.campaign.service import CampaignService
+from pro_behave.jobs.domain import catalog
 from pro_behave.jobs.domain.pools import Pool
 from pro_behave.jobs.service import JobServiceError, UnknownJobError
 from tests.conftest import (
@@ -355,6 +357,39 @@ class TestCampaignDirStore:
         assert store.list_ids() == [CAMPAIGN]
 
 
+class TestCatalogFeatureReader:
+    def test_units_come_from_the_catalog_it_was_given(self, tmp_path):
+        feature = catalog.FeatureDetail(
+            path="features/a.feature",
+            title="A",
+            tags=[],
+            requires_config=[],
+            scenarios=[
+                catalog.ScenarioSummary(
+                    name="A",
+                    type="scenario_outline",
+                    tags=[],
+                    requires_config=[],
+                    example_columns=[],
+                    combos=[catalog.Combo("jammy", "lxd-container")],
+                )
+            ],
+        )
+        reader = CatalogFeatureReader(lambda repo_root: [feature])
+
+        units = reader.discover_units(tmp_path, Scope())
+
+        assert units == [
+            Unit("features/a.feature", "A", "jammy", "lxd-container")
+        ]
+
+    def test_an_empty_catalog_is_rejected(self, tmp_path):
+        reader = CatalogFeatureReader(lambda repo_root: [])
+
+        with pytest.raises(CampaignError, match="no features found"):
+            reader.discover_units(tmp_path, Scope())
+
+
 class TestSystemNow:
     def test_it_is_a_microsecond_utc_stamp(self):
         from datetime import datetime
@@ -651,7 +686,7 @@ class TestCampaignsShareTheJobQueue:
         store = JsonlCampaignStore(tmp_path / "campaigns")
         campaigns = CampaignService(
             store=store,
-            features=ParserFeatureReader(),
+            features=CatalogFeatureReader(BehaveFramework().catalog),
             now=lambda: AT,
             repo_state=lambda root: RepoState(root=str(root)),
             jobs=ServiceJobRunner(

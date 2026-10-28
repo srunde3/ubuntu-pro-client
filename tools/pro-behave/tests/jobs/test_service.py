@@ -251,6 +251,29 @@ def test_run_job_rejects_unlisted_feature(tmp_path):
         )
 
 
+def test_run_job_rejects_a_feature_file_that_cannot_be_parsed(tmp_path):
+    # The catalog leaves out what it cannot parse, so list_features never
+    # lists such a file.
+    repo_root = make_repo_with_feature(tmp_path, "features/cli/attach.feature")
+    (repo_root / "features" / "broken.feature").write_text("not gherkin\n")
+    launcher = FakeJobLauncher()
+    service = _make_service(
+        FakeWorkspace(repo_root=repo_root, jobs_dir=tmp_path),
+        launcher=launcher,
+    )
+
+    with pytest.raises(
+        JobServiceError, match="Feature is not listed by list_features"
+    ):
+        service.run_job(
+            "features/broken.feature",
+            scenario=UNIT_SCENARIO,
+            release="jammy",
+            machine_type="lxd-container",
+        )
+    assert launcher.calls == []
+
+
 def test_run_job_accepts_normalized_listed_feature(tmp_path):
     repo_root = make_repo_with_feature(tmp_path, "features/cli/attach.feature")
     launcher = FakeJobLauncher()

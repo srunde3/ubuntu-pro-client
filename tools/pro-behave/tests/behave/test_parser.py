@@ -1,9 +1,9 @@
-"""Unit tests for ``pro_behave.jobs.parser``."""
+"""Unit tests for ``pro_behave.behave.parser``."""
 
 import dataclasses
 import os
 
-from pro_behave.jobs import parser
+from pro_behave.behave import parser
 
 
 class _Step:
@@ -173,122 +173,6 @@ def test_summarize_feature_shapes_scenarios():
     ]
 
 
-def test_catalog_entry_aggregates_scenarios():
-    detail = parser.FeatureDetail(
-        path="features/cli/attach.feature",
-        title="CLI attach",
-        tags=["uses.config.contract_token"],
-        requires_config=["contract_token"],
-        scenarios=[
-            parser.ScenarioSummary(
-                name="Attach on a machine",
-                type="scenario_outline",
-                tags=[],
-                requires_config=["contract_token"],
-                example_columns=[],
-                combos=[
-                    parser.Combo(release="resolute", machine_type="lxd-vm"),
-                    parser.Combo(
-                        release="jammy", machine_type="lxd-container"
-                    ),
-                ],
-            ),
-            parser.ScenarioSummary(
-                name="Attach invalid token",
-                type="scenario_outline",
-                tags=[],
-                requires_config=["contract_token_staging_expired"],
-                example_columns=[],
-                combos=[
-                    parser.Combo(
-                        release="jammy", machine_type="lxd-container"
-                    ),
-                ],
-            ),
-        ],
-    )
-    assert dataclasses.asdict(parser.catalog_entry(detail)) == {
-        "path": "features/cli/attach.feature",
-        "title": "CLI attach",
-        "scenario_count": 2,
-        "requires_config": [
-            "contract_token",
-            "contract_token_staging_expired",
-        ],
-        "releases": ["jammy", "resolute"],
-        "machine_types": ["lxd-container", "lxd-vm"],
-    }
-
-
-def test_scenario_matches_filters():
-    scenario = parser.ScenarioSummary(
-        name="Attach on a machine",
-        type="scenario",
-        tags=["arm64"],
-        requires_config=[],
-        example_columns=[],
-        combos=[
-            parser.Combo(release="jammy", machine_type="lxd-container"),
-            parser.Combo(release="resolute", machine_type="lxd-vm"),
-        ],
-    )
-    assert parser.scenario_matches(
-        scenario, [], release="resolute", machine_type="lxd-vm"
-    )
-    assert not parser.scenario_matches(
-        scenario, [], release="resolute", machine_type="lxd-container"
-    )
-    assert parser.scenario_matches(scenario, [], tag="arm64")
-    assert parser.scenario_matches(scenario, [], text="MACHINE")
-
-
-def test_aggregate_dimensions_counts_scenarios_once_per_value():
-    details = [
-        parser.FeatureDetail(
-            path="features/cli/attach.feature",
-            title="CLI attach",
-            tags=[],
-            requires_config=[],
-            scenarios=[
-                parser.ScenarioSummary(
-                    name="Attach on a machine",
-                    type="scenario",
-                    tags=[],
-                    requires_config=[],
-                    example_columns=[],
-                    combos=[
-                        parser.Combo(
-                            release="jammy", machine_type="lxd-container"
-                        ),
-                        parser.Combo(release="jammy", machine_type="lxd-vm"),
-                    ],
-                ),
-                parser.ScenarioSummary(
-                    name="Detach",
-                    type="scenario",
-                    tags=[],
-                    requires_config=[],
-                    example_columns=[],
-                    combos=[
-                        parser.Combo(
-                            release="resolute", machine_type="lxd-vm"
-                        ),
-                    ],
-                ),
-            ],
-        )
-    ]
-    dimensions = dataclasses.asdict(parser.aggregate_dimensions(details))
-    assert dimensions["releases"] == [
-        {"name": "jammy", "scenario_count": 1},
-        {"name": "resolute", "scenario_count": 1},
-    ]
-    assert dimensions["machine_types"] == [
-        {"name": "lxd-container", "scenario_count": 1},
-        {"name": "lxd-vm", "scenario_count": 2},
-    ]
-
-
 _SAMPLE_FEATURE = """\
 @uses.config.contract_token
 Feature: Sample feature
@@ -303,20 +187,6 @@ ubuntu-advantage-tools installed
       | jammy    | lxd-container |
       | resolute | lxd-vm        |
 """
-
-
-def test_discover_feature_files_sorted(tmp_path):
-    (tmp_path / "features" / "cli").mkdir(parents=True)
-    (tmp_path / "features" / "b.feature").write_text("", encoding="utf-8")
-    (tmp_path / "features" / "cli" / "a.feature").write_text(
-        "", encoding="utf-8"
-    )
-    (tmp_path / "features" / "notes.txt").write_text("", encoding="utf-8")
-
-    assert parser.discover_feature_files(tmp_path) == [
-        "features/b.feature",
-        "features/cli/a.feature",
-    ]
 
 
 def test_discover_feature_details_parses_scenarios(tmp_path):

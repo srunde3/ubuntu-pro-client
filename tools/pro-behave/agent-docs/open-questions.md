@@ -11,7 +11,7 @@ Two scenarios in the corpus share a name with another scenario in the same featu
 | `features/_version.feature` | Check pro version | 8 |
 | `features/api/fix_plan.feature` | Fix command on an unattached machine | 3 |
 
-The fix is to rename the scenarios in `features/`, which is a change to the test suite rather than to this tool. Under the framework seam design the check moves into the behave adapter, because pytest node ids are unique.
+The fix is to rename the scenarios in `features/`, which is a change to the test suite rather than to this tool. The check itself stays in the domain (DEC-30).
 
 ## Architecture review items have not been copied here
 

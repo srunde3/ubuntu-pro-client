@@ -1,6 +1,6 @@
 """The process each behave job runs under.
 
-``python -m pro_behave.jobs.job_process <job dir> [--lane-fd N] -- <command>``
+``python -m pro_behave.job_process <job dir> [--lane-fd N] -- <command>``
 
 The launcher hands this process the job's lane lock and its job lock, and
 then lets go of both, so they are held as long as this process runs the
@@ -32,12 +32,12 @@ from pathlib import Path
 from types import FrameType
 from typing import Sequence
 
+from pro_behave.behave.framework import BehaveFramework
 from pro_behave.jobs.adapters import (
     FileConfigStore,
     FileLanePool,
     FileReconcileLock,
     JobProcessLauncher,
-    LocalFeatureFileReader,
     LocalJobResultStore,
     LocalJobResultStoreFactory,
     LocalWorkspace,
@@ -45,6 +45,9 @@ from pro_behave.jobs.adapters import (
 from pro_behave.jobs.domain import layout
 from pro_behave.jobs.messages import JobExit
 from pro_behave.jobs.service import JobService
+
+# The module a job process runs as, for the launcher.
+ENTRY = "pro_behave.job_process"
 
 # From <sys/prctl.h>: deliver a signal to this process when its parent dies.
 PR_SET_PDEATHSIG = 1
@@ -128,7 +131,7 @@ class JobProcess:
 
 
 USAGE = (
-    "usage: python -m pro_behave.jobs.job_process JOB_DIR [--lane-fd N] -- "
+    "usage: python -m pro_behave.job_process JOB_DIR [--lane-fd N] -- "
     "COMMAND..."
 )
 
@@ -160,12 +163,12 @@ def _job_service(state_dir: Path) -> JobService:
     return JobService(
         workspace=workspace,
         config=FileConfigStore(workspace.resolve_state_dir),
-        feature_reader=LocalFeatureFileReader(),
+        framework=BehaveFramework(),
         results=LocalJobResultStoreFactory(),
         lanes=FileLanePool(
             lambda: layout.lanes_dir(workspace.resolve_state_dir())
         ),
-        launcher=JobProcessLauncher(workspace.resolve_jobs_dir),
+        launcher=JobProcessLauncher(workspace.resolve_jobs_dir, ENTRY),
         reconcile_lock=FileReconcileLock(workspace.resolve_state_dir),
         monotonic=time.monotonic,
         sleep=time.sleep,

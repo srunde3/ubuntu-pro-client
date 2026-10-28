@@ -15,10 +15,11 @@ from mcp.types import TextContent
 from pydantic import BaseModel, Field
 from starlette.responses import JSONResponse
 
+from pro_behave.behave.framework import BehaveFramework
 from pro_behave.campaign.adapters import (
+    CatalogFeatureReader,
     JobDirFiles,
     JsonlCampaignStore,
-    ParserFeatureReader,
     ServiceJobRunner,
     TarBundleWriter,
     system_now,
@@ -47,7 +48,6 @@ from pro_behave.jobs.adapters import (
     FileLanePool,
     FileReconcileLock,
     JobProcessLauncher,
-    LocalFeatureFileReader,
     LocalJobResultStoreFactory,
     LocalWorkspace,
 )
@@ -89,6 +89,12 @@ from pro_behave.mcp.settings import (
 )
 
 logger = logging.getLogger(__name__)
+
+# The test framework every job and campaign in this process uses.
+FRAMEWORK = BehaveFramework()
+
+# The module each job's process runs as (``pro_behave/job_process.py``).
+JOB_PROCESS = "pro_behave.job_process"
 
 try:
     _settings = load_settings(os.environ)
@@ -230,12 +236,12 @@ def create_service() -> JobService:
     return JobService(
         workspace=workspace,
         config=FileConfigStore(workspace.resolve_state_dir),
-        feature_reader=LocalFeatureFileReader(),
+        framework=FRAMEWORK,
         results=LocalJobResultStoreFactory(),
         lanes=FileLanePool(
             lambda: layout.lanes_dir(workspace.resolve_state_dir())
         ),
-        launcher=JobProcessLauncher(workspace.resolve_jobs_dir),
+        launcher=JobProcessLauncher(workspace.resolve_jobs_dir, JOB_PROCESS),
         reconcile_lock=FileReconcileLock(workspace.resolve_state_dir),
         monotonic=time.monotonic,
         sleep=time.sleep,
@@ -285,7 +291,7 @@ def campaign_service() -> CampaignService:
     """
     return CampaignService(
         store=campaign_store(),
-        features=ParserFeatureReader(),
+        features=CatalogFeatureReader(FRAMEWORK.catalog),
         now=system_now,
         repo_state=read_repo_state,
         max_jobs_ceiling=_service.read_config().max_jobs,

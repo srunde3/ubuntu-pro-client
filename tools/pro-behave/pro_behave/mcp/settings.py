@@ -7,7 +7,7 @@ values raise ``ConfigError`` loudly rather than degrading at request time.
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-from pro_behave.jobs.domain.config import BEHAVE_ENV_PREFIX
+from pro_behave.behave.environment import BEHAVE_ENV_PREFIX
 
 HOST_ENV_VAR = "PRO_BEHAVE_MCP_HOST"
 PORT_ENV_VAR = "PRO_BEHAVE_MCP_PORT"

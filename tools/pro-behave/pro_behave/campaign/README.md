@@ -1,12 +1,12 @@
 # Campaigns
 
-Durable record of behave test units and attempts.
+Durable record of test units and attempts.
 
 A job records one run. A campaign records which units are in scope, every
 attempt at each, and what it established, over an SRU verification that runs
 for days.
 
-A **test unit** is one behave scenario for one release on one `machine_type`.
+A **test unit** is one scenario for one release on one `machine_type`.
 
 ## Storage
 
@@ -69,10 +69,10 @@ queueable on its own.
 
 ## Scope
 
-`create` builds units from the feature files themselves, parsed with
-`pro_behave.jobs.parser` -- the same parser the job service uses to select
-scenarios at run time, so a campaign covers exactly the combinations each scenario supports
-rather than a Cartesian product.
+`create` builds units from the checkout's catalog -- the same catalog the
+job service validates units against, read through the test framework's
+adapter -- so a campaign covers exactly the combinations each scenario
+supports rather than a Cartesian product.
 
 `create` defines scope once, from repeatable `--release`, `--machine-type`,
 `--feature`, and `--scenario` filters; omitting them all yields the full
@@ -423,8 +423,8 @@ per concern.
 - `signals.py`: the thresholds for derived signals, and which jobs are
   overdue.
 - `feed.py`: derives every event from the record log.
-- `discovery.py`: builds units from the feature files through
-  `pro_behave.jobs.parser`.
+- `discovery.py`: builds units from the scenarios the checkout's catalog
+  offers.
 - `bundle.py`: what a complete campaign's evidence bundle holds.
 
 `views/` turns records into what a caller or reviewer reads, and decides

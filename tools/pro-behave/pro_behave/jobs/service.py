@@ -4,22 +4,27 @@ import logging
 from pathlib import Path
 from typing import Callable, ContextManager
 
-from pro_behave.jobs import parser
+from pro_behave.jobs.domain.catalog import (
+    FeatureDetail,
+    UnitMatch,
+    aggregate_dimensions,
+    catalog_entry,
+    filtered_combos,
+    match_unit,
+    normalize_feature_arg,
+    scenario_matches,
+)
 from pro_behave.jobs.domain.config import (
     CheckoutConfig,
     behave_option_error,
-    job_environment,
     shown_options,
 )
 from pro_behave.jobs.domain.jobs import (
     DEFAULT_INSTALL_FROM,
-    ScenarioCombos,
-    UnitMatch,
-    build_command,
+    Unit,
     interruption,
     job_matches_result_filters,
     job_state,
-    match_unit,
     validate_install_from,
     validate_machine_type,
 )
@@ -38,7 +43,7 @@ from pro_behave.jobs.domain.limits import (
     MAX_LOG_LINES,
     MAX_RESULTS_LIMIT,
 )
-from pro_behave.jobs.domain.logs import digest_log, select_log_lines
+from pro_behave.jobs.domain.logs import select_log_lines
 from pro_behave.jobs.domain.pools import (
     DEFAULT_MAX_JOBS,
     POOL_OF,
@@ -50,7 +55,6 @@ from pro_behave.jobs.domain.queue import (
     plan_launches,
     queue_position,
 )
-from pro_behave.jobs.domain.report import summarize_report
 from pro_behave.jobs.messages import (
     ArtifactsResponse,
     ConfigResponse,
@@ -83,7 +87,7 @@ from pro_behave.jobs.messages import (
 )
 from pro_behave.jobs.ports import (
     ConfigStore,
-    FeatureFileReader,
+    Framework,
     JobLauncher,
     JobResultStore,
     JobResultStoreFactory,
@@ -135,7 +139,7 @@ class JobService:
         *,
         workspace: Workspace,
         config: ConfigStore,
-        feature_reader: FeatureFileReader,
+        framework: Framework,
         results: JobResultStoreFactory,
         lanes: LanePool,
         launcher: JobLauncher,
@@ -147,7 +151,7 @@ class JobService:
     ) -> None:
         self._workspace = workspace
         self._config = config
-        self._feature_reader = feature_reader
+        self._framework = framework
         self._results = results
         self._lanes = lanes
         self._launcher = launcher
@@ -172,11 +176,9 @@ class JobService:
         except ValueError as exc:
             raise JobServiceError(str(exc)) from exc
 
-        details = self._feature_reader.discover_feature_details(
-            resolved_repo_root
-        )
+        details = self._framework.catalog(resolved_repo_root)
         features = [
-            to_catalog_entry(parser.catalog_entry(detail))
+            to_catalog_entry(catalog_entry(detail))
             for detail in details
             if self._feature_has_match(
                 detail,
@@ -202,10 +204,8 @@ class JobService:
         except ValueError as exc:
             raise JobServiceError(str(exc)) from exc
 
-        normalized = parser.normalize_feature_file_arg(feature)
-        details = self._feature_reader.discover_feature_details(
-            resolved_repo_root
-        )
+        normalized = normalize_feature_arg(feature)
+        details = self._framework.catalog(resolved_repo_root)
         for detail in details:
             if detail.path == normalized:
                 return DescribeFeatureResponse(
@@ -231,10 +231,8 @@ class JobService:
         except ValueError as exc:
             raise JobServiceError(str(exc)) from exc
 
-        details = self._feature_reader.discover_feature_details(
-            resolved_repo_root
-        )
-        dimensions = to_dimensions(parser.aggregate_dimensions(details))
+        details = self._framework.catalog(resolved_repo_root)
+        dimensions = to_dimensions(aggregate_dimensions(details))
         return ListDimensionsResponse(
             repo_root=str(resolved_repo_root),
             releases=dimensions.releases,
@@ -263,13 +261,11 @@ class JobService:
         except ValueError as exc:
             raise JobServiceError(str(exc)) from exc
 
-        details = self._feature_reader.discover_feature_details(
-            resolved_repo_root
-        )
+        details = self._framework.catalog(resolved_repo_root)
         matches: list[ScenarioMatch] = []
         for detail in details:
             for scenario in detail.scenarios:
-                if not parser.scenario_matches(
+                if not scenario_matches(
                     scenario,
                     detail.tags,
                     release=release,
@@ -286,7 +282,7 @@ class JobService:
                         requires_config=list(scenario.requires_config),
                         combos=[
                             to_combo(combo)
-                            for combo in parser.filtered_combos(
+                            for combo in filtered_combos(
                                 scenario, release, machine_type
                             )
                         ],
@@ -303,7 +299,7 @@ class JobService:
 
     def _feature_has_match(
         self,
-        feature_detail: parser.FeatureDetail,
+        feature_detail: FeatureDetail,
         *,
         release: str | None,
         machine_type: str | None,
@@ -318,7 +314,7 @@ class JobService:
         ):
             return True
         return any(
-            parser.scenario_matches(
+            scenario_matches(
                 scenario,
                 feature_detail.tags,
                 release=release,
@@ -403,11 +399,12 @@ class JobService:
         except ValueError as exc:
             raise JobServiceError(str(exc)) from exc
 
-        normalized = parser.normalize_feature_file_arg(feature)
-        allowed_features = set(
-            self._feature_reader.discover_feature_files(resolved_repo_root)
-        )
-        if normalized not in allowed_features:
+        normalized = normalize_feature_arg(feature)
+        features = {
+            detail.path: detail
+            for detail in self._framework.catalog(resolved_repo_root)
+        }
+        if normalized not in features:
             raise JobServiceError(
                 f"Feature is not listed by list_features: {feature}"
             )
@@ -416,13 +413,7 @@ class JobService:
         )
         if machine_type_error:
             raise JobServiceError(machine_type_error)
-        self._check_unit(
-            resolved_repo_root,
-            normalized,
-            scenario,
-            release,
-            machine_type,
-        )
+        self._check_unit(features[normalized], scenario, release, machine_type)
 
         install_from_error = validate_install_from(install_from)
         if install_from_error:
@@ -431,13 +422,11 @@ class JobService:
         results = self._results.bind(self._jobs_dir())
         job_id = job_id or self._new_job_id()
         write_targets = results.write_targets(job_id)
-        command = build_command(
-            feature,
-            scenario,
-            release,
-            machine_type,
+        command = self._framework.invocation(
+            resolved_repo_root,
+            Unit(feature, scenario, release, machine_type),
             write_targets.json_report,
-        )
+        ).command
         if record is not None:
             record()
         try:
@@ -510,8 +499,10 @@ class JobService:
         if lease is None:
             return
         repo = self._workspace.repo_state(Path(request.repo_root))
-        env = job_environment(
-            self._workspace.subprocess_env(), config, request.install_from
+        env = self._framework.environment(
+            self._workspace.subprocess_env(),
+            config.behave,
+            request.install_from,
         )
 
         def record() -> None:
@@ -551,26 +542,13 @@ class JobService:
 
     def _check_unit(
         self,
-        repo_root: Path,
-        feature: str,
+        detail: FeatureDetail,
         scenario: str,
         release: str,
         machine_type: str,
     ) -> None:
-        scenarios: list[ScenarioCombos] = []
-        for detail in self._feature_reader.discover_feature_details(repo_root):
-            if detail.path == feature:
-                scenarios = [
-                    (
-                        scenario.name,
-                        {
-                            (combo.release, combo.machine_type)
-                            for combo in scenario.combos
-                        },
-                    )
-                    for scenario in detail.scenarios
-                ]
-        match = match_unit(scenarios, scenario, release, machine_type)
+        feature = detail.path
+        match = match_unit(detail, scenario, release, machine_type)
         if match == UnitMatch.FOUND:
             return
         unit = f"{scenario!r} on {release} {machine_type}"
@@ -721,7 +699,7 @@ class JobService:
         if not results.exists(job_id).stdout_log:
             raise JobServiceError(f"No log file exists for job_id: {job_id}")
 
-        digest = digest_log(results.read_log_lines(job_id))
+        digest = self._framework.digest_log(results.read_log_lines(job_id))
         return ErrorsResponse(
             job_id=job_id,
             total_lines=digest.total_lines,
@@ -820,7 +798,7 @@ class JobService:
                 ) from None
 
         normalized_feature = (
-            parser.normalize_feature_file_arg(feature) if feature else None
+            normalize_feature_arg(feature) if feature else None
         )
         job_ids_filter = set(job_ids) if job_ids else None
         if limit <= 0:
@@ -868,7 +846,7 @@ class JobService:
         if summary.state == JobState.FINISHED:
             report_data = results.read_report(job_id)
             if report_data is not None:
-                report = summarize_report(report_data)
+                report = self._framework.summarize_report(report_data)
         return JobResult(
             job_id=job_id,
             state=summary.state,
@@ -948,7 +926,9 @@ class JobService:
 
         report_data = results.read_report(job_id)
         report = (
-            summarize_report(report_data) if report_data is not None else None
+            self._framework.summarize_report(report_data)
+            if report_data is not None
+            else None
         )
         return FinishedResponse(
             ok=exit.ok,

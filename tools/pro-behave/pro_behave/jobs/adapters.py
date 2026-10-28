@@ -16,7 +16,6 @@ from typing import Any, Callable, Iterator, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
-from pro_behave.jobs import parser
 from pro_behave.jobs.domain import layout
 from pro_behave.jobs.domain.config import (
     CheckoutConfig,
@@ -114,13 +113,13 @@ class FileLanePool:
 
 
 def _job_process_command(
-    job_dir: Path, lane_fd: int | None, command: list[str]
+    entry: str, job_dir: Path, lane_fd: int | None, command: list[str]
 ) -> list[str]:
     lane = [] if lane_fd is None else ["--lane-fd", str(lane_fd)]
     return [
         sys.executable,
         "-m",
-        "pro_behave.jobs.job_process",
+        entry,
         str(job_dir),
         *lane,
         "--",
@@ -129,8 +128,8 @@ def _job_process_command(
 
 
 class JobProcessLauncher:
-    """Starts each job under ``pro_behave.jobs.job_process``, which holds
-    the lane and the job's own lock for its whole life.
+    """Starts each job under the job process, ``python -m <entry>``, which
+    holds the lane and the job's own lock for its whole life.
 
     Whether a job is alive is whether its lock is held, which any process
     can ask. Once the job process can take a kill, it writes its PID into
@@ -139,8 +138,9 @@ class JobProcessLauncher:
     PID cannot have been reused.
     """
 
-    def __init__(self, jobs_dir: Callable[[], Path]) -> None:
+    def __init__(self, jobs_dir: Callable[[], Path], entry: str) -> None:
         self._jobs_dir = jobs_dir
+        self._entry = entry
 
     def launch(
         self,
@@ -162,7 +162,9 @@ class JobProcessLauncher:
             inherited = tuple(fd for fd in (lane_fd, job_fd) if fd is not None)
             try:
                 subprocess.Popen(
-                    _job_process_command(paths.job_dir, lane_fd, command),
+                    _job_process_command(
+                        self._entry, paths.job_dir, lane_fd, command
+                    ),
                     cwd=cwd,
                     env=env,
                     stdin=subprocess.DEVNULL,
@@ -207,18 +209,6 @@ class JobProcessLauncher:
 
     def _paths(self, job_id: str) -> layout.JobPaths:
         return layout.job_paths(self._jobs_dir(), job_id)
-
-
-class LocalFeatureFileReader:
-    """Filesystem-backed reader for the repository's feature file catalog."""
-
-    def discover_feature_files(self, repo_root: Path) -> list[str]:
-        return parser.discover_feature_files(repo_root)
-
-    def discover_feature_details(
-        self, repo_root: Path
-    ) -> list[parser.FeatureDetail]:
-        return parser.discover_feature_details(repo_root)
 
 
 class LocalJobResultStoreFactory:

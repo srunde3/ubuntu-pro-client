@@ -6,9 +6,20 @@ inject fakes.
 """
 
 from pathlib import Path
-from typing import Any, Callable, ContextManager, NamedTuple, Protocol
+from typing import (
+    Any,
+    Callable,
+    ContextManager,
+    Mapping,
+    NamedTuple,
+    Protocol,
+    Sequence,
+)
 
+from pro_behave.jobs.domain.catalog import FeatureDetail
 from pro_behave.jobs.domain.config import CheckoutConfig
+from pro_behave.jobs.domain.jobs import Invocation, Unit
+from pro_behave.jobs.domain.logs import LogDigest
 from pro_behave.jobs.domain.pools import Pool
 from pro_behave.jobs.messages import (
     Artifacts,
@@ -16,9 +27,9 @@ from pro_behave.jobs.messages import (
     JobExit,
     JobRecord,
     JobRequest,
+    ReportSummary,
     RepoState,
 )
-from pro_behave.jobs.parser import FeatureDetail
 
 
 class JobStartError(Exception):
@@ -102,24 +113,46 @@ class ConfigStore(Protocol):
         ...
 
 
-class FeatureFileReader(Protocol):
-    """Reads the catalog of behave feature files from the repository."""
+class Framework(Protocol):
+    """The test framework that runs the scenarios.
 
-    def discover_feature_files(self, repo_root: Path) -> list[str]:
-        """Return repo-relative paths of every ``*.feature`` file, sorted."""
+    Three seams: the catalog (what the checkout has), invocation (how one
+    unit runs) and interpretation (what a job's files say).
+    """
+
+    def catalog(self, repo_root: Path) -> list[FeatureDetail]:
+        """Every feature in the checkout, sorted by path. A file that cannot
+        be parsed is left out."""
         ...
 
-    def discover_feature_details(self, repo_root: Path) -> list[FeatureDetail]:
-        """Return parsed metadata for every feature file, sorted by path.
+    def invocation(
+        self, repo_root: Path, unit: Unit, report: Path
+    ) -> Invocation:
+        """How to run ``unit`` in ``repo_root``, writing its report to
+        ``report``. Called once, when the job is queued."""
+        ...
 
-        Each entry is a ``FeatureDetail`` whose ``path`` is set to the
-        repo-relative feature path. Files that fail to parse are skipped.
-        """
+    def environment(
+        self,
+        inherited: Mapping[str, str],
+        options: Mapping[str, str],
+        install_from: str,
+    ) -> dict[str, str]:
+        """The environment a job runs with, from the checkout's run options.
+        Called at launch, since the options hold secrets."""
+        ...
+
+    def summarize_report(self, report: list[Any]) -> ReportSummary:
+        """Counts and failing steps from a job's report."""
+        ...
+
+    def digest_log(self, lines: Sequence[str]) -> LogDigest:
+        """The failures a job's log shows, in order."""
         ...
 
 
 class WriteTargets(NamedTuple):
-    """The two files the behave subprocess writes to for a job."""
+    """The two files a job's command writes to."""
 
     stdout_log: Path
     json_report: Path
@@ -170,7 +203,7 @@ class JobResultStore(Protocol):
         ...
 
     def read_report(self, job_id: str) -> list[Any] | None:
-        """Return the behave JSON report list, or None if missing/invalid."""
+        """Return the job's report, or None if missing or invalid."""
         ...
 
     def exists(self, job_id: str) -> ExistsFlags:
@@ -210,7 +243,7 @@ class Workspace(Protocol):
         ...
 
     def subprocess_env(self) -> dict[str, str]:
-        """Return the environment to forward to the behave subprocess."""
+        """Return the environment the job's command inherits."""
         ...
 
     def repo_state(self, repo_root: Path) -> RepoState:

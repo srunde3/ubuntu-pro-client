@@ -1,30 +1,30 @@
-"""Build a campaign of test units directly from behave feature files.
+"""The units a campaign covers, from the scenarios a checkout's catalog offers.
 
-Discovery parses the feature files with ``pro_behave.jobs.parser``, the same
-parser that selects scenarios at run time, so a campaign covers exactly the
-combinations each scenario supports rather than a Cartesian product.
+The catalog is the one the job service validates units against, so a
+campaign covers exactly the combinations each scenario supports rather than
+a Cartesian product.
 """
 
 from __future__ import annotations
 
 import difflib
-from pathlib import Path
-from typing import Any, Iterable
+from dataclasses import dataclass
+from typing import Iterable, Sequence
 
 from pro_behave.campaign.domain.records import CampaignError, Scope, Unit
-from pro_behave.jobs import parser
 
 # Above this many values, suggest close matches instead of listing them all.
 _MAX_LISTED_VALUES = 15
 
 
-def _feature_details(repo_root: Path) -> list[Any]:
-    details = parser.discover_feature_details(repo_root)
-    if not details:
-        raise CampaignError(
-            "no feature files found under {}".format(repo_root / "features")
-        )
-    return details
+@dataclass(frozen=True)
+class CatalogScenario:
+    """One scenario of a feature, and the ``(release, machine_type)``
+    combos it supports."""
+
+    feature: str
+    scenario: str
+    combos: tuple[tuple[str, str], ...]
 
 
 def _reject_unknown(
@@ -51,48 +51,50 @@ def _reject_unknown(
     )
 
 
-def discover_units(repo_root: Path, scope: Scope) -> list[Unit]:
-    """Return every unit in the feature files in the scope."""
-    details = _feature_details(repo_root)
+def discover_units(
+    features: Sequence[str],
+    scenarios: Sequence[CatalogScenario],
+    scope: Scope,
+) -> list[Unit]:
+    """Every unit the catalog offers in ``scope``.
 
-    dimensions = parser.aggregate_dimensions(details)
+    Raises CampaignError for a release, machine type or feature the catalog
+    does not have, rather than silently matching nothing.
+    """
     _reject_unknown(
         scope.release,
-        {value.name for value in dimensions.releases},
+        {release for s in scenarios for release, _ in s.combos},
         "release",
     )
     _reject_unknown(
         scope.machine_type,
-        {value.name for value in dimensions.machine_types},
+        {machine_type for s in scenarios for _, machine_type in s.combos},
         "machine_type",
     )
-    _reject_unknown(
-        scope.feature, {detail.path for detail in details}, "feature"
-    )
+    _reject_unknown(scope.feature, set(features), "feature")
 
-    # Which scenarios of its feature produce each unit. One scenario may
-    # list a combo twice; two scenarios sharing a name and a combo make the
-    # unit ambiguous, because behave would run them both.
+    # Which scenarios offer each unit. A unit is keyed by its scenario's
+    # name, so two scenarios sharing a name and a combo leave a key that
+    # names both; one scenario listing a combo twice is still one.
     sources: dict[Unit, set[int]] = {}
-    for detail in details:
-        for index, scenario in enumerate(detail.scenarios):
-            for combo in scenario.combos:
-                unit = Unit(
-                    feature=detail.path,
-                    scenario=scenario.name,
-                    release=combo.release,
-                    machine_type=combo.machine_type,
-                )
-                if scope.matches_unit(unit):
-                    sources.setdefault(unit, set()).add(index)
+    for index, scenario in enumerate(scenarios):
+        for release, machine_type in scenario.combos:
+            unit = Unit(
+                feature=scenario.feature,
+                scenario=scenario.scenario,
+                release=release,
+                machine_type=machine_type,
+            )
+            if scope.matches_unit(unit):
+                sources.setdefault(unit, set()).add(index)
 
     ambiguous = sorted(
         unit for unit, found in sources.items() if len(found) > 1
     )
     if ambiguous:
         raise CampaignError(
-            "{} unit(s) in scope are run by more than one scenario of the "
-            "same name, so no job can name exactly one: {}. Rename those "
+            "{} unit(s) in scope are named by more than one scenario of the "
+            "same name, so no job can select exactly one: {}. Rename those "
             "scenarios, or narrow the scope".format(
                 len(ambiguous),
                 "; ".join(

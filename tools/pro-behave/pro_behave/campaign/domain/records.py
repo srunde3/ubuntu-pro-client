@@ -217,7 +217,7 @@ class CampaignError(ValueError):
 
 @dataclass(frozen=True, order=True)
 class Unit:
-    """One behave scenario for one release on one machine type."""
+    """One scenario for one release on one machine type."""
 
     feature: str
     scenario: str

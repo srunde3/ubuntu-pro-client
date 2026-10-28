@@ -1,4 +1,4 @@
-"""Integration tests for ``pro_behave.jobs.parser`` against the real
+"""Integration tests for ``pro_behave.behave.parser`` against the real
 ``features/*.feature`` files.
 """
 
@@ -6,24 +6,14 @@ import pathlib
 
 import pytest
 
-from pro_behave.jobs import parser
+from pro_behave.behave import parser
 
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[4]
 
 
 @pytest.mark.integration
-def test_discover_feature_files_finds_real_features():
-    paths = parser.discover_feature_files(_REPO_ROOT)
-
-    assert len(paths) > 50
-    assert all(path.startswith("features/") for path in paths)
-    assert all(path.endswith(".feature") for path in paths)
-    assert "features/cli/attach.feature" in paths
-
-
-@pytest.mark.integration
 def test_discover_feature_details_parses_every_real_feature_file():
-    paths = parser.discover_feature_files(_REPO_ROOT)
+    paths = list((_REPO_ROOT / "features").rglob("*.feature"))
     details = parser.discover_feature_details(_REPO_ROOT)
 
     # No real file is silently dropped due to a parse failure.

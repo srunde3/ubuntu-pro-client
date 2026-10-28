@@ -40,3 +40,20 @@ DEFAULT_FIND_LIMIT = 50
 
 
 MAX_FIND_LIMIT = 500
+
+
+# A digest is bounded by construction: one hook error in the wild was 117
+# lines of `lxc info` JSON, and a run can fail the same way many times.
+DIGEST_HEAD_LINES = 25
+
+
+DIGEST_TAIL_LINES = 8
+
+
+DIGEST_MAX_LINE_CHARS = 400
+
+
+DIGEST_MAX_REGIONS = 10
+
+
+DIGEST_TAIL = 5

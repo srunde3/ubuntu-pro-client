@@ -1,183 +1,123 @@
 import pytest
 
-from pro_behave.campaign.domain.discovery import discover_units
+from pro_behave.campaign.domain.discovery import (
+    CatalogScenario,
+    discover_units,
+)
 from pro_behave.campaign.domain.records import CampaignError, Scope, Unit
 
-FEATURE = """@uses.config.contract_token
-Feature: Example feature
+FEATURE = "features/example.feature"
+SHARED_FEATURE = "features/shared.feature"
+JAMMY_LXD = ("jammy", "lxd-container")
+NOBLE_VM = ("noble", "lxd-vm")
 
-  Scenario Outline: Runs everywhere
-    Given a `<release>` `<machine_type>` machine
-    Then I verify that `esm-infra` is enabled
-
-    Examples: ubuntu release
-      | release | machine_type  |
-      | jammy   | lxd-container |
-      | noble   | lxd-vm        |
-
-  Scenario Outline: Runs on containers only
-    Given a `<release>` `<machine_type>` machine
-    Then I verify that `esm-apps` is enabled
-
-    Examples: ubuntu release
-      | release | machine_type  |
-      | jammy   | lxd-container |
-"""
+# One feature: a scenario on two combos, and one on containers only.
+EVERYWHERE = CatalogScenario(FEATURE, "Runs everywhere", (JAMMY_LXD, NOBLE_VM))
+CONTAINERS = CatalogScenario(FEATURE, "Runs on containers only", (JAMMY_LXD,))
+EXAMPLE = ([FEATURE], [EVERYWHERE, CONTAINERS])
 
 
-# Two outlines with one name. The second's row decides whether they collide.
-SHARED_NAME_FEATURE = """Feature: Shared names
-
-  Scenario Outline: Shared
-    Given a `<release>` `<machine_type>` machine
-
-    Examples: ubuntu release
-      | release | machine_type  |
-      | jammy   | lxd-container |
-
-  Scenario Outline: Shared
-    Given a `<release>` `<machine_type>` machine
-
-    Examples: ubuntu release
-      | release | machine_type  |
-      | {second_row} |
-"""
+def shared(second_combo):
+    """Two scenarios named "Shared"; the second's combo decides whether
+    they collide."""
+    return [
+        CatalogScenario(SHARED_FEATURE, "Shared", (JAMMY_LXD,)),
+        CatalogScenario(SHARED_FEATURE, "Shared", (second_combo,)),
+    ]
 
 
-def write_feature(repo_root, text):
-    features = repo_root / "features"
-    features.mkdir()
-    (features / "shared.feature").write_text(text)
+def test_every_combo_becomes_a_unit():
+    units = discover_units(*EXAMPLE, Scope())
+
+    assert units == [
+        Unit(FEATURE, "Runs everywhere", "jammy", "lxd-container"),
+        Unit(FEATURE, "Runs everywhere", "noble", "lxd-vm"),
+        Unit(FEATURE, "Runs on containers only", "jammy", "lxd-container"),
+    ]
 
 
-@pytest.fixture
-def repo(tmp_path):
-    features = tmp_path / "features"
-    features.mkdir()
-    (features / "example.feature").write_text(FEATURE)
-    return tmp_path
+def test_release_filter_selects_a_campaign_slice():
+    units = discover_units(*EXAMPLE, Scope(release=("noble",)))
+
+    assert units == [Unit(FEATURE, "Runs everywhere", "noble", "lxd-vm")]
 
 
-class TestDiscoverUnits:
-    def test_every_combo_becomes_a_unit(self, repo):
-        units = discover_units(repo, Scope())
+def test_machine_type_filter_selects_a_campaign_slice():
+    units = discover_units(*EXAMPLE, Scope(machine_type=("lxd-container",)))
 
-        assert units == [
-            Unit(
-                "features/example.feature",
-                "Runs everywhere",
-                "jammy",
-                "lxd-container",
-            ),
-            Unit(
-                "features/example.feature",
-                "Runs everywhere",
-                "noble",
-                "lxd-vm",
-            ),
-            Unit(
-                "features/example.feature",
-                "Runs on containers only",
-                "jammy",
-                "lxd-container",
-            ),
-        ]
+    assert {unit.release for unit in units} == {"jammy"}
+    assert len(units) == 2
 
-    def test_release_filter_selects_a_campaign_slice(self, repo):
-        units = discover_units(repo, Scope(release=("noble",)))
 
-        assert [unit.scenario for unit in units] == ["Runs everywhere"]
-        assert units[0].machine_type == "lxd-vm"
+def test_filters_combine():
+    scope = Scope(release=("jammy",), scenario=("Runs on containers only",))
 
-    def test_machine_type_filter_selects_a_campaign_slice(self, repo):
-        units = discover_units(repo, Scope(machine_type=("lxd-container",)))
+    units = discover_units(*EXAMPLE, scope)
 
-        assert {unit.release for unit in units} == {"jammy"}
-        assert len(units) == 2
+    assert units == [
+        Unit(FEATURE, "Runs on containers only", "jammy", "lxd-container")
+    ]
 
-    def test_filters_combine(self, repo):
-        units = discover_units(
-            repo,
-            Scope(
-                release=("jammy",),
-                scenario=("Runs on containers only",),
-            ),
+
+def test_a_scenario_listing_a_combo_twice_is_one_unit():
+    twice = CatalogScenario(FEATURE, "Twice", (JAMMY_LXD, JAMMY_LXD))
+
+    units = discover_units([FEATURE], [twice], Scope())
+
+    assert units == [Unit(FEATURE, "Twice", "jammy", "lxd-container")]
+
+
+def test_unknown_release_is_rejected():
+    with pytest.raises(CampaignError, match="unknown release: bogus"):
+        discover_units(*EXAMPLE, Scope(release=("bogus",)))
+
+
+def test_unknown_machine_type_is_rejected():
+    with pytest.raises(CampaignError, match="unknown machine_type"):
+        discover_units(*EXAMPLE, Scope(machine_type=("lxd-toaster",)))
+
+
+def test_unknown_feature_is_rejected():
+    with pytest.raises(CampaignError, match="unknown feature"):
+        discover_units(*EXAMPLE, Scope(feature=("features/nope.feature",)))
+
+
+def test_mistyped_feature_suggests_close_matches():
+    # Enough features that they are not all listed.
+    features = ["features/example{}.feature".format(n) for n in range(20)]
+
+    with pytest.raises(CampaignError) as error:
+        discover_units(
+            features, [], Scope(feature=("features/example7.featur",))
         )
 
-        assert len(units) == 1
-        assert units[0].scenario == "Runs on containers only"
+    message = str(error.value)
+    assert "did you mean: features/example7.feature" in message
+    assert "features/example1.feature" not in message
 
-    def test_unknown_release_is_rejected(self, repo):
-        with pytest.raises(CampaignError, match="unknown release: bogus"):
-            discover_units(repo, Scope(release=("bogus",)))
 
-    def test_unknown_machine_type_is_rejected(self, repo):
-        with pytest.raises(CampaignError, match="unknown machine_type"):
-            discover_units(repo, Scope(machine_type=("lxd-toaster",)))
+def test_a_shared_name_on_a_shared_combo_is_refused():
+    with pytest.raises(CampaignError) as error:
+        discover_units([SHARED_FEATURE], shared(JAMMY_LXD), Scope())
 
-    def test_unknown_feature_is_rejected(self, repo):
-        with pytest.raises(CampaignError, match="unknown feature"):
-            discover_units(repo, Scope(feature=("features/nope.feature",)))
+    message = str(error.value)
+    assert "1 unit(s) in scope are named by more than one scenario" in message
+    assert "Shared jammy lxd-container" in message
 
-    def test_mistyped_feature_suggests_close_matches(self, tmp_path):
-        features = tmp_path / "features"
-        features.mkdir()
-        for index in range(20):
-            (features / "example{}.feature".format(index)).write_text(
-                FEATURE.replace("Runs everywhere", "Runs {}".format(index))
-            )
 
-        with pytest.raises(CampaignError) as error:
-            discover_units(
-                tmp_path, Scope(feature=("features/example7.featur",))
-            )
+def test_a_shared_name_on_other_combos_is_two_units():
+    units = discover_units([SHARED_FEATURE], shared(NOBLE_VM), Scope())
 
-        message = str(error.value)
-        assert "did you mean: features/example7.feature" in message
-        assert "features/example1.feature" not in message
+    assert [(u.release, u.machine_type) for u in units] == [
+        JAMMY_LXD,
+        NOBLE_VM,
+    ]
 
-    def test_a_shared_name_on_a_shared_combo_is_refused(self, tmp_path):
-        # Both outlines run "Shared" on jammy lxd-container, so behave would
-        # run them both for that unit.
-        write_feature(
-            tmp_path,
-            SHARED_NAME_FEATURE.format(second_row="jammy   | lxd-container"),
-        )
 
-        with pytest.raises(CampaignError) as error:
-            discover_units(tmp_path, Scope())
+def test_a_scope_that_leaves_out_the_collision_is_allowed():
+    features = [FEATURE, SHARED_FEATURE]
+    scenarios = [EVERYWHERE, CONTAINERS, *shared(JAMMY_LXD)]
 
-        assert "1 unit(s) in scope are run by more than one scenario" in str(
-            error.value
-        )
-        assert "Shared jammy lxd-container" in str(error.value)
+    units = discover_units(features, scenarios, Scope(feature=(FEATURE,)))
 
-    def test_a_shared_name_on_other_combos_is_two_units(self, tmp_path):
-        write_feature(
-            tmp_path,
-            SHARED_NAME_FEATURE.format(second_row="noble   | lxd-vm       "),
-        )
-
-        units = discover_units(tmp_path, Scope())
-
-        assert [(u.release, u.machine_type) for u in units] == [
-            ("jammy", "lxd-container"),
-            ("noble", "lxd-vm"),
-        ]
-
-    def test_a_scope_that_leaves_out_the_collision_is_allowed(self, tmp_path):
-        write_feature(
-            tmp_path,
-            SHARED_NAME_FEATURE.format(second_row="jammy   | lxd-container"),
-        )
-        (tmp_path / "features" / "example.feature").write_text(FEATURE)
-
-        units = discover_units(
-            tmp_path, Scope(feature=("features/example.feature",))
-        )
-
-        assert {u.feature for u in units} == {"features/example.feature"}
-
-    def test_repo_without_features_is_rejected(self, tmp_path):
-        with pytest.raises(CampaignError, match="no feature files found"):
-            discover_units(tmp_path, Scope())
+    assert {u.feature for u in units} == {FEATURE}

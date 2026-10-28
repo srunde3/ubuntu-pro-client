@@ -2,7 +2,7 @@
 
 import pytest
 
-from pro_behave.jobs.domain.report import (
+from pro_behave.behave.report import (
     BehaveScenarioStatus,
     scenario_status_from_element,
     summarize_report,

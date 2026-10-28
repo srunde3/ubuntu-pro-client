@@ -1,4 +1,4 @@
-"""The service's own config for a checkout, and the environment it gives a job.
+"""The service's own config for a checkout.
 
 The behave option names are copied from ``features/environment.py``
 (``UAClientBehaveConfig.all_options`` and ``redact_options``); add new ones
@@ -8,10 +8,7 @@ here by hand.
 from dataclasses import dataclass, field
 from typing import Any, Mapping
 
-from pro_behave.jobs.domain.jobs import INSTALL_FROM_ENV_VAR
 from pro_behave.jobs.domain.pools import DEFAULT_MAX_JOBS, Pool, max_jobs_error
-
-BEHAVE_ENV_PREFIX = "UACLIENT_BEHAVE_"
 
 BEHAVE_OPTIONS = (
     "collect_coverage",
@@ -128,25 +125,3 @@ def shown_options(behave: Mapping[str, str]) -> dict[str, str]:
         name: SECRET_SHOWN if name in SECRET_OPTIONS else value
         for name, value in sorted(behave.items())
     }
-
-
-def job_environment(
-    inherited: Mapping[str, str],
-    config: CheckoutConfig,
-    install_from: str,
-) -> dict[str, str]:
-    """The environment a job runs with.
-
-    Nothing behave reads comes from the process starting the job: every
-    inherited ``UACLIENT_BEHAVE_*`` variable is dropped, so the job is the
-    same whoever starts it.
-    """
-    env = {
-        name: value
-        for name, value in inherited.items()
-        if not name.startswith(BEHAVE_ENV_PREFIX)
-    }
-    for name, value in config.behave.items():
-        env[BEHAVE_ENV_PREFIX + name.upper()] = value
-    env[INSTALL_FROM_ENV_VAR] = install_from
-    return env

@@ -1,6 +1,6 @@
-"""The catalog's parser types as the DTOs the job service returns."""
+"""The catalog's types as the DTOs the job service returns."""
 
-from pro_behave.jobs import parser
+from pro_behave.jobs.domain import catalog
 from pro_behave.jobs.messages import (
     Combo,
     Dimensions,
@@ -11,11 +11,11 @@ from pro_behave.jobs.messages import (
 )
 
 
-def to_combo(combo: parser.Combo) -> Combo:
+def to_combo(combo: catalog.Combo) -> Combo:
     return Combo(release=combo.release, machine_type=combo.machine_type)
 
 
-def to_examples_block(block: parser.ExamplesBlock) -> ExamplesBlock:
+def to_examples_block(block: catalog.ExamplesBlock) -> ExamplesBlock:
     return ExamplesBlock(
         name=block.name,
         tags=list(block.tags),
@@ -24,7 +24,7 @@ def to_examples_block(block: parser.ExamplesBlock) -> ExamplesBlock:
 
 
 def to_scenario_summary(
-    scenario: parser.ScenarioSummary,
+    scenario: catalog.ScenarioSummary,
 ) -> ScenarioSummary:
     return ScenarioSummary(
         name=scenario.name,
@@ -38,7 +38,7 @@ def to_scenario_summary(
 
 
 def to_catalog_entry(
-    entry: parser.FeatureCatalogEntry,
+    entry: catalog.FeatureCatalogEntry,
 ) -> FeatureCatalogEntry:
     return FeatureCatalogEntry(
         path=entry.path,
@@ -50,7 +50,7 @@ def to_catalog_entry(
     )
 
 
-def to_dimensions(dimensions: parser.Dimensions) -> Dimensions:
+def to_dimensions(dimensions: catalog.Dimensions) -> Dimensions:
     return Dimensions(
         releases=[
             DimensionValue(

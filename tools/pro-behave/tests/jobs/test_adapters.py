@@ -13,7 +13,6 @@ from pro_behave.jobs.adapters import (
     FileLanePool,
     FileReconcileLock,
     JobProcessLauncher,
-    LocalFeatureFileReader,
     LocalJobResultStoreFactory,
     LocalWorkspace,
 )
@@ -22,49 +21,7 @@ from pro_behave.jobs.domain.pools import Pool
 from pro_behave.jobs.messages import JobExit, JobRecord
 from tests.conftest import job_file, make_repo_with_feature
 
-# ---- LocalFeatureFileReader ----
-
-
-def test_discover_feature_files_delegates(tmp_path):
-    (tmp_path / "features").mkdir(parents=True)
-    (tmp_path / "features" / "sample.feature").write_text("", encoding="utf-8")
-
-    reader = LocalFeatureFileReader()
-
-    assert reader.discover_feature_files(tmp_path) == [
-        "features/sample.feature"
-    ]
-
-
-_SAMPLE_FEATURE = """\
-@uses.config.contract_token
-Feature: Sample feature
-
-  Scenario Outline: Attach on a machine
-    Given a `<release>` `<machine_type>` machine with \
-ubuntu-advantage-tools installed
-    When I attach
-
-    Examples: ubuntu release
-      | release  | machine_type  |
-      | jammy    | lxd-container |
-      | resolute | lxd-vm        |
-"""
-
-
-def test_discover_feature_details_delegates(tmp_path):
-    (tmp_path / "features").mkdir(parents=True)
-    (tmp_path / "features" / "sample.feature").write_text(
-        _SAMPLE_FEATURE, encoding="utf-8"
-    )
-
-    reader = LocalFeatureFileReader()
-    details = reader.discover_feature_details(tmp_path)
-
-    assert len(details) == 1
-    assert details[0].path == "features/sample.feature"
-    assert details[0].title == "Sample feature"
-
+JOB_PROCESS = "pro_behave.job_process"
 
 # ---- LocalJobResultStore ----
 
@@ -379,7 +336,7 @@ def lanes(tmp_path):
 
 @pytest.fixture
 def launcher(tmp_path):
-    return JobProcessLauncher(lambda: tmp_path / "jobs")
+    return JobProcessLauncher(lambda: tmp_path / "jobs", JOB_PROCESS)
 
 
 def _no_record():

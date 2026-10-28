@@ -75,18 +75,40 @@ root_packages = ["pro_behave"]
 include_external_packages = true
 
 [[tool.importlinter.contracts]]
-name = "Front-ends on top, then campaigns, then jobs"
+name = "Front-ends on top; behave is an adapter that jobs and campaign never import"
 type = "layers"
 containers = ["pro_behave"]
 layers = [
   "cli",
-  "mcp",
-  "campaign",
+  "mcp | job_process",
+  "behave | campaign",
   "jobs",
 ]
 
 [[tool.importlinter.contracts]]
-name = "campaign uses only parser, domain.pools and domain.layout from jobs"
+name = "The job process knows nothing of campaigns or front-ends"
+type = "forbidden"
+source_modules = ["pro_behave.job_process"]
+forbidden_modules = [
+  "pro_behave.campaign",
+  "pro_behave.cli",
+  "pro_behave.mcp",
+]
+
+[[tool.importlinter.contracts]]
+name = "The parser imports only behave and the standard library"
+type = "forbidden"
+source_modules = ["pro_behave.behave.parser"]
+forbidden_modules = [
+  "pro_behave.campaign",
+  "pro_behave.cli",
+  "pro_behave.job_process",
+  "pro_behave.jobs",
+  "pro_behave.mcp",
+]
+
+[[tool.importlinter.contracts]]
+name = "campaign uses only domain.catalog, domain.pools and domain.layout from jobs"
 type = "forbidden"
 source_modules = ["pro_behave.campaign"]
 forbidden_modules = [
@@ -96,8 +118,6 @@ forbidden_modules = [
   "pro_behave.jobs.domain.limits",
   "pro_behave.jobs.domain.logs",
   "pro_behave.jobs.domain.queue",
-  "pro_behave.jobs.domain.report",
-  "pro_behave.jobs.job_process",
   "pro_behave.jobs.messages",
   "pro_behave.jobs.ports",
   "pro_behave.jobs.service",
@@ -105,14 +125,25 @@ forbidden_modules = [
 ]
 
 [[tool.importlinter.contracts]]
+name = "Only campaign adapters read the catalog"
+type = "forbidden"
+source_modules = [
+  "pro_behave.campaign.domain",
+  "pro_behave.campaign.messages",
+  "pro_behave.campaign.ports",
+  "pro_behave.campaign.repo",
+  "pro_behave.campaign.service",
+  "pro_behave.campaign.views",
+]
+forbidden_modules = ["pro_behave.jobs.domain.catalog"]
+
+[[tool.importlinter.contracts]]
 name = "jobs layers"
 type = "layers"
 containers = ["pro_behave.jobs"]
 layers = [
-  "job_process",
   "service | adapters",
   "ports | views",
-  "parser",
   "domain",
   "messages",
 ]

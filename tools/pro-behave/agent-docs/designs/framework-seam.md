@@ -1,6 +1,6 @@
 # Framework seam
 
-**Status:** in review. Settled points are in [decisions.md](../decisions.md) as DEC-22 to DEC-28. No questions are open.
+**Status:** accepted. Step 1 (the seam) is built; steps 2 and 3 are not. Settled points are in [decisions.md](../decisions.md) as DEC-22 to DEC-33. No questions are open. Where this file and the review copy differ, this file holds.
 **Review copy:** <https://claude.ai/artifact/VXfoHQDNFo9AjK8Vpx6xmF>, written against `b1b7ba54`.
 
 Describe the tool in terms that hold for any test framework, and make behave one adapter behind them. Every job reports one result for its unit, and a single run and a campaign share it. The tool becomes `pro-e2e`.
@@ -31,22 +31,27 @@ The workflow and the terms are in [domain.md](../domain.md). The framework takes
 
 ### One port holds the three seams
 
-`BehaveFramework` implements a `Framework` port. The catalog type is the parser's own: the parser stays behave-specific, and a pytest adapter would fill the same types, with a parametrize set as an Examples block.
+`BehaveFramework` implements the `Framework` port in `jobs/ports.py`. The catalog's types and the queries over them (`catalog_entry`, `aggregate_dimensions`, `scenario_matches`, `match_unit`) are framework-neutral, in `jobs/domain/catalog.py`. The parser stays behave-specific and keeps its own types, so it imports only behave and the standard library; `behave/framework.py` maps them onto the catalog's. A pytest adapter would fill the same catalog types, with a parametrize set as an Examples block.
 
 ```python
 class Framework(Protocol):
     # catalog
     def catalog(self, repo_root: Path) -> list[FeatureDetail]: ...
 
-    # invocation: the argv, the environment, and the unit's instances
-    def invocation(
-        self, unit: Unit, files: JobFiles, options: RunOptions
-    ) -> Invocation: ...
+    # invocation: at queue time, so the command is stored in the request
+    def invocation(self, repo_root: Path, unit: Unit, report: Path) -> Invocation: ...
 
-    # interpretation
-    def result(self, request: JobRequest, files: JobFiles, exit: CommandExit) -> Result: ...
-    def errors(self, log: Sequence[str]) -> LogDigest: ...
+    # at launch, because the run options hold secrets and are never stored
+    def environment(
+        self, inherited: Mapping[str, str], options: Mapping[str, str], install_from: str
+    ) -> dict[str, str]: ...
+
+    # interpretation; step 2 replaces summarize_report with the unit's result
+    def summarize_report(self, report: list[Any]) -> ReportSummary: ...
+    def digest_log(self, lines: Sequence[str]) -> LogDigest: ...
 ```
+
+`Invocation` holds the command. Step 2 adds the unit's instances to it.
 
 ### The behave code moves into one adapter package
 
@@ -54,18 +59,19 @@ Everything behave-specific moves into `pro_e2e/behave/`. The queue, lanes, job p
 
 | Today | Seam | Why it is behave's |
 | --- | --- | --- |
-| `jobs/parser.py` | catalog | Gherkin parsing, and combos read from Examples columns or the first step. |
-| `match_unit`'s ambiguity check | catalog | Two scenarios with one name on one combo collide only because behave selects by name. Pytest node ids are unique. |
+| `jobs/parser.py`, parsing | catalog | Gherkin parsing, and combos read from Examples columns or the first step. Its query functions go to `jobs/domain/catalog.py`. |
 | `build_command`, `exact_name_pattern` | invocation | `--name` regex with the row suffix, `-D` userdata, report flags. |
 | `job_environment`, the `UACLIENT_BEHAVE_` prefix | invocation | How run options reach the harness. The option names stay in the jobs domain. |
 | `jobs/domain/report.py` | interpretation | behave's JSON report schema and statuses. |
 | `digest_log` and its patterns | interpretation | behave's plain formatter output. `select_log_lines` stays, since reading lines of a log holds for any framework. |
 
-The campaign stops importing the parser. Its discovery takes the catalog through its own port.
+`match_unit` stays in the domain, in `jobs/domain/catalog.py`. A unit is keyed by its scenario's name, so a key that names two scenarios on one combo is a fact about the catalog under any framework. Pytest can produce one too (`TestA::test_x` and `TestB::test_x`), unless its adapter names scenarios by class and function.
+
+The campaign stops importing the parser. Its domain works on campaign-owned `CatalogScenario` values, and only its `CatalogFeatureReader` adapter reads the catalog, from the same framework object the job service validates units against.
 
 ### An import contract keeps behave out of the domain
 
-The job process and the two front-ends build `BehaveFramework` and pass it in, as they build the other adapters today. A new import-linter contract forbids `pro_e2e.behave` in `jobs.domain`, `jobs.service` and all of `campaign`, so a pytest adapter stays a sibling package.
+The job process and the two front-ends build `BehaveFramework` and pass it in, as they build the other adapters today. The job process moves out of `jobs/` to `pro_behave/job_process.py`, a composition root beside the front-ends, and the launcher is given the module to run. The layers contract reads `cli`, then `mcp | job_process`, then `behave | campaign`, then `jobs`, so neither `jobs` nor `campaign` can import the adapter, and a pytest adapter stays a sibling package. Two forbidden contracts keep the job process out of `campaign` and the front-ends, and keep the parser free of the tool's own modules.
 
 ## Every reader gets the same result for a job
 

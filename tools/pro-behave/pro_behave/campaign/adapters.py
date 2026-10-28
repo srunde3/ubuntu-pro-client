@@ -40,6 +40,7 @@ from pro_behave.campaign.ports import (
     QueueRefused,
 )
 from pro_behave.jobs.domain import layout
+from pro_behave.jobs.domain.catalog import FeatureDetail
 
 
 def system_now() -> str:
@@ -318,11 +319,36 @@ class CampaignDirStore:
         return self._paths
 
 
-class ParserFeatureReader:
-    """Reads feature files through ``pro_behave.jobs.parser``."""
+class CatalogFeatureReader:
+    """Reads a checkout's units from the test framework's catalog.
+
+    ``catalog`` is the job service's own, so a campaign plans against the
+    catalog its jobs are validated against.
+    """
+
+    def __init__(self, catalog: Callable[[Path], list[FeatureDetail]]) -> None:
+        self._catalog = catalog
 
     def discover_units(self, repo_root: Path, scope: Scope) -> list[Unit]:
-        return discovery.discover_units(repo_root, scope)
+        features = self._catalog(repo_root)
+        if not features:
+            raise CampaignError("no features found in {}".format(repo_root))
+        return discovery.discover_units(
+            [feature.path for feature in features],
+            [
+                discovery.CatalogScenario(
+                    feature=feature.path,
+                    scenario=scenario.name,
+                    combos=tuple(
+                        (combo.release, combo.machine_type)
+                        for combo in scenario.combos
+                    ),
+                )
+                for feature in features
+                for scenario in feature.scenarios
+            ],
+            scope,
+        )
 
 
 class ServiceJobRunner:

@@ -23,11 +23,12 @@ from typing import Any, Callable, Iterator, Sequence
 
 from pydantic import BaseModel
 
+from pro_behave.behave.framework import BehaveFramework
 from pro_behave.campaign.adapters import (
     CampaignDirStore,
+    CatalogFeatureReader,
     JobDirFiles,
     JsonlCampaignStore,
-    ParserFeatureReader,
     ServiceJobRunner,
     TarBundleWriter,
     system_now,
@@ -55,7 +56,6 @@ from pro_behave.jobs.adapters import (
     FileLanePool,
     FileReconcileLock,
     JobProcessLauncher,
-    LocalFeatureFileReader,
     LocalJobResultStoreFactory,
     LocalWorkspace,
 )
@@ -80,6 +80,13 @@ from pro_behave.jobs.service import (
 Output = BaseModel | Iterator[BaseModel]
 
 
+# The test framework every job and campaign in this process uses.
+FRAMEWORK = BehaveFramework()
+
+# The module each job's process runs as (``pro_behave/job_process.py``).
+JOB_PROCESS = "pro_behave.job_process"
+
+
 def _service(
     campaign_dir: Path, args: argparse.Namespace | None = None
 ) -> CampaignService:
@@ -98,7 +105,7 @@ def _service(
             ceiling = service.read_config().max_jobs
     return CampaignService(
         store=CampaignDirStore(campaign_dir),
-        features=ParserFeatureReader(),
+        features=CatalogFeatureReader(FRAMEWORK.catalog),
         now=system_now,
         repo_state=repo_state,
         max_jobs_ceiling=ceiling,
@@ -266,7 +273,7 @@ def _command_job_kill(args: argparse.Namespace) -> BaseModel:
 def _command_list(args: argparse.Namespace) -> BaseModel:
     return CampaignService(
         store=JsonlCampaignStore(layout.campaigns_dir(_state_dir(args))),
-        features=ParserFeatureReader(),
+        features=CatalogFeatureReader(FRAMEWORK.catalog),
         now=system_now,
         repo_state=repo_state,
     ).list_campaigns()
@@ -353,12 +360,12 @@ def _job_service(state_dir: Path) -> JobService:
     return JobService(
         workspace=workspace,
         config=FileConfigStore(workspace.resolve_state_dir),
-        feature_reader=LocalFeatureFileReader(),
+        framework=FRAMEWORK,
         results=LocalJobResultStoreFactory(),
         lanes=FileLanePool(
             lambda: layout.lanes_dir(workspace.resolve_state_dir())
         ),
-        launcher=JobProcessLauncher(workspace.resolve_jobs_dir),
+        launcher=JobProcessLauncher(workspace.resolve_jobs_dir, JOB_PROCESS),
         reconcile_lock=FileReconcileLock(workspace.resolve_state_dir),
         monotonic=time.monotonic,
         sleep=time.sleep,
@@ -388,7 +395,7 @@ def _reconcile(args: argparse.Namespace) -> None:
     try:
         CampaignService(
             store=JsonlCampaignStore(layout.campaigns_dir(state)),
-            features=ParserFeatureReader(),
+            features=CatalogFeatureReader(FRAMEWORK.catalog),
             now=system_now,
             repo_state=repo_state,
             jobs=_job_runner(_job_service(state)),

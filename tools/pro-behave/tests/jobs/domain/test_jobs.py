@@ -1,174 +1,17 @@
-"""Job rules: the behave command, exact names, job state, result filters."""
+"""Job rules: job state, interruption and result filters."""
 
 import itertools
-import subprocess
-import sys
 
 import pytest
 
 from pro_behave.jobs.domain.jobs import (
-    UnitMatch,
-    build_command,
-    exact_name_pattern,
     interruption,
     job_matches_result_filters,
     job_state,
-    match_unit,
     validate_machine_type,
 )
 from pro_behave.jobs.domain.pools import Pool
 from pro_behave.jobs.messages import Interruption, JobExit, JobRecord, JobState
-
-
-def test_build_command_escapes_scenario_name_for_behave_regex(tmp_path):
-    command = build_command(
-        "features/proxy_config.feature",
-        "apt_http(s)_proxy still works",
-        "bionic",
-        "lxd-container",
-        tmp_path / "report.json",
-    )
-
-    assert command[command.index("--name") + 1] == (
-        r"^apt_http\(s\)_proxy\ still\ works(?: -- @.*)?$"
-    )
-
-
-def test_build_command_runs_one_release_on_one_machine_type(tmp_path):
-    report = tmp_path / "report.json"
-
-    command = build_command(
-        "features/cli/attach.feature",
-        "Attach command",
-        "jammy",
-        "lxd-vm",
-        report,
-    )
-
-    assert command == [
-        "tox",
-        "-e",
-        "behave",
-        "--",
-        "features/cli/attach.feature",
-        "--name",
-        exact_name_pattern("Attach command"),
-        "-D",
-        "releases=jammy",
-        "-D",
-        "machine_types=lxd-vm",
-        "-f",
-        "json",
-        "-o",
-        str(report),
-        "-f",
-        "plain",
-    ]
-
-
-SCENARIO = "Attach command"
-OTHER_SCENARIO = "Detach command"
-JAMMY_LXD = ("jammy", "lxd-container")
-NOBLE_VM = ("noble", "lxd-vm")
-
-
-UNIT_MATCH_CASES = [
-    pytest.param(
-        [(SCENARIO, {JAMMY_LXD})], UnitMatch.FOUND, id="one-scenario"
-    ),
-    pytest.param(
-        [(SCENARIO, {JAMMY_LXD}), (SCENARIO, {NOBLE_VM})],
-        UnitMatch.FOUND,
-        id="a-shared-name-on-other-combos",
-    ),
-    pytest.param(
-        [(OTHER_SCENARIO, {JAMMY_LXD})],
-        UnitMatch.NO_SCENARIO,
-        id="no-such-name",
-    ),
-    pytest.param(
-        [(SCENARIO, {NOBLE_VM})],
-        UnitMatch.NOT_ON_COMBO,
-        id="not-on-this-combo",
-    ),
-    pytest.param(
-        [(SCENARIO, {JAMMY_LXD}), (SCENARIO, {JAMMY_LXD, NOBLE_VM})],
-        UnitMatch.AMBIGUOUS,
-        id="two-scenarios-on-one-combo",
-    ),
-]
-
-
-def test_every_unit_match_is_reached_by_a_case():
-    assert {case.values[1] for case in UNIT_MATCH_CASES} == set(UnitMatch)
-
-
-@pytest.mark.parametrize("scenarios, expected", UNIT_MATCH_CASES)
-def test_match_unit(scenarios, expected):
-    release, machine_type = JAMMY_LXD
-
-    match = match_unit(scenarios, SCENARIO, release, machine_type)
-
-    assert match == expected
-
-
-@pytest.mark.integration
-def test_exact_name_pattern_selects_one_scenario_and_its_rows(tmp_path):
-    features = tmp_path / "features"
-    (features / "steps").mkdir(parents=True)
-    (features / "steps" / "steps.py").write_text(
-        "from behave import given\n"
-        "@given('step {x}')\n"
-        "def step(context, x):\n"
-        "    pass\n"
-    )
-    (features / "x.feature").write_text(
-        "Feature: x\n"
-        "  Scenario Outline: Attach command\n"
-        "    Given step <release>\n"
-        "    Examples: ubuntu release\n"
-        "      | release |\n"
-        "      | jammy   |\n"
-        "      | noble   |\n"
-        "\n"
-        "  Scenario Outline: Attach command with token\n"
-        "    Given step <release>\n"
-        "    Examples:\n"
-        "      | release |\n"
-        "      | jammy   |\n"
-        "\n"
-        "  Scenario: Attach command (plain)\n"
-        "    Given step x\n"
-    )
-
-    result = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "behave",
-            "--dry-run",
-            "--no-summary",
-            "-f",
-            "plain",
-            "--name",
-            exact_name_pattern("Attach command"),
-        ],
-        cwd=tmp_path,
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-
-    selected = [
-        line.strip()
-        for line in result.stdout.splitlines()
-        if "Scenario" in line
-    ]
-    assert selected == [
-        "Scenario Outline: Attach command -- @1.1 ubuntu release",
-        "Scenario Outline: Attach command -- @1.2 ubuntu release",
-    ]
-
 
 # The exits a job can have: none yet, one from tox ending, one from a kill.
 EXITS = {

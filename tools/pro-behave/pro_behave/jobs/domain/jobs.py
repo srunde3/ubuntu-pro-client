@@ -1,9 +1,8 @@
-"""How a behave job is built, validated and classified."""
+"""What a job runs, and how its state is read."""
 
-import re
+from dataclasses import dataclass, field
 from enum import Enum
-from pathlib import Path
-from typing import Collection, Iterable, Mapping
+from typing import Mapping
 
 from pro_behave.jobs.domain.pools import POOL_OF, Pool
 from pro_behave.jobs.messages import (
@@ -13,12 +12,22 @@ from pro_behave.jobs.messages import (
     JobState,
 )
 
-# features/environment.py reads this exact name (UAClientBehaveConfig's
-# UACLIENT_BEHAVE_ prefix + install_from) to pick where the behave
-# subprocess installs ubuntu-pro-client from; it defaults to 'local' when
-# unset, same as InstallFrom.LOCAL below, but we still set it explicitly so
-# non-default values (e.g. 'proposed') actually reach that subprocess.
-INSTALL_FROM_ENV_VAR = "UACLIENT_BEHAVE_INSTALL_FROM"
+
+@dataclass(frozen=True)
+class Unit:
+    """One scenario on one release and one machine type."""
+
+    feature: str
+    scenario: str
+    release: str
+    machine_type: str
+
+
+@dataclass(frozen=True)
+class Invocation:
+    """How a test framework runs one unit: the command a job holds."""
+
+    command: list[str] = field(default_factory=list)
 
 
 class InstallFrom(str, Enum):
@@ -60,43 +69,6 @@ def validate_machine_type(
     return None
 
 
-class UnitMatch(str, Enum):
-    """How a requested unit matches the scenarios of one feature file."""
-
-    FOUND = "found"
-    NO_SCENARIO = "no_scenario"
-    NOT_ON_COMBO = "not_on_combo"
-    AMBIGUOUS = "ambiguous"
-
-
-# One scenario as unit matching sees it: its name and the
-# (release, machine_type) pairs its Examples rows cover.
-ScenarioCombos = tuple[str, Collection[tuple[str, str]]]
-
-
-def match_unit(
-    scenarios: Iterable[ScenarioCombos],
-    scenario: str,
-    release: str,
-    machine_type: str,
-) -> UnitMatch:
-    """Whether exactly one scenario runs this name on this combo.
-
-    Two scenarios may share a name when they cover different combos; only
-    a combo both cover makes the unit ambiguous, because behave would run
-    them both.
-    """
-    named = [combos for name, combos in scenarios if name == scenario]
-    if not named:
-        return UnitMatch.NO_SCENARIO
-    covering = sum(1 for combos in named if (release, machine_type) in combos)
-    if covering == 0:
-        return UnitMatch.NOT_ON_COMBO
-    if covering > 1:
-        return UnitMatch.AMBIGUOUS
-    return UnitMatch.FOUND
-
-
 def validate_install_from(install_from: str) -> str | None:
     try:
         InstallFrom(install_from)
@@ -135,32 +107,6 @@ def interruption(exit: JobExit | None) -> Interruption:
     if exit is not None and exit.killed:
         return Interruption.KILLED
     return Interruption.DIED
-
-
-def exact_name_pattern(scenario: str) -> str:
-    """A behave ``--name`` regex matching this scenario and nothing else.
-
-    behave names each Scenario Outline row ``<name> -- @<row> <examples>``,
-    so the row suffix is allowed; any other longer name is not.
-    """
-    return "^{}(?: -- @.*)?$".format(re.escape(scenario))
-
-
-def build_command(
-    feature: str,
-    scenario: str,
-    release: str,
-    machine_type: str,
-    json_report_path: Path,
-) -> list[str]:
-    """The behave run for exactly one unit."""
-    command = ["tox", "-e", "behave", "--", feature]
-    command.extend(["--name", exact_name_pattern(scenario)])
-    command.extend(["-D", f"releases={release}"])
-    command.extend(["-D", f"machine_types={machine_type}"])
-    command.extend(["-f", "json", "-o", str(json_report_path)])
-    command.extend(["-f", "plain"])
-    return command
 
 
 def job_matches_result_filters(

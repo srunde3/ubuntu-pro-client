@@ -299,7 +299,7 @@ def test_every_unit_match_is_reached_by_a_case():
 def test_match_unit(scenarios, expected):
     release, machine_type = JAMMY_LXD
 
-    match = match_unit(scenarios, SCENARIO, release, machine_type)
+    match = match_unit(feature_of(scenarios), SCENARIO, release, machine_type)
 
     assert match == expected
 ```

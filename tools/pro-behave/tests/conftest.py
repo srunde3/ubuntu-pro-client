@@ -8,9 +8,9 @@ from pathlib import Path
 import pytest
 
 import pro_behave.mcp.server as server_module
+from pro_behave.behave.framework import BehaveFramework
 from pro_behave.campaign.ports import QueueRefused
 from pro_behave.jobs.adapters import (
-    LocalFeatureFileReader,
     LocalJobResultStore,
     LocalJobResultStoreFactory,
 )
@@ -233,7 +233,7 @@ def make_service(workspace, **ports) -> JobService:
     """A ``JobService`` over fakes; any port or callable can be given."""
     defaults = dict(
         config=FakeConfigStore(),
-        feature_reader=LocalFeatureFileReader(),
+        framework=BehaveFramework(),
         results=LocalJobResultStoreFactory(),
         lanes=FakeLanePool(),
         launcher=FakeJobLauncher(),

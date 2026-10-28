@@ -5,9 +5,11 @@ This module provides structures for testing conventions used in the Pro client
 that cannot be expressed by native ``behave``. For example, Pro client tests
 are frequently executed on combos of ``<release>`` and ``<machine_type>``.
 This module provides a structured way to parse those facts from feature files.
+
+It imports only ``behave`` and the standard library, so it can be lifted out
+as a library; the behave adapter maps its types onto the tool's catalog.
 """
 
-import posixpath
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -62,56 +64,10 @@ class FeatureDetail:
     scenarios: List[ScenarioSummary]
 
 
-@dataclass
-class FeatureCatalogEntry:
-    """Lightweight catalog projection of a feature."""
-
-    path: str
-    title: str
-    scenario_count: int
-    requires_config: List[str]
-    releases: List[str]
-    machine_types: List[str]
-
-
-@dataclass
-class DimensionValue:
-    """A distinct release or machine_type with its scenario count."""
-
-    name: str
-    scenario_count: int
-
-
-@dataclass
-class Dimensions:
-    """Distinct releases and machine_types across the suite."""
-
-    releases: List[DimensionValue]
-    machine_types: List[DimensionValue]
-
-
-@dataclass
-class ScenarioMatch:
-    """A scenario hit with the combos satisfying some filter."""
-
-    feature_file: str
-    scenario_name: str
-    type: str
-    requires_config: List[str]
-    combos: List[Combo]
-
-
 _CONFIG_TAG_PREFIX = "uses.config."
 _GIVEN_MACHINE_STEP_RE = re.compile(
     r"a `(.*)` `(.*)` machine with ubuntu-advantage-tools installed"
 )
-
-
-def normalize_feature_file_arg(feature_file: str) -> str:
-    normalized = posixpath.normpath(feature_file.replace("\\", "/"))
-    if normalized.startswith("./"):
-        normalized = normalized[2:]
-    return normalized
 
 
 def requires_config_from_tags(tags: List[str]) -> List[str]:
@@ -269,112 +225,7 @@ def summarize_feature(feature: Any) -> FeatureDetail:
     )
 
 
-def catalog_entry(feature_detail: FeatureDetail) -> FeatureCatalogEntry:
-    """Project a full feature detail into a lightweight catalog entry."""
-    releases: List[str] = []
-    machine_types: List[str] = []
-    requires_config = list(feature_detail.requires_config)
-    for scenario in feature_detail.scenarios:
-        for requirement in scenario.requires_config:
-            if requirement not in requires_config:
-                requires_config.append(requirement)
-        for combo in scenario.combos:
-            if combo.release not in releases:
-                releases.append(combo.release)
-            if combo.machine_type not in machine_types:
-                machine_types.append(combo.machine_type)
-    return FeatureCatalogEntry(
-        path=feature_detail.path,
-        title=feature_detail.title,
-        scenario_count=len(feature_detail.scenarios),
-        requires_config=sorted(requires_config),
-        releases=sorted(releases),
-        machine_types=sorted(machine_types),
-    )
-
-
-def filtered_combos(
-    scenario: ScenarioSummary,
-    release: Optional[str] = None,
-    machine_type: Optional[str] = None,
-) -> List[Combo]:
-    """Return the scenario combos matching the given release/machine_type."""
-    result: List[Combo] = []
-    for combo in scenario.combos:
-        if release is not None and combo.release != release:
-            continue
-        if machine_type is not None and combo.machine_type != machine_type:
-            continue
-        result.append(combo)
-    return result
-
-
-def scenario_matches(
-    scenario: ScenarioSummary,
-    feature_tags: List[str],
-    *,
-    release: Optional[str] = None,
-    machine_type: Optional[str] = None,
-    tag: Optional[str] = None,
-    text: Optional[str] = None,
-) -> bool:
-    """Return whether a scenario satisfies all provided filters."""
-    if (release is not None or machine_type is not None) and not (
-        filtered_combos(scenario, release, machine_type)
-    ):
-        return False
-    if tag is not None:
-        all_tags = set(feature_tags) | set(scenario.tags)
-        if tag not in all_tags:
-            return False
-    if text is not None:
-        if text.lower() not in scenario.name.lower():
-            return False
-    return True
-
-
-def aggregate_dimensions(feature_details: List[FeatureDetail]) -> Dimensions:
-    """Return distinct releases and machine_types with scenario counts."""
-    release_counts: Dict[str, int] = {}
-    machine_type_counts: Dict[str, int] = {}
-    for feature_detail in feature_details:
-        for scenario in feature_detail.scenarios:
-            releases_seen: set = set()
-            machine_types_seen: set = set()
-            for combo in scenario.combos:
-                releases_seen.add(combo.release)
-                machine_types_seen.add(combo.machine_type)
-            for release in releases_seen:
-                release_counts[release] = release_counts.get(release, 0) + 1
-            for machine_type in machine_types_seen:
-                machine_type_counts[machine_type] = (
-                    machine_type_counts.get(machine_type, 0) + 1
-                )
-    return Dimensions(
-        releases=[
-            DimensionValue(name=name, scenario_count=count)
-            for name, count in sorted(release_counts.items())
-        ],
-        machine_types=[
-            DimensionValue(name=name, scenario_count=count)
-            for name, count in sorted(machine_type_counts.items())
-        ],
-    )
-
-
 _detail_cache: Dict[str, Tuple[float, FeatureDetail]] = {}
-
-
-def discover_feature_files(repo_root: Path) -> List[str]:
-    """Return repo-relative paths of every ``*.feature`` file, sorted."""
-    features_dir = repo_root / "features"
-    if not features_dir.exists():
-        return []
-
-    return sorted(
-        str(path.relative_to(repo_root)).replace("\\", "/")
-        for path in features_dir.rglob("*.feature")
-    )
 
 
 def discover_feature_details(repo_root: Path) -> List[FeatureDetail]:
