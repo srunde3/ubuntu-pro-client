@@ -13,6 +13,8 @@ This is a standalone `uv` project, `pro-behave`: it runs ubuntu-pro-client's beh
 
 [README.md](README.md) documents the tool surface, env vars and defaults for people running the server.
 
+[agent-docs/](agent-docs/README.md) records the domain, the settled decisions and their reasons, designs in progress and open questions. Read it before proposing a change to the design, and update it in the same change when a decision is made.
+
 ## Where the root AGENTS.md does not apply
 
 The root [AGENTS.md](../../AGENTS.md) applies here, terminology and safety rules included, with these exceptions:

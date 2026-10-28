@@ -1,0 +1,63 @@
+# Decisions
+
+Each decision has an ID that stays fixed. Where a review doc gave it an ID first, the Source column keeps that ID (R1 to R12 from the architecture review, Q1 to Q5 from the framework seam design).
+
+## One checkout per server, and no process owns the work
+
+| ID | Decision | Why | Source |
+| --- | --- | --- | --- |
+| DEC-01 | A server serves one checkout. A per-call `repo_root` chooses where behave runs and which feature files are read, never where files are written. | One server keeps one set of jobs and lanes. `repo_root` stays on every tool so a worktree with different feature files can be tested. | R1 |
+| DEC-02 | MCP is served over streamable HTTP only. | One transport. Under stdio, a job's child process could read MCP protocol bytes from the stdin it inherited. | R9 |
+| DEC-03 | Nothing long-lived drives jobs or campaigns. Reconcile works from files, and every front-end command, the server's timer and each job's own process run it. Several servers and CLIs may share a state directory. | Work finishes with nothing driving it, and there is no in-memory state to recover after a crash. Recovery means reading the files and locks of live jobs. | R5 |
+| DEC-04 | Crash-first: each fact is written once, whole, by rename. A process that dies leaves no fact, and the absence reads as interrupted. | The state is correct after any crash, with no recovery code. The user will not trade this model away. | Q3 |
+
+## A job is one unit, kept in files
+
+| ID | Decision | Why | Source |
+| --- | --- | --- | --- |
+| DEC-05 | A job runs exactly one unit, selected exactly. A selection that matches no unit, or more than one, is refused, for one-off jobs and campaign units alike. | A result belongs to one unit, with nothing else mixed in. | R3 |
+| DEC-06 | Lanes belong to the server, and one-off jobs and campaigns share them. A lane is a lock file the job process holds. Max jobs per pool is checkout config. | Capacity is shared across processes through the kernel, with nothing held in memory. | R4 |
+| DEC-07 | A killed job is interrupted (`killed`), and a job whose process died is interrupted (`died`). Neither is an error. | Neither established anything about the unit, so a campaign queues the unit again. | review vocabulary |
+| DEC-08 | Job settings have one interface: `config.json` in the state directory, set with `pro-behave config`, secrets included and never shown. A job drops every inherited `UACLIENT_BEHAVE_*` variable. | A job must not depend on who starts it. | p4 design |
+| DEC-09 | The job layer knows nothing of campaigns. A job's own process reconciles jobs only. | The job service stays usable on its own, and campaigns can be lifted out. | |
+
+## A campaign writes its intent and derives the rest
+
+| ID | Decision | Why | Source |
+| --- | --- | --- | --- |
+| DEC-10 | Any pass counts: a unit that has ever passed stays passed. | A flaky failure after a pass says nothing new about the unit. | R6 |
+| DEC-11 | The commands are `run`, `pause` (optionally killing what is in flight) and `retry`, which always sets the intent to run. There is no cancel and no terminal state. | Intent is the only state written, so three commands cover every change, and a complete campaign can still be retried. | review state model |
+| DEC-12 | A unit with a problem outcome is run again only when someone asks. | Judging a failure flaky or real is the watcher's call, never the scheduler's. | |
+| DEC-13 | Each campaign caps its own jobs per pool, 1 by default for each pool in its scope. | The job queue is first in, first out per pool, so a campaign's cap keeps it from crowding out others. | p5 design |
+| DEC-14 | A campaign stores facts only. Its events are derived from its records on every read, and a starved pool or an overdue job is recorded once per episode. | One log, nothing to keep in sync, and a watcher hears of each problem once, across restarts. | |
+
+## One surface, shaped for the CLI first
+
+| ID | Decision | Why | Source |
+| --- | --- | --- | --- |
+| DEC-15 | The MCP tool, the CLI command and the service method have one name (`run_job`, `job run`, `JobService.run_job`). | One concept, one name, whichever front-end is used. | p6 design |
+| DEC-16 | Shape the service and CLI first: what a response carries, and how many calls a task takes. Tune MCP defaults, limits and schema size separately. | Token cost justifies only the tuning. | |
+| DEC-17 | Parameters use the glossary's terms (`feature`, `scenario`, `release`, `machine_type`) and the existing taxonomy (a combo is `{release, machine_type}`). Combos stay dimension-agnostic, and outputs invent no notation. | The same thing reads the same way everywhere. | |
+| DEC-18 | Every list that grows takes a `limit` and reports `total` and `truncated`. Unknown filter values are refused. | Bounded responses, and a typo is an error rather than an empty result. | |
+
+## The parts stay independent, and breaking changes are welcome
+
+| ID | Decision | Why | Source |
+| --- | --- | --- | --- |
+| DEC-19 | Duplication across `jobs`, `campaign` and the parser is intentional. Copies must agree on names, fields and values. | Each part can move upstream on its own. | |
+| DEC-20 | No compatibility shims, optional fields or legacy readers. | The tool has no consumers. | |
+| DEC-21 | The feature-file parser is its own track and may become a library. Other code reaches it only through ports. | It may leave the package. | |
+
+## Accepted in review, not built yet
+
+These come from [designs/framework-seam.md](designs/framework-seam.md).
+
+| ID | Decision | Why | Source |
+| --- | --- | --- | --- |
+| DEC-22 | The tool, its package, state directory, environment variables, skills and MCP client registration are renamed `pro-e2e`. | The name should say what the tool runs, and stay true after a framework change. | Q1, Q4 |
+| DEC-23 | Behave sits behind one adapter with three seams: catalog, invocation and interpretation. The parser stays behave-specific. | A move to pytest becomes a sibling adapter. A parser is naturally specific to its framework. | |
+| DEC-24 | A job decides its unit's result when it ends, and every reader gets that one result. The result counts only the unit's own instances, which the request records when the job is queued. | A single run and a campaign must report the same outcome. Rows for other combos are not part of the unit. | |
+| DEC-25 | The job process writes the result with the exit, in one file and one write. A failed interpretation becomes an `error` result. | Keeps DEC-04: a finished job always has its result. | Q3 |
+| DEC-26 | Scenario filters match exact names. Substring search by name goes. | Units are selected exactly (DEC-05). | |
+| DEC-27 | A unit passes when at least one of its own instances passes and none fails. Its skipped instances are listed in the result with their skip reasons. A unit whose own instances all skip is `skipped`. | What matters is a pass on the unit that was asked for. | Q2 |
+| DEC-28 | The file that marks a job's end is `result.json`. A killed job's result says `killed`, with no outcome. | Readers look for a job's result there, and a kill is a fair thing for a result to say. | Q5 |
