@@ -230,3 +230,71 @@ def test_discover_feature_details_uses_mtime_cache(tmp_path):
     os.utime(feature_path, (stat.st_atime, stat.st_mtime))
     cached = parser.discover_feature_details(tmp_path)
     assert cached[0].title == "Sample feature"
+
+
+# Two outlines share a name; their rows cover different combos, and the
+# first runs twice on jammy lxd-container.
+SHARED_NAME_FEATURE = """\
+Feature: Shared names
+
+  Scenario Outline: Shared
+    Given a `<release>` `<machine_type>` machine with \
+ubuntu-advantage-tools installed
+
+    Examples: ubuntu release
+      | release | machine_type  | service |
+      | jammy   | lxd-container | esm     |
+      | jammy   | lxd-container | fips    |
+      | noble   | lxd-vm        | esm     |
+
+  Scenario Outline: Shared
+    Given a `<release>` `<machine_type>` machine with \
+ubuntu-advantage-tools installed
+
+    Examples: ubuntu release
+      | release | machine_type  |
+      | focal   | lxd-container |
+
+  Scenario: Pinned
+    Given a `jammy` `lxd-vm` machine with ubuntu-advantage-tools installed
+"""
+
+
+def _shared(tmp_path):
+    path = tmp_path / "shared.feature"
+    path.write_text(SHARED_NAME_FEATURE, encoding="utf-8")
+    return path
+
+
+def test_instances_of_are_the_rows_on_the_combo(tmp_path):
+    runs = parser.instances_of(
+        _shared(tmp_path), "Shared", "jammy", "lxd-container"
+    )
+
+    assert [(run.line, run.name) for run in runs] == [
+        (8, "Shared -- @1.1 ubuntu release"),
+        (9, "Shared -- @1.2 ubuntu release"),
+    ]
+
+
+def test_instances_of_keep_same_named_outlines_apart_by_line(tmp_path):
+    runs = parser.instances_of(
+        _shared(tmp_path), "Shared", "focal", "lxd-container"
+    )
+
+    assert [(run.line, run.name) for run in runs] == [
+        (17, "Shared -- @1.1 ubuntu release")
+    ]
+
+
+def test_a_plain_scenario_is_its_own_instance(tmp_path):
+    runs = parser.instances_of(_shared(tmp_path), "Pinned", "jammy", "lxd-vm")
+
+    assert [(run.line, run.name) for run in runs] == [(19, "Pinned")]
+
+
+def test_a_combo_the_scenario_lacks_has_no_instances(tmp_path):
+    assert (
+        parser.instances_of(_shared(tmp_path), "Shared", "xenial", "lxd-vm")
+        == []
+    )

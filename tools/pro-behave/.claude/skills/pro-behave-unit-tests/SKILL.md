@@ -189,7 +189,7 @@ Golden tests pin the exact bytes of job records and exits. A failure means the f
 
 A fake is a small working implementation of a port. It behaves like the real thing in the ways the test needs, records what it was asked, and fails loudly on anything else. A mock accepts every call and returns another mock, so a test built on one passes even when the code calls the wrong method or passes the wrong shape.
 
-Good: a fake with the port's real signature, which records calls and behaves like the real thing where the service can tell: a job runs until the test ends it, and ending it writes the exit the way the job process does.
+Good: a fake with the port's real signature, which records calls and behaves like the real thing where the service can tell: a job runs until the test ends it, and ending it writes the result the way the job process does.
 
 ```python
 class FakeJobLauncher:
@@ -205,8 +205,8 @@ class FakeJobLauncher:
     def is_running(self, job_id):
         return job_id in self.running
 
-    def finish(self, job_id, returncode=0, killed=False, log="", report=None):
-        ...  # writes the log, the report, then exit.json
+    def finish(self, job_id, outcome=Outcome.PASSED, *, killed=False, log=""):
+        ...  # writes the log, then result.json, as the job process does
 ```
 
 Bad: a mock standing in for the port. A typo in `launch`, or a method the port never had, still passes.

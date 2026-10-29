@@ -26,7 +26,7 @@ The parts are layered: `cli`, then `mcp` and `job_process`, then `behave` and `c
 
 | Layer | `jobs/` | `campaign/` | Rule |
 | --- | --- | --- | --- |
-| Domain | `domain/`: `jobs`, `catalog`, `queue`, `config`, `logs`, `limits`, `pools`, `layout` | `domain/`: `records`, `state`, `schedule`, `classify`, `events`, `feed`, `signals`, `discovery`, `bundle` | Pure rules. No file, process or network I/O. |
+| Domain | `domain/`: `jobs`, `catalog`, `results`, `queue`, `config`, `logs`, `limits`, `pools`, `layout` | `domain/`: `records`, `state`, `schedule`, `classify`, `events`, `feed`, `signals`, `discovery`, `bundle` | Pure rules. No file, process or network I/O. |
 | Views | `views.py` | `views/`: `responses`, `export` | Pure projections of domain types into DTOs and export files. A view decides nothing. |
 | Ports | `ports.py` | `ports.py` | `Protocol` interfaces the services depend on. |
 | Adapters | `adapters.py` | `adapters.py`, `repo.py` | Implement the ports with the filesystem, `subprocess`, `fcntl` and git. |
@@ -66,7 +66,7 @@ Everything the server writes lives under its own checkout's `.pro-behave/`, or u
 | `reconcile.lock` | held while a process reconciles or a command writes; re-entrant within a thread | `reconcile`, campaign create/run/pause/retry, `kill_job` on a queued job |
 | `jobs/<job_id>/request.json` | what to run (`JobRequest`), written once when queued | `JobService.queue_job` (from `run_job`, and from campaigns) |
 | `jobs/<job_id>/job.json` | the launch record (`JobRecord`), written once while holding `job.lock` | `JobService.reconcile` |
-| `jobs/<job_id>/exit.json` | the exit (`JobExit`), written once by rename | the job process; `kill_job` for a job still queued |
+| `jobs/<job_id>/result.json` | the job's result (`JobResult`), written once by rename | the job process; reconcile for a job that could not start; `kill_job` for a job still queued |
 | `jobs/<job_id>/job.lock` | held by the job process while the job lives; holds its PID | the job process |
 | `jobs/<job_id>/kill` | left by a kill, for a job process still starting up | `kill_job` |
 | `lanes/<pool>/<n>.lock` | held by the process of the job using that lane | the job process |
@@ -81,10 +81,10 @@ Only facts are written (the plan, intents, retries, attempts and their outcomes,
 ## Process model
 
 - A server process serves MCP over streamable HTTP at `http://PRO_BEHAVE_MCP_HOST:PRO_BEHAVE_MCP_PORT/mcp`. FastMCP runs tool calls on worker threads. Several servers and CLIs may share a state directory.
-- Nothing long-lived drives jobs. `JobService.reconcile` starts queued jobs on free lanes, under `reconcile.lock`, from files alone. It runs after every tool call (in the `@tool` decorator), every 5 s in the server, after every CLI command, and in a job's own process after it records its exit and lets go of its lane.
+- Nothing long-lived drives jobs. `JobService.reconcile` starts queued jobs on free lanes, under `reconcile.lock`, from files alone. It runs after every tool call (in the `@tool` decorator), every 5 s in the server, after every CLI command, and in a job's own process after it records its result and lets go of its lane.
 - Campaigns have no driver either. `CampaignService.reconcile` brings every campaign up to date -- records ended jobs, queues queueable units up to each campaign's max jobs -- and then reconciles the job queue, all under one hold of `reconcile.lock`. The server and the CLI run it; the job process runs only `JobService.reconcile`, because the job layer knows nothing of campaigns. Any number of campaigns run at once.
 - `mcp/server.py` holds one `JobService` and one `JsonlCampaignStore`, shared so a reader waiting for events is woken by this process's appends. `CampaignService` is built per call, with `campaign_jobs()` as its job runner. Nothing about a job or a campaign is held in memory.
-- Each job runs under `pro_behave/job_process.py`, in its own session. The job process holds the job's lane lock (`lanes/<pool>/<n>.lock`) and `jobs/<id>/job.lock` for its whole life, runs `tox -e behave` as a child with a parent-death signal and stdin from `/dev/null`, and writes `exit.json` when tox exits. A job's state is read off those files and locks, from any process: a killed job is interrupted, never failed. `kill_job` sends SIGTERM to the job process, which passes it to tox's process group. It first leaves `jobs/<id>/kill` for a job process still starting; a queued job gets an `exit.json` marked killed and never starts.
+- Each job runs under `pro_behave/job_process.py`, in its own session. The job process holds the job's lane lock (`lanes/<pool>/<n>.lock`) and `jobs/<id>/job.lock` for its whole life, runs `tox -e behave` as a child with a parent-death signal and stdin from `/dev/null`, and when tox exits decides the unit's result through the `Framework` port and the rules in `jobs/domain/results.py`, and writes `result.json`. A job's state is read off those files and locks, from any process: a killed job is interrupted, never failed. `kill_job` sends SIGTERM to the job process, which passes it to tox's process group. It first leaves `jobs/<id>/kill` for a job process still starting; a queued job gets a `result.json` marked killed and never starts.
 
 ## Surface rules
 

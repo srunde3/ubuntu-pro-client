@@ -18,7 +18,8 @@ from pro_behave.jobs.adapters import (
 )
 from pro_behave.jobs.domain.config import CheckoutConfig
 from pro_behave.jobs.domain.pools import Pool
-from pro_behave.jobs.messages import JobExit, JobRecord
+from pro_behave.jobs.domain.results import start_failure
+from pro_behave.jobs.messages import JobRecord, JobResult, Outcome
 from tests.conftest import job_file, make_repo_with_feature
 
 JOB_PROCESS = "pro_behave.job_process"
@@ -65,26 +66,6 @@ def test_log_tail_missing(tmp_path):
     assert store.read_log_lines("nope") == []
 
 
-def test_read_report_missing_or_invalid(tmp_path):
-    store = _store(tmp_path)
-    assert store.read_report("missing") is None
-
-    (job_file(tmp_path, "bad", "report.json")).write_text(
-        "nope", encoding="utf-8"
-    )
-    assert store.read_report("bad") is None
-
-    (job_file(tmp_path, "obj", "report.json")).write_text(
-        "{}", encoding="utf-8"
-    )
-    assert store.read_report("obj") is None
-
-    (job_file(tmp_path, "good", "report.json")).write_text(
-        "[1, 2]", encoding="utf-8"
-    )
-    assert store.read_report("good") == [1, 2]
-
-
 def test_exists_and_list_job_ids(tmp_path):
     store = _store(tmp_path)
     empty = store.exists("jobx")
@@ -101,7 +82,7 @@ def test_exists_and_list_job_ids(tmp_path):
     )
     flags = store.exists("jobx")
     assert flags.record is True
-    assert flags.exit is False
+    assert flags.result is False
     assert flags.stdout_log is True
     assert flags.json_report is False
     assert store.list_job_ids() == ["jobx"]
@@ -116,7 +97,7 @@ def test_write_targets_and_artifacts_naming(tmp_path):
     artifacts = store.artifacts("jobx")
     assert artifacts.job_dir == str(tmp_path / "jobx")
     assert artifacts.record == str(tmp_path / "jobx" / "job.json")
-    assert artifacts.exit == str(tmp_path / "jobx" / "exit.json")
+    assert artifacts.result == str(tmp_path / "jobx" / "result.json")
 
 
 def test_a_job_directory_without_a_record_is_not_listed(tmp_path):
@@ -126,20 +107,29 @@ def test_a_job_directory_without_a_record_is_not_listed(tmp_path):
     assert store.list_job_ids() == []
 
 
-def test_the_first_exit_written_wins(tmp_path):
+def test_the_first_result_written_wins(tmp_path):
     store = _store(tmp_path)
-    first = JobExit(finished_at="T1", returncode=0, ok=True)
-    later = JobExit(finished_at="T2", returncode=1, ok=False)
-    store.write_exit("jobx", first)
+    first = JobResult(finished_at="T1", returncode=0, outcome=Outcome.PASSED)
+    later = JobResult(finished_at="T2", returncode=1, outcome=Outcome.ERROR)
+    store.write_result("jobx", first)
 
-    kept = store.write_exit("jobx", later)
+    kept = store.write_result("jobx", later)
 
     assert kept == first
-    assert store.read_exit("jobx") == first
+    assert store.read_result("jobx") == first
 
 
-def test_no_exit_reads_as_none(tmp_path):
-    assert _store(tmp_path).read_exit("jobx") is None
+def test_no_result_reads_as_none(tmp_path):
+    assert _store(tmp_path).read_result("jobx") is None
+
+
+def test_a_result_that_breaks_its_rules_reads_as_none(tmp_path):
+    # A killed result never has an outcome; one that does is not a result.
+    job_file(tmp_path, "jobx", "result.json").write_text(
+        '{"killed": true, "outcome": "passed"}', encoding="utf-8"
+    )
+
+    assert _store(tmp_path).read_result("jobx") is None
 
 
 def test_an_interrupted_write_leaves_no_partial_file(tmp_path, monkeypatch):
@@ -150,7 +140,7 @@ def test_an_interrupted_write_leaves_no_partial_file(tmp_path, monkeypatch):
 
     monkeypatch.setattr(adapters_module.os, "replace", crash)
 
-    store.write_exit("jobx", JobExit(finished_at="T1", returncode=0))
+    store.write_result("jobx", start_failure("T1", "never ran"))
 
     # Neither the status file nor a temporary file is left behind.
     assert list((tmp_path / "jobx").iterdir()) == []
@@ -352,10 +342,9 @@ def _launch(tmp_path, lanes, launcher, job_id, command):
     )
 
 
-def _exit(tmp_path, job_id):
-    return (
-        LocalJobResultStoreFactory().bind(tmp_path / "jobs").read_exit(job_id)
-    )
+def _result(tmp_path, job_id):
+    store = LocalJobResultStoreFactory().bind(tmp_path / "jobs")
+    return store.read_result(job_id)
 
 
 class TestFileLanePool:
@@ -476,17 +465,22 @@ class TestFileReconcileLock:
 
 
 class TestJobProcessLauncher:
-    def test_a_job_runs_to_a_recorded_exit(self, tmp_path, lanes, launcher):
+    def test_a_job_runs_to_a_recorded_result(self, tmp_path, lanes, launcher):
         _launch(tmp_path, lanes, launcher, "job", ["sh", "-c", "exit 3"])
 
-        assert _eventually(lambda: _exit(tmp_path, "job") is not None)
-        exit = _exit(tmp_path, "job")
-        assert (exit.returncode, exit.ok, exit.killed) == (3, False, False)
+        assert _eventually(lambda: _result(tmp_path, "job") is not None)
+        result = _result(tmp_path, "job")
+        # The command wrote no report, so the job established nothing.
+        assert (result.returncode, result.outcome, result.killed) == (
+            3,
+            Outcome.ERROR,
+            False,
+        )
 
     def test_the_job_output_is_its_log(self, tmp_path, lanes, launcher):
         _launch(tmp_path, lanes, launcher, "job", ["sh", "-c", "echo hello"])
 
-        assert _eventually(lambda: _exit(tmp_path, "job") is not None)
+        assert _eventually(lambda: _result(tmp_path, "job") is not None)
         log = tmp_path / "jobs" / "job" / "stdout.log"
         assert log.read_text().strip() == "hello"
 
@@ -501,7 +495,7 @@ class TestJobProcessLauncher:
             ["sh", "-c", "read line; echo got=$line"],
         )
 
-        assert _eventually(lambda: _exit(tmp_path, "job") is not None)
+        assert _eventually(lambda: _result(tmp_path, "job") is not None)
         log = tmp_path / "jobs" / "job" / "stdout.log"
         assert log.read_text().strip() == "got="
 
@@ -516,7 +510,7 @@ class TestJobProcessLauncher:
 
         assert _eventually(lambda: not launcher.is_running("job"))
         assert lanes.busy(Pool.LXD) == 0
-        assert _exit(tmp_path, "job").ok is True
+        assert _result(tmp_path, "job").returncode == 0
 
     def test_a_signal_stops_the_job_and_records_a_kill(
         self, tmp_path, lanes, launcher
@@ -526,9 +520,9 @@ class TestJobProcessLauncher:
         signalled = launcher.kill("job")
 
         assert signalled is True
-        assert _eventually(lambda: _exit(tmp_path, "job") is not None)
-        exit = _exit(tmp_path, "job")
-        assert (exit.killed, exit.ok) == (True, False)
+        assert _eventually(lambda: _result(tmp_path, "job") is not None)
+        result = _result(tmp_path, "job")
+        assert (result.killed, result.outcome) == (True, None)
 
     def test_a_kill_reaches_every_process_the_job_started(
         self, tmp_path, lanes, launcher
@@ -558,7 +552,7 @@ class TestJobProcessLauncher:
 
         assert launcher.kill("job") is False
 
-    def test_a_dead_job_process_leaves_no_exit_and_takes_its_job_with_it(
+    def test_a_dead_job_process_leaves_no_result_and_takes_its_job_with_it(
         self, tmp_path, lanes, launcher
     ):
         pid_file = tmp_path / "child.pid"
@@ -578,7 +572,7 @@ class TestJobProcessLauncher:
         os.kill(job_process, signal.SIGKILL)
 
         assert _eventually(lambda: not launcher.is_running("job"))
-        assert _exit(tmp_path, "job") is None
+        assert _result(tmp_path, "job") is None
         assert lanes.busy(Pool.LXD) == 0
         # The parent-death signal stops the job when its process dies.
         assert _eventually(lambda: not _pid_alive(child))
@@ -597,9 +591,9 @@ class TestJobProcessLauncher:
             "job", ["sleep", "30"], str(tmp_path), PATH_ONLY, lease, _no_record
         )
 
-        assert _eventually(lambda: _exit(tmp_path, "job") is not None)
-        exit = _exit(tmp_path, "job")
-        assert (exit.killed, exit.returncode) == (True, None)
+        assert _eventually(lambda: _result(tmp_path, "job") is not None)
+        result = _result(tmp_path, "job")
+        assert (result.killed, result.returncode) == (True, None)
 
     def test_the_record_is_written_while_the_job_lock_is_held(
         self, tmp_path, lanes, launcher
@@ -626,10 +620,10 @@ class TestJobProcessLauncher:
     ):
         _launch(tmp_path, lanes, launcher, "job", ["/no/such/command"])
 
-        assert _eventually(lambda: _exit(tmp_path, "job") is not None)
-        exit = _exit(tmp_path, "job")
-        assert exit.returncode is None
-        assert "No such file" in exit.error
+        assert _eventually(lambda: _result(tmp_path, "job") is not None)
+        result = _result(tmp_path, "job")
+        assert (result.returncode, result.outcome) == (None, Outcome.ERROR)
+        assert "No such file" in result.reason
 
 
 def test_list_job_ids_finds_every_queued_job(tmp_path):

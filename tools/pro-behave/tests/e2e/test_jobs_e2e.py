@@ -71,11 +71,10 @@ def test_another_process_sees_a_running_job_and_kills_it(
 
     assert seen == {"before": "running", "killed": True}
     ended = service.job_artifacts(started.job_id)
-    assert ended.exit is not None
-    assert ended.exit.killed is True
-    assert ended.exit.ok is False
+    assert ended.result is not None
+    assert (ended.result.killed, ended.result.outcome) == (True, None)
     interrupted = service.job_status(started.job_id)
-    assert (interrupted.state, interrupted.reason) == (
+    assert (interrupted.state, interrupted.interruption) == (
         "interrupted",
         "killed",
     )
@@ -108,4 +107,4 @@ def test_two_jobs_on_one_lane_run_back_to_back_with_nobody_calling(
 
     first_record = service.job_artifacts(first.job_id)
     second_record = service.job_artifacts(second.job_id)
-    assert first_record.exit.finished_at <= second_record.record.started_at
+    assert first_record.result.finished_at <= second_record.record.started_at

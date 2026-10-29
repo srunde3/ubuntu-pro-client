@@ -24,7 +24,7 @@ RECONCILE_LOCK_NAME = "reconcile.lock"
 # The files in one job's directory, ``jobs/<job_id>/``.
 JOB_REQUEST_NAME = "request.json"
 JOB_RECORD_NAME = "job.json"
-JOB_EXIT_NAME = "exit.json"
+JOB_RESULT_NAME = "result.json"
 JOB_LOCK_NAME = "job.lock"
 # Left by a kill, so a job process still starting up sees it was killed.
 JOB_KILL_NAME = "kill"
@@ -33,7 +33,7 @@ JSON_REPORT_NAME = "report.json"
 # The files that are a job's evidence; its request is repeated in its record.
 JOB_FILE_NAMES = (
     JOB_RECORD_NAME,
-    JOB_EXIT_NAME,
+    JOB_RESULT_NAME,
     STDOUT_LOG_NAME,
     JSON_REPORT_NAME,
 )
@@ -88,14 +88,14 @@ class JobPaths(NamedTuple):
     """The directory one job owns, and the files in it.
 
     ``request`` is written once when the job is queued, ``record`` once at
-    launch and ``exit`` once at exit; behave writes ``stdout_log`` and
-    ``json_report`` as it runs.
+    launch and ``result`` once when it ends; the command writes
+    ``stdout_log`` and ``json_report`` as it runs.
     """
 
     job_dir: Path
     request: Path
     record: Path
-    exit: Path
+    result: Path
     stdout_log: Path
     json_report: Path
     lock: Path
@@ -108,7 +108,7 @@ def job_paths(jobs: Path, job_id: str) -> JobPaths:
         job_dir=job_dir,
         request=job_dir / JOB_REQUEST_NAME,
         record=job_dir / JOB_RECORD_NAME,
-        exit=job_dir / JOB_EXIT_NAME,
+        result=job_dir / JOB_RESULT_NAME,
         stdout_log=job_dir / STDOUT_LOG_NAME,
         json_report=job_dir / JSON_REPORT_NAME,
         lock=job_dir / JOB_LOCK_NAME,

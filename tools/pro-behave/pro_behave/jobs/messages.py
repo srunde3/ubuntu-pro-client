@@ -3,7 +3,7 @@
 from enum import Enum
 from typing import Annotated, Literal, Union
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class Combo(BaseModel):
@@ -74,7 +74,7 @@ class Artifacts(BaseModel):
     job_dir: str
     request: str
     record: str
-    exit: str
+    result: str
     stdout_log: str
     json_report: str
 
@@ -93,12 +93,13 @@ class RepoState(BaseModel):
 
 
 class JobState(str, Enum):
-    """A behave job's state, read off its files and locks."""
+    """A job's state, read off its files and locks."""
 
     # Waiting for a lane in its pool.
     QUEUED = "queued"
     RUNNING = "running"
-    # tox ran to its end; the exit says how it went.
+    # The job ended with a result: its command ran to the end, or could not
+    # start.
     FINISHED = "finished"
     # The job ended without a result: it was killed, or its process died.
     INTERRUPTED = "interrupted"
@@ -108,18 +109,40 @@ class Interruption(str, Enum):
     """Why an interrupted job has no result."""
 
     KILLED = "killed"
-    # Its process died without writing an exit: a crash, a hard kill, a
+    # Its process died without writing a result: a crash, a hard kill, a
     # reboot.
     DIED = "died"
 
 
-class ScenarioStatus(str, Enum):
-    """Classified outcome of a scenario or feature in a behave report."""
+class Outcome(str, Enum):
+    """What a finished job established for its unit."""
 
     PASSED = "passed"
     FAILED = "failed"
     SKIPPED = "skipped"
-    UNKNOWN = "unknown"
+    # The run established nothing about the product: it could not start,
+    # left no readable report, or the test machinery broke.
+    ERROR = "error"
+
+
+class InstanceStatus(str, Enum):
+    """How one of a unit's instances went."""
+
+    PASSED = "passed"
+    # A step failed.
+    FAILED = "failed"
+    SKIPPED = "skipped"
+    # The test machinery broke: a hook, a cleanup, an undefined step, or a
+    # status the framework's adapter does not recognise.
+    ERROR = "error"
+
+
+class Instance(BaseModel):
+    """One execution inside a unit. ``id`` is unique in the checkout;
+    ``name`` is what the framework calls it."""
+
+    id: str
+    name: str
 
 
 class JobRequest(BaseModel):
@@ -137,6 +160,8 @@ class JobRequest(BaseModel):
     machine_type: str = ""
     install_from: str = ""
     command: list[str] = []
+    # The unit's own instances, as the framework named them when queued.
+    instances: list[Instance] = []
     repo_root: str = ""
     # The campaign this job is an attempt for; empty for a one-off job.
     campaign_id: str = ""
@@ -163,18 +188,45 @@ class JobRecord(BaseModel):
     artifacts: Artifacts | None = None
 
 
-class JobExit(BaseModel):
-    """How one behave job ended. Written once, by its job process.
+class InstanceResult(BaseModel):
+    """How one of the unit's instances went. ``reason`` says why it was
+    skipped, or how the test machinery broke."""
 
-    ``ok`` is true for a zero exit that nobody killed. ``error`` says why
-    the job never ran, when tox could not be started at all.
+    id: str
+    name: str
+    status: InstanceStatus
+    reason: str = ""
+
+
+class Failure(BaseModel):
+    """One failing step of an instance."""
+
+    instance: str
+    step: str
+    status: str
+    error_message: str
+
+
+class JobResult(BaseModel):
+    """How one job ended. Written once, as ``result.json``.
+
+    A killed job has no outcome; every other job has one. ``reason`` says
+    why the outcome is ``error``, or why a job was killed before it started.
     """
 
     finished_at: str = ""
     returncode: int | None = None
-    ok: bool = False
     killed: bool = False
-    error: str = ""
+    outcome: Outcome | None = None
+    reason: str = ""
+    instances: list[InstanceResult] = []
+    failures: list[Failure] = []
+
+    @model_validator(mode="after")
+    def _killed_means_no_outcome(self) -> "JobResult":
+        if self.killed != (self.outcome is None):
+            raise ValueError("a result has an outcome exactly when not killed")
+        return self
 
 
 class PoolUsage(BaseModel):
@@ -193,32 +245,12 @@ class ConfigResponse(BaseModel):
     behave: dict[str, str] = {}
 
 
-class Failure(BaseModel):
-    """A single failing step extracted from a behave report."""
-
-    scenario: str
-    step: str
-    status: str
-    error_message: str
-
-
-class ReportSummary(BaseModel):
-    """Parsed behave report: dynamic status counts plus typed failures.
-
-    ``summary`` keeps status-keyed count maps as plain dicts because behave
-    statuses are open-ended; ``failures`` is fully enumerated.
-    """
-
-    summary: dict[str, dict[str, int]]
-    failures: list[Failure]
-
-
 class ExistsFlags(BaseModel):
     """Which of a job's files exist."""
 
     request: bool
     record: bool
-    exit: bool
+    result: bool
     stdout_log: bool
     json_report: bool
 
@@ -286,45 +318,41 @@ class RunningResponse(BaseModel):
     artifacts: Artifacts | None = None
 
 
-class JobResult(BaseModel):
-    """What came of one job: what ran, how it ended, and what failed.
+class JobSummary(BaseModel):
+    """What came of one job: what ran, and its result once it finished.
 
-    ``ok`` reflects the behave return code. ``summary`` is behave's own
-    counts (features, scenarios, steps by status) and is None until the job
-    finishes, or when no parseable report was produced.
+    ``outcome`` is None until the job finishes, and for an interrupted job.
     """
 
     job_id: str = ""
     state: JobState = JobState.RUNNING
-    ok: bool | None = None
     feature: str = ""
     scenario: str = ""
     release: str = ""
     machine_type: str = ""
-    summary: dict[str, dict[str, int]] | None = None
+    outcome: Outcome | None = None
+    reason: str = ""
+    instances: list[InstanceResult] = []
     failures: list[Failure] = []
 
 
-class FinishedResponse(JobResult):
-    """A job that ran to its end. ``recent_output`` is populated only when
-    no parseable report was produced, and is None otherwise."""
+class FinishedResponse(JobSummary):
+    """A job that ended with a result. ``recent_output`` is the log's tail
+    when the outcome is ``error``, and None otherwise."""
 
     state: Literal[JobState.FINISHED] = JobState.FINISHED
-    ok: bool
+    outcome: Outcome
     returncode: int | None
-    # Why tox never ran, when it could not be started.
-    error: str = ""
     artifacts: Artifacts
     recent_output: str | None = None
 
 
-class InterruptedResponse(JobResult):
+class InterruptedResponse(JobSummary):
     """A job that ended without a result: it was killed, or its process
     died. Nothing it did counts."""
 
     state: Literal[JobState.INTERRUPTED] = JobState.INTERRUPTED
-    ok: bool = False
-    reason: Interruption = Interruption.DIED
+    interruption: Interruption = Interruption.DIED
     artifacts: Artifacts
     recent_output: str = ""
 
@@ -412,7 +440,7 @@ class ArtifactsResponse(BaseModel):
     artifacts: Artifacts | None = None
     request: JobRequest | None = None
     record: JobRecord | None = None
-    exit: JobExit | None = None
+    result: JobResult | None = None
     exists: ExistsFlags | None = None
 
 
@@ -421,8 +449,8 @@ class JobListing(BaseModel):
 
     job_id: str = ""
     state: JobState = JobState.RUNNING
-    reason: Interruption | None = None
-    ok: bool | None = None
+    interruption: Interruption | None = None
+    outcome: Outcome | None = None
     returncode: int | None = None
     feature: str = ""
     scenario: str = ""
@@ -446,7 +474,7 @@ class ListJobsResponse(BaseModel):
 class ResultsResponse(BaseModel):
     """One result per matching job, most recently started first."""
 
-    results: list[JobResult] = []
+    results: list[JobSummary] = []
     total: int = 0
     truncated: bool = False
     limit_clamped: bool = False

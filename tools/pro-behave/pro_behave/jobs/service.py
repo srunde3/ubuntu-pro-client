@@ -2,7 +2,7 @@
 
 import logging
 from pathlib import Path
-from typing import Callable, ContextManager
+from typing import Any, Callable, ContextManager
 
 from pro_behave.jobs.domain.catalog import (
     FeatureDetail,
@@ -55,6 +55,7 @@ from pro_behave.jobs.domain.queue import (
     plan_launches,
     queue_position,
 )
+from pro_behave.jobs.domain.results import killed_result, start_failure
 from pro_behave.jobs.messages import (
     ArtifactsResponse,
     ConfigResponse,
@@ -63,13 +64,13 @@ from pro_behave.jobs.messages import (
     FindScenariosResponse,
     FinishedResponse,
     InterruptedResponse,
-    JobExit,
     JobListing,
     JobRecord,
     JobRequest,
     JobResult,
     JobState,
     JobStatusResult,
+    JobSummary,
     KillJobResponse,
     ListDimensionsResponse,
     ListFeaturesResponse,
@@ -77,6 +78,7 @@ from pro_behave.jobs.messages import (
     LogRegionView,
     LogsResponse,
     LogSummaryView,
+    Outcome,
     PoolUsage,
     QueuedResponse,
     ResultsResponse,
@@ -107,6 +109,18 @@ logger = logging.getLogger(__name__)
 
 # A job in these states has not ended.
 ACTIVE_STATES = (JobState.QUEUED, JobState.RUNNING)
+
+
+def _result_fields(result: JobResult | None) -> dict[str, Any]:
+    """A finished job's result, as a response carries it."""
+    if result is None:
+        return {}
+    return dict(
+        outcome=result.outcome,
+        reason=result.reason,
+        instances=result.instances,
+        failures=result.failures,
+    )
 
 
 class JobServiceError(Exception):
@@ -166,7 +180,6 @@ class JobService:
         release: str | None = None,
         machine_type: str | None = None,
         tag: str | None = None,
-        text: str | None = None,
         repo_root: str = "",
     ) -> ListFeaturesResponse:
         try:
@@ -185,7 +198,6 @@ class JobService:
                 release=release,
                 machine_type=machine_type,
                 tag=tag,
-                text=text,
             )
         ]
 
@@ -244,7 +256,6 @@ class JobService:
         release: str | None = None,
         machine_type: str | None = None,
         tag: str | None = None,
-        text: str | None = None,
         repo_root: str = "",
         limit: int = DEFAULT_FIND_LIMIT,
     ) -> FindScenariosResponse:
@@ -271,7 +282,6 @@ class JobService:
                     release=release,
                     machine_type=machine_type,
                     tag=tag,
-                    text=text,
                 ):
                     continue
                 matches.append(
@@ -304,14 +314,8 @@ class JobService:
         release: str | None,
         machine_type: str | None,
         tag: str | None,
-        text: str | None,
     ) -> bool:
-        if (
-            release is None
-            and machine_type is None
-            and tag is None
-            and text is None
-        ):
+        if release is None and machine_type is None and tag is None:
             return True
         return any(
             scenario_matches(
@@ -320,7 +324,6 @@ class JobService:
                 release=release,
                 machine_type=machine_type,
                 tag=tag,
-                text=text,
             )
             for scenario in feature_detail.scenarios
         )
@@ -422,11 +425,11 @@ class JobService:
         results = self._results.bind(self._jobs_dir())
         job_id = job_id or self._new_job_id()
         write_targets = results.write_targets(job_id)
-        command = self._framework.invocation(
+        invocation = self._framework.invocation(
             resolved_repo_root,
             Unit(feature, scenario, release, machine_type),
             write_targets.json_report,
-        ).command
+        )
         if record is not None:
             record()
         try:
@@ -440,7 +443,8 @@ class JobService:
                     release=release,
                     machine_type=machine_type,
                     install_from=install_from,
-                    command=command,
+                    command=invocation.command,
+                    instances=invocation.instances,
                     repo_root=str(resolved_repo_root),
                     campaign_id=campaign_id,
                 ),
@@ -474,7 +478,7 @@ class JobService:
         queued = []
         for job_id in results.list_job_ids():
             flags = results.exists(job_id)
-            if flags.record or flags.exit:
+            if flags.record or flags.result:
                 continue
             request = results.read_request(job_id)
             if request is None or request.machine_type not in POOL_OF:
@@ -531,13 +535,9 @@ class JobService:
         except JobStartError as exc:
             # Nobody is waiting on a reconcile to raise to: the job ends
             # with the reason, rather than being retried forever.
-            results.write_exit(
+            results.write_result(
                 job_id,
-                JobExit(
-                    finished_at=self._now_utc(),
-                    ok=False,
-                    error=f"Could not start: {exc}",
-                ),
+                start_failure(self._now_utc(), f"Could not start: {exc}"),
             )
 
     def _check_unit(
@@ -573,19 +573,17 @@ class JobService:
         """Stop a queued or running job, from any process.
 
         A queued job is recorded as killed before it starts. A running
-        job's process passes the kill to tox and waits for it, so the job
-        ends and records its exit as killed. Either way it is interrupted.
+        job's process passes the kill to its command and waits for it, so the
+        job ends and records itself killed. Either way it is interrupted.
         """
         results = self._known(job_id)
         if self._state(job_id, results) == JobState.QUEUED:
             with self._reconcile_lock.hold():
                 if self._state(job_id, results) == JobState.QUEUED:
-                    results.write_exit(
+                    results.write_result(
                         job_id,
-                        JobExit(
-                            finished_at=self._now_utc(),
-                            killed=True,
-                            error="killed before it started",
+                        killed_result(
+                            self._now_utc(), reason="killed before it started"
                         ),
                     )
                     return KillJobResponse(
@@ -744,7 +742,7 @@ class JobService:
                 if results.exists(job_id).record
                 else None
             ),
-            exit=results.read_exit(job_id),
+            result=results.read_result(job_id),
             exists=results.exists(job_id),
         )
 
@@ -840,42 +838,36 @@ class JobService:
         )
 
     def _job_result(
-        self, job_id: str, summary: JobListing, results: JobResultStore
-    ) -> JobResult:
-        report = None
-        if summary.state == JobState.FINISHED:
-            report_data = results.read_report(job_id)
-            if report_data is not None:
-                report = self._framework.summarize_report(report_data)
-        return JobResult(
+        self, job_id: str, listing: JobListing, results: JobResultStore
+    ) -> JobSummary:
+        result = (
+            results.read_result(job_id)
+            if listing.state == JobState.FINISHED
+            else None
+        )
+        return JobSummary(
             job_id=job_id,
-            state=summary.state,
-            ok=summary.ok,
-            feature=summary.feature,
-            scenario=summary.scenario,
-            release=summary.release,
-            machine_type=summary.machine_type,
-            summary=None if report is None else report.summary,
-            failures=[] if report is None else report.failures,
+            state=listing.state,
+            feature=listing.feature,
+            scenario=listing.scenario,
+            release=listing.release,
+            machine_type=listing.machine_type,
+            **_result_fields(result),
         )
 
     def _job_listing(self, job_id: str, results: JobResultStore) -> JobListing:
         request = results.read_request(job_id) or JobRequest()
         record = results.read_record(job_id)
-        exit = results.read_exit(job_id)
-        state = self._state(job_id, results, exit)
+        result = results.read_result(job_id)
+        state = self._state(job_id, results, result)
         return JobListing(
             job_id=job_id,
             state=state,
-            reason=(
-                interruption(exit) if state == JobState.INTERRUPTED else None
+            interruption=(
+                interruption(result) if state == JobState.INTERRUPTED else None
             ),
-            ok=(
-                exit.ok
-                if exit is not None
-                else (False if state == JobState.INTERRUPTED else None)
-            ),
-            returncode=exit.returncode if exit is not None else None,
+            outcome=result.outcome if result is not None else None,
+            returncode=result.returncode if result is not None else None,
             feature=request.feature,
             scenario=request.scenario,
             release=request.release,
@@ -883,14 +875,14 @@ class JobService:
             campaign_id=request.campaign_id,
             queued_at=request.queued_at,
             started_at=record.started_at,
-            finished_at=exit.finished_at if exit is not None else None,
+            finished_at=result.finished_at if result is not None else None,
             artifacts=results.artifacts(job_id),
         )
 
     def _status_payload(self, job_id: str) -> JobStatusResult:
         results = self._known(job_id)
-        exit = results.read_exit(job_id)
-        state = self._state(job_id, results, exit)
+        result = results.read_result(job_id)
+        state = self._state(job_id, results, result)
         artifacts = results.artifacts(job_id)
 
         if state == JobState.QUEUED:
@@ -910,43 +902,38 @@ class JobService:
             )
 
         request = results.read_request(job_id) or JobRequest()
-        if state == JobState.INTERRUPTED or exit is None:
-            return InterruptedResponse(
-                job_id=job_id,
-                reason=interruption(exit),
-                artifacts=artifacts,
-                recent_output=results.log_tail(
-                    job_id, DEFAULT_RUNNING_TAIL_LINES
-                ),
-                feature=request.feature,
-                scenario=request.scenario,
-                release=request.release,
-                machine_type=request.machine_type,
-            )
-
-        report_data = results.read_report(job_id)
-        report = (
-            self._framework.summarize_report(report_data)
-            if report_data is not None
-            else None
-        )
-        return FinishedResponse(
-            ok=exit.ok,
-            job_id=job_id,
-            returncode=exit.returncode,
-            error=exit.error,
-            artifacts=artifacts,
-            summary=None if report is None else report.summary,
-            failures=[] if report is None else report.failures,
-            recent_output=(
-                results.log_tail(job_id, DEFAULT_RUNNING_TAIL_LINES)
-                if report is None
-                else None
-            ),
+        unit: dict[str, Any] = dict(
             feature=request.feature,
             scenario=request.scenario,
             release=request.release,
             machine_type=request.machine_type,
+        )
+        if (
+            state == JobState.INTERRUPTED
+            or result is None
+            or result.outcome is None
+        ):
+            return InterruptedResponse(
+                job_id=job_id,
+                interruption=interruption(result),
+                artifacts=artifacts,
+                recent_output=results.log_tail(
+                    job_id, DEFAULT_RUNNING_TAIL_LINES
+                ),
+                **unit,
+            )
+
+        return FinishedResponse(
+            job_id=job_id,
+            returncode=result.returncode,
+            artifacts=artifacts,
+            recent_output=(
+                results.log_tail(job_id, DEFAULT_RUNNING_TAIL_LINES)
+                if result.outcome == Outcome.ERROR
+                else None
+            ),
+            **unit,
+            **_result_fields(result),
         )
 
     def _known(self, job_id: str) -> JobResultStore:
@@ -960,16 +947,18 @@ class JobService:
         self,
         job_id: str,
         results: JobResultStore,
-        exit: JobExit | None = None,
+        result: JobResult | None = None,
     ) -> JobState:
-        if exit is None:
-            exit = results.read_exit(job_id)
+        if result is None:
+            result = results.read_result(job_id)
         launched = results.exists(job_id).record
         return job_state(
-            exit=exit,
+            result=result,
             launched=launched,
             lock_held=(
-                exit is None and launched and self._launcher.is_running(job_id)
+                result is None
+                and launched
+                and self._launcher.is_running(job_id)
             ),
         )
 

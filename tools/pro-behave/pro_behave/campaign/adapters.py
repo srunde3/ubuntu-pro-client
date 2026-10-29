@@ -409,7 +409,11 @@ class ServiceJobRunner:
         except self._unknown_job:
             # Recorded but never queued: the reconcile that would have
             # queued it died between the two.
-            return {"state": "interrupted", "reason": "died", "job_id": job_id}
+            return {
+                "state": "interrupted",
+                "interruption": "died",
+                "job_id": job_id,
+            }
         return dict(status.model_dump(mode="json"))
 
     def kill(self, job_id: str) -> bool:

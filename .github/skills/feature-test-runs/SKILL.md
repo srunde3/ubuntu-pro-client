@@ -29,16 +29,17 @@ Never read a whole log, through `job_logs` or from the path
 `job_artifacts` gives. A job's log is 150-3,000 lines and the
 cause is rarely in the tail.
 
-1. If a failing step has a non-empty `error_message`, judge from it.
-2. Otherwise -- `status: error`, an empty message, a unit that errored --
+1. Read `outcome` and `reason`. If a failing step has a non-empty
+   `error_message`, judge from it.
+2. Otherwise -- `outcome: error`, an empty message --
    `job_errors`. `finished: false` means behave never reached its
    summary: tox or pip failed, or the job was killed, so read `tail`.
 3. Only if a region's capped text is not enough, `job_logs` around
    its `first_line`.
 
-A job with `state: interrupted` did not fail. With `reason: killed`, someone
-killed it; with `reason: died`, its process died before it could record an
-exit -- a crash, a hard kill or a reboot. Nothing it did counts; start it
+A job with `state: interrupted` did not fail. With `interruption: killed`,
+someone killed it; with `interruption: died`, its process died before it
+could record a result -- a crash, a hard kill or a reboot. Nothing it did counts; start it
 again.
 
 Then say which class below it is and why.

@@ -33,49 +33,14 @@ INTERRUPTIONS = (KILLED, DIED)
 
 
 def _completed_outcome(result: dict[str, Any]) -> Outcome:
-    summary = result.get("summary")
-    if summary is None:
-        return Outcome.ERROR
-    if not isinstance(summary, dict):
-        raise CampaignError("job result 'summary' must be an object or null")
-
-    raw_counts = summary.get("scenarios")
-    if not isinstance(raw_counts, dict) or not raw_counts:
-        raise CampaignError("job result reports no scenario counts")
-
-    counts: dict[str, int] = {}
-    for name, value in raw_counts.items():
-        if isinstance(value, bool) or not isinstance(value, int):
-            raise CampaignError(
-                "scenario count '{}' must be an integer".format(name)
-            )
-        counts[name] = value
-
-    passed = counts.get("passed", 0)
-    failed = counts.get("failed", 0)
-    skipped = counts.get("skipped", 0)
-    other = {
-        name: count
-        for name, count in counts.items()
-        if count and name not in ("passed", "failed", "skipped", "total")
-    }
-
-    if not other:
-        if failed:
-            return Outcome.FAILED
-        if passed:
-            if result.get("ok") is False:
-                raise CampaignError(
-                    "the job reports ok=false but every scenario passed"
-                )
-            return Outcome.PASSED
-        if skipped and not passed:
-            return Outcome.SKIPPED
-
-    raise CampaignError(
-        "cannot classify scenario counts {}; record an explicit "
-        "outcome".format(counts)
-    )
+    """The outcome the finished job decided for its unit."""
+    outcome = result.get("outcome")
+    try:
+        return Outcome(outcome)
+    except ValueError:
+        raise CampaignError(
+            "the finished job reports no known outcome: {!r}".format(outcome)
+        ) from None
 
 
 def finished_from_mcp(unit: Unit, result: Any) -> FinishedRecord:
@@ -115,7 +80,7 @@ def classify_result(
     ``reason``: a scheduler has nobody to raise at.
     """
     if isinstance(result, dict) and result.get("state") == JOB_INTERRUPTED:
-        reason = result.get("reason")
+        reason = result.get("interruption")
         return InterruptedRecord(
             unit=unit,
             job_id=str(result.get("job_id", "")),
@@ -141,6 +106,7 @@ def classify_result(
         job_id=finished.job_id,
         outcome=finished.outcome,
         at=at,
+        reason=str(result.get("reason") or ""),
         failures=(
             tuple(Failure(**raw) for raw in failure_details(result))
             if finished.outcome == Outcome.FAILED

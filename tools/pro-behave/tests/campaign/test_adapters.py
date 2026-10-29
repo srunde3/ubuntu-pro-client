@@ -640,14 +640,20 @@ class TestServiceJobRunner:
 
         result = runner.poll(job_id)
 
-        assert (result["state"], result["reason"]) == ("interrupted", "died")
+        assert (result["state"], result["interruption"]) == (
+            "interrupted",
+            "died",
+        )
 
     def test_a_job_never_queued_reads_as_died(self, tmp_path):
         runner, _ = self.job_runner(tmp_path, FakeJobLauncher(tmp_path))
 
         result = runner.poll("never-queued")
 
-        assert (result["state"], result["reason"]) == ("interrupted", "died")
+        assert (result["state"], result["interruption"]) == (
+            "interrupted",
+            "died",
+        )
 
     def test_a_running_job_is_killed(self, tmp_path):
         launcher = FakeJobLauncher(tmp_path)

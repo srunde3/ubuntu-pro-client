@@ -60,17 +60,13 @@ def attempt(unit, outcome, job_id="job1"):
     return FinishedRecord(unit=unit, job_id=job_id, outcome=outcome, at=AT)
 
 
-def completed(
-    passed=1, failed=0, skipped=0, unknown=0, ok=True, job_id="job1"
-):
-    scenarios = {"passed": passed, "failed": failed, "skipped": skipped}
-    if unknown:
-        scenarios["unknown"] = unknown
+def completed(outcome="passed", job_id="job1"):
     return {
         "state": "finished",
-        "ok": ok,
         "job_id": job_id,
-        "summary": {"scenarios": scenarios, "features": {}},
+        "outcome": outcome,
+        "reason": "",
+        "failures": [],
     }
 
 
@@ -274,7 +270,7 @@ class TestPlanTick:
             InFlightJob(
                 unit=UNIT_A,
                 job_id="job1",
-                result=completed(passed=1, unknown=1),
+                result=completed(outcome="bogus"),
             )
         ]
 
@@ -353,7 +349,9 @@ class TestSchedulerNeverRetries:
             attempt(UNIT_A, "running"),
         ]
         jobs = [
-            InFlightJob(unit=UNIT_A, job_id="job1", result=completed(passed=0))
+            InFlightJob(
+                unit=UNIT_A, job_id="job1", result=completed(outcome="error")
+            )
         ]
 
         decided = plan_campaign(

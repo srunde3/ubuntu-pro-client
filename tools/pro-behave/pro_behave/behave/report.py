@@ -1,194 +1,134 @@
-"""Reading a behave JSON report: statuses, counts and failing steps."""
+"""Reading a behave job: each run its JSON report shows, and its log's
+skip reasons and hook errors."""
 
-from enum import Enum
-from typing import Any
+import json
+import re
+from collections import defaultdict, deque
+from pathlib import Path
+from typing import Any, Sequence
 
-from pro_behave.jobs.messages import Failure, ReportSummary, ScenarioStatus
+from pro_behave.behave.logs import digest_log
+from pro_behave.jobs.domain.results import ObservedInstance
+from pro_behave.jobs.messages import Failure, InstanceStatus
 
-
-class BehaveStepStatus(str, Enum):
-    """A step ``result.status`` value we recognize in a behave report."""
-
-    PASSED = "passed"
-    FAILED = "failed"
-    SKIPPED = "skipped"
-    ERROR = "error"
-    UNDEFINED = "undefined"
-
-
-class BehaveScenarioStatus(str, Enum):
-    """A scenario ``status`` value we recognize in a behave report."""
-
-    PASSED = "passed"
-    FAILED = "failed"
-    ERROR = "error"
-    HOOK_ERROR = "hook_error"
-    CLEANUP_ERROR = "cleanup_error"
-    UNDEFINED = "undefined"
-    SKIPPED = "skipped"
-
-
-_FAILING_STEP_STATUSES = frozenset(
-    {
-        BehaveStepStatus.FAILED,
-        BehaveStepStatus.ERROR,
-        BehaveStepStatus.UNDEFINED,
-    }
-)
-
-
-_SCENARIO_STATUS_MAP = {
-    BehaveScenarioStatus.PASSED: ScenarioStatus.PASSED,
-    BehaveScenarioStatus.FAILED: ScenarioStatus.FAILED,
-    BehaveScenarioStatus.ERROR: ScenarioStatus.FAILED,
-    BehaveScenarioStatus.HOOK_ERROR: ScenarioStatus.FAILED,
-    BehaveScenarioStatus.CLEANUP_ERROR: ScenarioStatus.FAILED,
-    BehaveScenarioStatus.UNDEFINED: ScenarioStatus.FAILED,
-    BehaveScenarioStatus.SKIPPED: ScenarioStatus.SKIPPED,
+# behave's scenario statuses: a failing step is a failure of the product;
+# anything else that is not a pass or a skip means the test machinery broke.
+STATUS_OF = {
+    "passed": InstanceStatus.PASSED,
+    "failed": InstanceStatus.FAILED,
+    "error": InstanceStatus.FAILED,
+    "skipped": InstanceStatus.SKIPPED,
 }
 
+# The step statuses a failing step reports.
+FAILING_STEP_STATUSES = frozenset({"failed", "error", "undefined"})
 
-def _behave_step_status(value: Any) -> BehaveStepStatus | None:
-    """Parse a raw step status into a recognized member, else None."""
+MAX_ERROR_MESSAGE_CHARS = 2000
+
+# behave logs why it skipped each run: "SKIP Scenario <name>: <reason>".
+_SKIP_LINE = re.compile(r"SKIP Scenario (?P<rest>.*)$")
+
+
+def read_report(path: Path) -> list[Any] | None:
+    """behave's JSON report, or None if it is missing or unreadable."""
     try:
-        return BehaveStepStatus(value)
-    except ValueError:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
         return None
+    return data if isinstance(data, list) else None
 
 
-def _behave_scenario_status(value: Any) -> BehaveScenarioStatus | None:
-    """Parse a raw scenario status into a recognized member, else None."""
+def read_log(path: Path) -> list[str]:
     try:
-        return BehaveScenarioStatus(value)
-    except ValueError:
-        return None
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    return text.rstrip("\n").split("\n") if text else []
 
 
-def scenario_status_from_steps(steps: list[dict[str, Any]]) -> ScenarioStatus:
-    statuses = {
-        _behave_step_status(step.get("result", {}).get("status"))
-        for step in steps
-    }
-    if statuses & _FAILING_STEP_STATUSES:
-        return ScenarioStatus.FAILED
-    if statuses == {BehaveStepStatus.SKIPPED}:
-        return ScenarioStatus.SKIPPED
-    if BehaveStepStatus.PASSED in statuses:
-        return ScenarioStatus.PASSED
-    return ScenarioStatus.UNKNOWN
+def _skip_reasons(
+    log: Sequence[str], names: Sequence[str]
+) -> dict[str, deque[str]]:
+    """Each run's skip reasons, in the order behave logged them."""
+    reasons: dict[str, deque[str]] = defaultdict(deque)
+    known = sorted(set(names), key=len, reverse=True)
+    for line in log:
+        match = _SKIP_LINE.search(line)
+        if not match:
+            continue
+        rest = match.group("rest")
+        for name in known:
+            if rest.startswith(name + ": "):
+                reasons[name].append(rest[len(name) + 2 :])
+                break
+    return reasons
 
 
-def scenario_status_from_element(scenario: dict[str, Any]) -> ScenarioStatus:
-    """Classify a report scenario element into passed/failed/skipped/unknown.
-
-    Prefers behave's own scenario-level ``status`` -- the JSON report
-    already carries it (it's ``scenario.status.name`` from behave's model,
-    the same authoritative value the JUnit reporter's ``testcase.@status``
-    would give), so there's no need to infer it. Falls back to
-    ``scenario_status_from_steps`` only when that key is absent (e.g.
-    hand-built fixtures): a skipped scenario has no executed steps to
-    infer a status from, so step-based inference alone always mis-buckets
-    it as "unknown" instead of "skipped".
-    """
-    behave_status = _behave_scenario_status(scenario.get("status"))
-    if behave_status is not None:
-        return _SCENARIO_STATUS_MAP[behave_status]
-
-    steps = scenario.get("steps", [])
-    if not isinstance(steps, list):
-        steps = []
-    return scenario_status_from_steps(steps)
-
-
-def summarize_report(report_data: list[Any]) -> ReportSummary:
-    summary = {
-        "features": {
-            "total": 0,
-            "passed": 0,
-            "failed": 0,
-            "skipped": 0,
-            "unknown": 0,
-        },
-        "scenarios": {
-            "total": 0,
-            "passed": 0,
-            "failed": 0,
-            "skipped": 0,
-            "unknown": 0,
-        },
-        "steps": {
-            "total": 0,
-            "passed": 0,
-            "failed": 0,
-            "skipped": 0,
-            "error": 0,
-            "undefined": 0,
-            "unknown": 0,
-        },
-    }
-    failures: list[Failure] = []
-
-    for feature in report_data:
-        scenarios = feature.get("elements", [])
-        if not isinstance(scenarios, list):
-            scenarios = []
-
-        summary["features"]["total"] += 1
-        scenario_statuses: list[ScenarioStatus] = []
-
-        for scenario in scenarios:
-            scenario_name = str(scenario.get("name", "unknown-scenario"))
-            steps = scenario.get("steps", [])
-            if not isinstance(steps, list):
-                steps = []
-
-            scenario_status = scenario_status_from_element(scenario)
-            scenario_statuses.append(scenario_status)
-            summary["scenarios"]["total"] += 1
-            summary["scenarios"][scenario_status] = (
-                summary["scenarios"].get(scenario_status, 0) + 1
-            )
-
-            for step in steps:
-                step_name = str(step.get("name", "unknown-step"))
-                result = step.get("result", {})
-                step_status = str(result.get("status", "unknown"))
-
-                summary["steps"]["total"] += 1
-                summary["steps"][step_status] = (
-                    summary["steps"].get(step_status, 0) + 1
+def _failures(instance: str, element: dict[str, Any]) -> list[Failure]:
+    failures = []
+    for step in element.get("steps") or []:
+        result = step.get("result") or {}
+        status = str(result.get("status", ""))
+        if status in FAILING_STEP_STATUSES:
+            failures.append(
+                Failure(
+                    instance=instance,
+                    step=str(step.get("name", "")),
+                    status=status,
+                    error_message=str(result.get("error_message", ""))[
+                        :MAX_ERROR_MESSAGE_CHARS
+                    ].strip(),
                 )
+            )
+    return failures
 
-                if _behave_step_status(step_status) in _FAILING_STEP_STATUSES:
-                    error_message = str(
-                        result.get("error_message", "")
-                    ).strip()
-                    failures.append(
-                        Failure(
-                            scenario=scenario_name,
-                            step=step_name,
-                            status=step_status,
-                            error_message=error_message[:2000],
-                        )
-                    )
 
-        if any(
-            status == ScenarioStatus.FAILED for status in scenario_statuses
-        ):
-            feature_status = ScenarioStatus.FAILED
-        elif scenario_statuses and all(
-            status == ScenarioStatus.SKIPPED for status in scenario_statuses
-        ):
-            feature_status = ScenarioStatus.SKIPPED
-        elif any(
-            status == ScenarioStatus.PASSED for status in scenario_statuses
-        ):
-            feature_status = ScenarioStatus.PASSED
-        else:
-            feature_status = ScenarioStatus.UNKNOWN
+def observe(report: Path, log: Path) -> list[ObservedInstance] | None:
+    """Every run the report shows, as the tool's observations.
 
-        summary["features"][feature_status] = (
-            summary["features"].get(feature_status, 0) + 1
+    A run is identified by its location, ``<feature>:<line>``. A run whose
+    status says the test machinery broke takes its reason from the log's
+    first hook error, when it shows one.
+    """
+    data = read_report(report)
+    if data is None:
+        return None
+    elements = [
+        element
+        for feature in data
+        if isinstance(feature, dict)
+        for element in feature.get("elements") or []
+        if isinstance(element, dict) and element.get("type") == "scenario"
+    ]
+    lines = read_log(log)
+    skips = _skip_reasons(lines, [str(e.get("name", "")) for e in elements])
+    hook_errors = [
+        region.exception
+        for region in digest_log(lines).errors
+        if region.kind == "hook_error"
+    ]
+    observed = []
+    for element in elements:
+        name = str(element.get("name", ""))
+        id = str(element.get("location", "")).removeprefix("./")
+        raw = element.get("status")
+        status = STATUS_OF.get(str(raw), InstanceStatus.ERROR)
+        reason = ""
+        if status == InstanceStatus.SKIPPED and skips[name]:
+            reason = skips[name].popleft()
+        elif status == InstanceStatus.ERROR:
+            reason = (
+                hook_errors[0]
+                if hook_errors
+                else "behave status {}".format(raw)
+            )
+        observed.append(
+            ObservedInstance(
+                id=id,
+                name=name,
+                status=status,
+                reason=reason,
+                failures=tuple(_failures(id, element)),
+            )
         )
-
-    return ReportSummary(summary=summary, failures=failures)
+    return observed

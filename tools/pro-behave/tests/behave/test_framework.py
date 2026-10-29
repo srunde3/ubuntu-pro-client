@@ -3,6 +3,8 @@
 from pro_behave.behave import parser
 from pro_behave.behave.framework import BehaveFramework, to_feature
 from pro_behave.jobs.domain import catalog
+from pro_behave.jobs.domain.jobs import Unit
+from pro_behave.jobs.messages import Instance
 
 SAMPLE_FEATURE = """\
 @uses.config.contract_token
@@ -83,3 +85,32 @@ def test_every_field_of_a_parsed_feature_reaches_the_catalog():
             )
         ],
     )
+
+
+def test_the_invocation_names_the_unit_s_own_instances(tmp_path):
+    (tmp_path / "features").mkdir()
+    (tmp_path / "features" / "sample.feature").write_text(SAMPLE_FEATURE)
+    unit = Unit(
+        "./features/sample.feature",
+        "Attach on a machine",
+        "jammy",
+        "lxd-container",
+    )
+
+    invocation = BehaveFramework().invocation(
+        tmp_path, unit, tmp_path / "report.json"
+    )
+
+    assert invocation.instances == [
+        Instance(
+            id="features/sample.feature:10",
+            name="Attach on a machine -- @1.1 ubuntu release",
+        )
+    ]
+    assert invocation.command[:5] == [
+        "tox",
+        "-e",
+        "behave",
+        "--",
+        "./features/sample.feature",
+    ]

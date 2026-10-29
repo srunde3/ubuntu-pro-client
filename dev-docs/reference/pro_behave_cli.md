@@ -102,11 +102,11 @@ max jobs and busy lanes.
 
 ## job results
 
-What came of each job: its state, `ok`, behave's counts and the failing
-steps.
+What came of each job: its state and, once it finished, its result: the
+outcome, the reason, each of the unit's instances and the failing steps.
 
 * `--job-id ID`: Only this job. Repeatable.
-* `--feature PATH`, `--scenario TEXT` (a substring), `--release NAME`,
+* `--feature PATH`, `--scenario NAME` (an exact name), `--release NAME`,
   `--machine-type NAME`, `--state STATE`: Filters.
 * `--limit N`: Defaults to `20`.
 
@@ -121,7 +121,7 @@ Each takes a `JOB_ID`.
 * `job logs JOB_ID`: Part of the job's log, every line numbered. `--lines N`
   (default `100`), `--start N`, `--pattern REGEX` and `--context N` (default
   `3`).
-* `job artifacts JOB_ID`: The job's files, its request, record and exit.
+* `job artifacts JOB_ID`: The job's files, its request, record and result.
 * `job kill JOB_ID`: Kill a queued or running job. It ends interrupted,
   never as a failure.
 
@@ -129,8 +129,8 @@ Each takes a `JOB_ID`.
 
 The feature catalogue, read from the checkout's feature files.
 
-* `feature list`: Every feature file, with `--release`, `--machine-type`,
-  `--tag` and `--text` filters.
+* `feature list`: Every feature file, with `--release`, `--machine-type`
+  and `--tag` filters.
 * `feature describe FEATURE`: One feature's scenarios and the combos each
   covers.
 * `scenario find`: Scenarios across every feature, with the same filters
@@ -362,7 +362,7 @@ The bundle unpacks to one directory named after the campaign:
 | `SUMMARY.md` | Counts and scope, then every unit by feature, scenario and release: passed units, then the rest with their state and job id |
 | `export.json` | Scope, install source, max jobs, state, counts |
 | `units.csv` | One row per unit: `feature, scenario, release, machine_type, state, job_id, finished_at` |
-| `jobs/<job_id>/` | `job.json`, `exit.json`, `report.json`, `stdout.log` for every attempt, including superseded ones |
+| `jobs/<job_id>/` | `job.json`, `result.json`, `report.json`, `stdout.log` for every attempt, including superseded ones |
 | `audit/campaign.json` | The campaign's header and units, as stored |
 | `audit/records.jsonl` | The campaign's record log, as stored |
 

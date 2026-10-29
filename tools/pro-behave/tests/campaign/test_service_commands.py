@@ -288,7 +288,7 @@ class TestReconcile:
     ):
         create(store, lxd_max_jobs=1)
         campaigns.run(campaign_id=CAMPAIGN)
-        jobs.finish("job1", passed=0, failed=1)
+        jobs.finish("job1", outcome="failed")
 
         campaigns.reconcile()
 
@@ -301,7 +301,7 @@ class TestReconcile:
     ):
         create(store, units=[UNITS[0]], lxd_max_jobs=1)
         campaigns.run(campaign_id=CAMPAIGN)
-        jobs.finish("job1", passed=0, failed=1)
+        jobs.finish("job1", outcome="failed")
         campaigns.reconcile()
 
         campaigns.reconcile()
@@ -433,7 +433,7 @@ class TestReconcile:
         )
         assert state(store) == CampaignState.FINISHING
 
-        jobs.finish("job2", passed=0, failed=1)
+        jobs.finish("job2", outcome="failed")
         campaigns.reconcile()
 
         assert len(records_of(store, FinishedRecord)) == 2
@@ -786,8 +786,7 @@ class TestEvents:
         campaigns.run(campaign_id=CAMPAIGN)
         jobs.finish(
             "job1",
-            passed=0,
-            failed=1,
+            outcome="failed",
             failures=[
                 {
                     "step": "Then it works",
@@ -831,7 +830,7 @@ class TestRetryUnits:
     def failed_once(campaigns, store, jobs, units=None):
         create(store, units=units or [UNITS[0]], lxd_max_jobs=1)
         campaigns.run(campaign_id=CAMPAIGN)
-        jobs.finish("job1", passed=0, failed=1)
+        jobs.finish("job1", outcome="failed")
         campaigns.reconcile()
 
     def test_retrying_a_complete_campaign_runs_it_again(
@@ -885,9 +884,9 @@ class TestRetryUnits:
     def test_it_defaults_to_the_problem_states(self, campaigns, store, jobs):
         create(store, lxd_max_jobs=3)
         campaigns.run(campaign_id=CAMPAIGN)
-        jobs.finish("job1", passed=0, failed=1)
+        jobs.finish("job1", outcome="failed")
         jobs.finish("job2")
-        jobs.finish("job3", passed=0, failed=1)
+        jobs.finish("job3", outcome="failed")
         campaigns.reconcile()
 
         response = campaigns.retry_units(campaign_id=CAMPAIGN)
@@ -914,7 +913,7 @@ class TestRetryUnits:
         create(store, lxd_max_jobs=3)
         campaigns.run(campaign_id=CAMPAIGN)
         for job in ("job1", "job2", "job3"):
-            jobs.finish(job, passed=0, failed=1)
+            jobs.finish(job, outcome="failed")
         campaigns.reconcile()
 
         response = campaigns.retry_units(
@@ -1040,7 +1039,7 @@ class TestSignals:
         create(store, units=units, lxd_max_jobs=3)
         campaigns.run(campaign_id=CAMPAIGN)
         for job in ("job1", "job2", "job3"):
-            jobs.finish(job, passed=0, failed=1)
+            jobs.finish(job, outcome="failed")
         campaigns.reconcile()
 
         reported = events.read(CAMPAIGN, kinds=["anomaly.*"])

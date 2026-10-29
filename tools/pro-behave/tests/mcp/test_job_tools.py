@@ -140,38 +140,9 @@ async def test_mcp_list_dimensions_returns_values(monkeypatch):
     assert payload["machine_types"]
 
 
-@pytest.mark.asyncio
-async def test_mcp_find_scenarios_matches_by_text(monkeypatch):
-    monkeypatch.setenv("UBUNTU_PRO_CLIENT_REPO", str(_REPO_ROOT))
-
-    async with create_connected_server_and_client_session(mcp) as client:
-        result = await client.call_tool("find_scenarios", {"text": "attach"})
-
-    payload = result_json(result)
-    assert payload["matches"]
-    assert all(
-        "attach" in match["scenario"].lower() for match in payload["matches"]
-    )
-
-
 # A scenario of the real features/cli/attach.feature with a jammy
 # lxd-container row.
 REAL_UNIT_SCENARIO = "Attach command with json output"
-
-
-PASSING_REPORT = [
-    {
-        "name": "attach feature",
-        "elements": [
-            {
-                "name": "attach scenario",
-                "steps": [
-                    {"name": "do attach", "result": {"status": "passed"}}
-                ],
-            }
-        ],
-    }
-]
 
 
 @pytest.mark.asyncio
@@ -180,12 +151,10 @@ async def test_mcp_run_job_wait_and_log_flow(monkeypatch, tmp_path):
     monkeypatch.setenv("PRO_BEHAVE_STATE_DIR", str(tmp_path))
 
     # Real wiring but for the launcher: each job ends as soon as it starts,
-    # with a log and a passing report, as a real job process would leave them.
+    # with a log and a passing result, as a real job process would leave them.
     launcher = FakeJobLauncher(
         tmp_path / "jobs",
-        finish_on_launch=dict(
-            log="line1\nline2\nline3\n", report=PASSING_REPORT
-        ),
+        finish_on_launch=dict(log="line1\nline2\nline3\n"),
     )
     monkeypatch.setattr(
         server_module,
@@ -225,8 +194,7 @@ async def test_mcp_run_job_wait_and_log_flow(monkeypatch, tmp_path):
         )
         completed_payload = result_json(completed_result)
         assert completed_payload["state"] == "finished"
-        assert completed_payload["ok"] is True
-        assert completed_payload["summary"]["steps"]["passed"] == 1
+        assert completed_payload["outcome"] == "passed"
         assert "artifacts" in completed_payload
 
         logs_result = await client.call_tool(
@@ -252,11 +220,10 @@ async def test_mcp_run_job_wait_and_log_flow(monkeypatch, tmp_path):
         assert results_payload["total"] == 1
         (result,) = results_payload["results"]
         assert result["job_id"] == job_id
-        assert result["ok"] is True
-        assert result["summary"]["steps"]["passed"] == 1
+        assert result["outcome"] == "passed"
         assert result["failures"] == []
-        # One shape for one job's outcome, however it is asked for.
-        for key in ("state", "ok", "summary", "failures", "release"):
+        # One result for one job, however it is asked for.
+        for key in ("state", "outcome", "instances", "failures", "release"):
             assert result[key] == completed_payload[key]
 
 

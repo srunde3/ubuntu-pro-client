@@ -1,4 +1,4 @@
-"""The process each behave job runs under.
+"""The process each job runs under.
 
 ``python -m pro_behave.job_process <job dir> [--lane-fd N] -- <command>``
 
@@ -6,16 +6,19 @@ The launcher hands this process the job's lane lock and its job lock, and
 then lets go of both, so they are held as long as this process runs the
 job. It runs the command (tox) as a child in its own process group, writes
 the child's output to the job's ``stdout.log``, and when the child exits
-writes the job's ``exit.json`` once, by rename. Then it lets go of the lane
-and reconciles, so the next queued job takes that lane at once, and exits.
+decides the unit's result from the job's files and writes ``result.json``
+once, by rename. Then it lets go of the lane and reconciles, so the next
+queued job takes that lane at once, and exits.
 
 Its own session keeps the server's death or signals from reaching it. The
 child gets a parent-death signal, so it cannot outlive this process. Taken
-together: a job lock that is free with no ``exit.json`` means exactly
+together: a job lock that is free with no ``result.json`` means exactly
 that the job died without finishing.
 
 SIGTERM is how a job is killed: it is passed to the child's process group,
-and this process keeps waiting, so pycloudlib can clean up what it made.
+and this process keeps waiting, so pycloudlib can clean up what it made. A
+SIGTERM after the child exits is ignored, so it cannot stop the result
+being written.
 """
 
 from __future__ import annotations
@@ -43,8 +46,18 @@ from pro_behave.jobs.adapters import (
     LocalWorkspace,
 )
 from pro_behave.jobs.domain import layout
-from pro_behave.jobs.messages import JobExit
+from pro_behave.jobs.domain.results import (
+    finished_result,
+    killed_result,
+    start_failure,
+    unreadable_result,
+)
+from pro_behave.jobs.messages import JobResult
+from pro_behave.jobs.ports import Framework
 from pro_behave.jobs.service import JobService
+
+# The test framework every job runs under.
+FRAMEWORK = BehaveFramework()
 
 # The module a job process runs as, for the launcher.
 ENTRY = "pro_behave.job_process"
@@ -69,15 +82,20 @@ def _die_with(parent: int) -> None:
 
 
 class JobProcess:
-    def __init__(self, job_dir: Path) -> None:
+    def __init__(self, job_dir: Path, framework: Framework) -> None:
         self._paths = layout.job_paths(job_dir.parent, job_dir.name)
         self._store = LocalJobResultStore(job_dir.parent)
         self._job_id = job_dir.name
+        self._framework = framework
         self._child: subprocess.Popen | None = None
         self.killed = False
+        # Set once the command has exited: a kill after that changes nothing.
+        self._ended = False
 
     def kill(self, signum: int, frame: FrameType | None) -> None:
         """Pass a kill on to the child's group, and keep waiting for it."""
+        if self._ended:
+            return
         self.killed = True
         if self._child is not None:
             try:
@@ -99,7 +117,11 @@ class JobProcess:
         try:
             with self._paths.stdout_log.open("w") as log:
                 if self.killed:
-                    self._record(None, error="killed before it started")
+                    self._write(
+                        killed_result(
+                            _now(), reason="killed before it started"
+                        )
+                    )
                     return
                 self._child = subprocess.Popen(
                     list(command),
@@ -113,21 +135,33 @@ class JobProcess:
                     self.kill(signal.SIGTERM, None)
                 returncode = self._child.wait()
         except OSError as error:
-            self._record(None, error=str(error))
+            self._ended = True
+            self._write(start_failure(_now(), str(error)))
             return
-        self._record(returncode)
+        self._ended = True
+        self._write(self._result(returncode))
 
-    def _record(self, returncode: int | None, error: str = "") -> None:
-        self._store.write_exit(
-            self._job_id,
-            JobExit(
-                finished_at=_now(),
-                returncode=returncode,
-                ok=returncode == 0 and not self.killed,
-                killed=self.killed,
-                error=error,
-            ),
-        )
+    def _result(self, returncode: int) -> JobResult:
+        """The job's result, decided from its files. Nothing here can stop
+        the result being written: a failure becomes an ``error`` result."""
+        if self.killed:
+            return killed_result(_now(), returncode)
+        try:
+            request = self._store.read_request(self._job_id)
+            observed = self._framework.observe(
+                self._paths.json_report, self._paths.stdout_log
+            )
+            return finished_result(
+                _now(),
+                returncode,
+                request.instances if request is not None else [],
+                observed,
+            )
+        except Exception as error:
+            return unreadable_result(_now(), returncode, error)
+
+    def _write(self, result: JobResult) -> None:
+        self._store.write_result(self._job_id, result)
 
 
 USAGE = (
@@ -146,7 +180,7 @@ def main(argv: Sequence[str]) -> int:
         print(USAGE)
         return 2
     job_dir = Path(args[0])
-    job = JobProcess(job_dir)
+    job = JobProcess(job_dir, FRAMEWORK)
     signal.signal(signal.SIGTERM, job.kill)
     signal.signal(signal.SIGINT, job.kill)
     job.ready()
@@ -163,7 +197,7 @@ def _job_service(state_dir: Path) -> JobService:
     return JobService(
         workspace=workspace,
         config=FileConfigStore(workspace.resolve_state_dir),
-        framework=BehaveFramework(),
+        framework=FRAMEWORK,
         results=LocalJobResultStoreFactory(),
         lanes=FileLanePool(
             lambda: layout.lanes_dir(workspace.resolve_state_dir())

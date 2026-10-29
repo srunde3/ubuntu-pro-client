@@ -14,7 +14,14 @@ from pro_behave.jobs.domain.limits import (
     MAX_RESULTS_LIMIT,
 )
 from pro_behave.jobs.domain.pools import Pool
-from pro_behave.jobs.messages import JobRecord, JobRequest, JobState, RepoState
+from pro_behave.jobs.messages import (
+    Failure,
+    JobRecord,
+    JobRequest,
+    JobState,
+    Outcome,
+    RepoState,
+)
 from pro_behave.jobs.ports import JobStartError
 from pro_behave.jobs.service import (
     JobService,
@@ -671,7 +678,10 @@ def test_a_launch_that_fails_ends_the_job_with_the_reason(tmp_path):
 
     assert result["state"] == "finished"
     status = service.job_status(JOB_ID)
-    assert (status.ok, status.error) == (False, "Could not start: boom")
+    assert (status.outcome, status.reason) == (
+        Outcome.ERROR,
+        "Could not start: boom",
+    )
     assert lanes.busy(Pool.LXD) == 0
 
 
@@ -687,7 +697,7 @@ def test_a_queued_job_can_be_killed_and_never_starts(tmp_path):
 
     assert killed.killed is True
     status = service.job_status("j2")
-    assert (status.state, status.reason) == ("interrupted", "killed")
+    assert (status.state, status.interruption) == ("interrupted", "killed")
     assert [call["job_id"] for call in launcher.calls] == ["j1"]
 
 
@@ -794,19 +804,13 @@ def job_service(tmp_path, launcher, **kwargs):
     )
 
 
-PASSING_REPORT = [
-    {
-        "name": "attach feature",
-        "elements": [
-            {
-                "name": "attach scenario",
-                "steps": [
-                    {"name": "do attach", "result": {"status": "passed"}}
-                ],
-            }
-        ],
-    }
-]
+# A failing step of the unit's one instance.
+FAILURE = Failure(
+    instance="features/cli/attach.feature:10",
+    step="Then it works",
+    status="failed",
+    error_message="boom",
+)
 
 
 def arrange(tmp_path, state):
@@ -816,7 +820,7 @@ def arrange(tmp_path, state):
     if state == JobState.RUNNING:
         launcher.running.add(JOB_ID)
     elif state == JobState.FINISHED:
-        launcher.finish(JOB_ID, report=PASSING_REPORT)
+        launcher.finish(JOB_ID)
     job_file(tmp_path, JOB_ID, "stdout.log").write_text("line1\nline2\n")
     return launcher
 
@@ -825,8 +829,8 @@ def arrange(tmp_path, state):
 STATUS_OF = {
     JobState.QUEUED: ("queued", None),
     JobState.RUNNING: ("running", None),
-    JobState.FINISHED: ("finished", True),
-    JobState.INTERRUPTED: ("interrupted", False),
+    JobState.FINISHED: ("finished", Outcome.PASSED),
+    JobState.INTERRUPTED: ("interrupted", None),
 }
 
 
@@ -840,33 +844,39 @@ def test_job_status_reads_the_state_off_disk(tmp_path, state, expected):
 
     payload = service.job_status(JOB_ID)
 
-    assert (payload.state, getattr(payload, "ok", None)) == expected
+    assert (payload.state, getattr(payload, "outcome", None)) == expected
 
 
-def test_a_completed_job_reports_its_recorded_exit_and_report(tmp_path):
+def test_a_finished_job_reports_its_recorded_result(tmp_path):
     launched(tmp_path)
     launcher = FakeJobLauncher(tmp_path)
-    launcher.finish(JOB_ID, returncode=1, report=PASSING_REPORT)
+    launcher.finish(JOB_ID, Outcome.FAILED, returncode=1, failures=[FAILURE])
     service = job_service(tmp_path, launcher)
 
     payload = service.job_status(JOB_ID).model_dump(mode="json")
 
-    assert payload["ok"] is False
+    assert payload["outcome"] == "failed"
     assert payload["returncode"] == 1
-    assert payload["summary"]["steps"]["passed"] == 1
+    assert payload["failures"] == [FAILURE.model_dump(mode="json")]
     assert payload["recent_output"] is None
     assert payload["release"] == "jammy"
 
 
-def test_a_completed_job_without_a_report_shows_its_output(tmp_path):
+def test_a_job_that_established_nothing_shows_its_output(tmp_path):
     launched(tmp_path)
     launcher = FakeJobLauncher(tmp_path)
-    launcher.finish(JOB_ID, returncode=2, log="tox failed\n")
+    launcher.finish(
+        JOB_ID,
+        Outcome.ERROR,
+        returncode=2,
+        log="tox failed\n",
+        reason="the job left no readable report",
+    )
     service = job_service(tmp_path, launcher)
 
     payload = service.job_status(JOB_ID).model_dump(mode="json")
 
-    assert payload["summary"] is None
+    assert payload["reason"] == "the job left no readable report"
     assert "tox failed" in payload["recent_output"]
 
 
@@ -878,15 +888,15 @@ def test_a_killed_job_is_interrupted_whatever_tox_returned(tmp_path):
 
     status = service.job_status(JOB_ID)
 
-    assert (status.state, status.reason, status.ok) == (
+    assert (status.state, status.interruption, status.outcome) == (
         "interrupted",
         "killed",
-        False,
+        None,
     )
 
 
-def test_reading_a_job_never_writes_its_exit(tmp_path):
-    # The job process alone records an exit; the server only reads it.
+def test_reading_a_job_never_writes_its_result(tmp_path):
+    # The job process alone records a result; the server only reads it.
     launcher = arrange(tmp_path, JobState.RUNNING)
     service = job_service(tmp_path, launcher)
 
@@ -894,7 +904,7 @@ def test_reading_a_job_never_writes_its_exit(tmp_path):
     service.list_jobs()
     service.job_results()
 
-    assert not job_file(tmp_path, JOB_ID, "exit.json").exists()
+    assert not job_file(tmp_path, JOB_ID, "result.json").exists()
 
 
 def test_wait_for_completion_returns_once_the_job_ends(tmp_path):
@@ -902,15 +912,14 @@ def test_wait_for_completion_returns_once_the_job_ends(tmp_path):
     service = job_service(
         tmp_path,
         launcher,
-        sleep=lambda seconds: launcher.finish(JOB_ID, report=PASSING_REPORT),
+        sleep=lambda seconds: launcher.finish(JOB_ID),
     )
 
     result = service.wait_for_job(
         JOB_ID, max_wait_seconds=5, poll_interval_seconds=0.01
     )
 
-    assert result.state == "finished"
-    assert result.ok is True
+    assert (result.state, result.outcome) == ("finished", Outcome.PASSED)
 
 
 def test_wait_for_completion_returns_an_interrupted_job(tmp_path):
@@ -923,7 +932,7 @@ def test_wait_for_completion_returns_an_interrupted_job(tmp_path):
         JOB_ID, max_wait_seconds=5, poll_interval_seconds=0.01
     )
 
-    assert (result.state, result.reason) == ("interrupted", "died")
+    assert (result.state, result.interruption) == ("interrupted", "died")
     assert "line2" in result.recent_output
 
 
@@ -1100,10 +1109,11 @@ def test_get_errors_digests_the_log(tmp_path):
     assert result["log_path"] == str(log)
 
 
-def test_get_artifacts_reports_paths_record_and_exit(tmp_path):
+def test_get_artifacts_reports_paths_record_and_result(tmp_path):
     launched(tmp_path, feature="features/a.feature")
     launcher = FakeJobLauncher(tmp_path)
-    launcher.finish(JOB_ID, log="line\n", report=[])
+    launcher.finish(JOB_ID, log="line\n")
+    job_file(tmp_path, JOB_ID, "report.json").write_text("[]")
     service = job_service(tmp_path, launcher)
 
     result = service.job_artifacts(JOB_ID).model_dump(mode="json")
@@ -1111,12 +1121,12 @@ def test_get_artifacts_reports_paths_record_and_exit(tmp_path):
     assert result["exists"] == {
         "request": True,
         "record": True,
-        "exit": True,
+        "result": True,
         "stdout_log": True,
         "json_report": True,
     }
     assert result["record"]["feature"] == "features/a.feature"
-    assert result["exit"]["ok"] is True
+    assert result["result"]["outcome"] == "passed"
     assert result["artifacts"]["job_dir"] == str(tmp_path / JOB_ID)
 
 
@@ -1196,37 +1206,10 @@ def test_list_jobs_rejects_a_non_positive_limit(tmp_path):
 # ---- results ----
 
 
-TWO_SCENARIO_REPORT = [
-    {
-        "name": "Attach things",
-        "elements": [
-            {
-                "name": "Attach on a machine -- @1.1",
-                "location": "features/cli/attach.feature:10",
-                "steps": [{"name": "step1", "result": {"status": "passed"}}],
-            },
-            {
-                "name": "Attach on a machine -- @1.2",
-                "location": "features/cli/attach.feature:11",
-                "steps": [
-                    {
-                        "name": "step2",
-                        "result": {
-                            "status": "failed",
-                            "error_message": "boom",
-                        },
-                    }
-                ],
-            },
-        ],
-    }
-]
-
-
 def test_get_results_reports_one_result_per_job(tmp_path):
     launched(tmp_path, release="resolute", machine_type="lxd-vm")
     launcher = FakeJobLauncher(tmp_path)
-    launcher.finish(JOB_ID, report=TWO_SCENARIO_REPORT)
+    launcher.finish(JOB_ID, Outcome.FAILED, failures=[FAILURE])
     service = job_service(tmp_path, launcher)
 
     result = service.job_results(job_ids=[JOB_ID]).model_dump(mode="json")
@@ -1235,7 +1218,7 @@ def test_get_results_reports_one_result_per_job(tmp_path):
     assert result["total"] == 1
     assert job["state"] == "finished"
     assert (job["release"], job["machine_type"]) == ("resolute", "lxd-vm")
-    assert job["summary"]["scenarios"]["failed"] == 1
+    assert job["outcome"] == "failed"
     assert job["failures"][0]["error_message"] == "boom"
 
 

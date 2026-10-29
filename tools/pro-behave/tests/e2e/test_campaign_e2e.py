@@ -124,6 +124,8 @@ def test_a_campaign_runs_its_jobs_side_by_side(monkeypatch, tmp_path):
     states = {s.unit.release: s.state for s in statuses}
     assert set(states) == set(RELEASES)
     assert all(state in TERMINAL_STATES for state in states.values()), states
+    # Each real report was read and decided: none established nothing.
+    assert "error" not in states.values(), states
 
     # Each unit was attempted exactly once, and that attempt finished.
     for status in statuses:
@@ -137,13 +139,15 @@ def test_a_campaign_runs_its_jobs_side_by_side(monkeypatch, tmp_path):
     for status in statuses:
         artifacts = service.job_artifacts(status.job_id)
         assert artifacts.record.campaign_id == CAMPAIGN_ID
-        spans.append((artifacts.record.started_at, artifacts.exit.finished_at))
+        spans.append(
+            (artifacts.record.started_at, artifacts.result.finished_at)
+        )
     assert _most_at_once(spans) == LANES, spans
 
     # Every recorded job left artifacts behind to inspect.
     for status in statuses:
         job_dir = tmp_path / "state" / "jobs" / status.job_id
-        for name in ("job.json", "exit.json", "report.json", "stdout.log"):
+        for name in ("job.json", "result.json", "report.json", "stdout.log"):
             assert (job_dir / name).is_file(), job_dir / name
 
     # The stream a watching agent would have seen, from real jobs.
@@ -204,7 +208,7 @@ def test_pause_with_kill_stops_a_real_job_and_run_redoes_it(
         assert unit().attempts[-1].interrupted
         # The job's process group really went away.
         _wait_for(
-            lambda: service.job_artifacts(killed_job).exit is not None,
+            lambda: service.job_artifacts(killed_job).result is not None,
             CAMPAIGN_TIMEOUT_SECONDS,
             "the killed job to exit",
         )

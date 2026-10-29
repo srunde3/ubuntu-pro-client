@@ -6,9 +6,10 @@ from typing import Mapping
 
 from pro_behave.jobs.domain.pools import POOL_OF, Pool
 from pro_behave.jobs.messages import (
+    Instance,
     Interruption,
-    JobExit,
     JobRequest,
+    JobResult,
     JobState,
 )
 
@@ -25,9 +26,11 @@ class Unit:
 
 @dataclass(frozen=True)
 class Invocation:
-    """How a test framework runs one unit: the command a job holds."""
+    """How a test framework runs one unit: the command a job holds, and the
+    unit's own instances, which its result will count."""
 
     command: list[str] = field(default_factory=list)
+    instances: list[Instance] = field(default_factory=list)
 
 
 class InstallFrom(str, Enum):
@@ -82,19 +85,19 @@ def validate_install_from(install_from: str) -> str | None:
 
 
 def job_state(
-    *, exit: JobExit | None, launched: bool, lock_held: bool
+    *, result: JobResult | None, launched: bool, lock_held: bool
 ) -> JobState:
-    """A job's state from its exit, its launch record and its lock.
+    """A job's state from its result, its launch record and its lock.
 
     The job process holds the job lock for its whole life and writes the
-    exit before it lets go, so an exit decides: a killed job is
+    result before it lets go, so a result decides: a killed job is
     interrupted, any other has finished. Without one, a job never launched
     is queued; a launched one is running while its lock is held, and its
     process died if the lock is free. The launch takes the lock before it
     writes the launch record, so a launch in progress never reads as dead.
     """
-    if exit is not None:
-        return JobState.INTERRUPTED if exit.killed else JobState.FINISHED
+    if result is not None:
+        return JobState.INTERRUPTED if result.killed else JobState.FINISHED
     if not launched:
         return JobState.QUEUED
     if lock_held:
@@ -102,9 +105,9 @@ def job_state(
     return JobState.INTERRUPTED
 
 
-def interruption(exit: JobExit | None) -> Interruption:
+def interruption(result: JobResult | None) -> Interruption:
     """Why an interrupted job ended without a result."""
-    if exit is not None and exit.killed:
+    if result is not None and result.killed:
         return Interruption.KILLED
     return Interruption.DIED
 
@@ -127,9 +130,8 @@ def job_matches_result_filters(
         return False
     if feature is not None and record.feature != feature:
         return False
-    if scenario is not None:
-        if scenario.lower() not in record.scenario.lower():
-            return False
+    if scenario is not None and scenario != record.scenario:
+        return False
     if release is not None and release != record.release:
         return False
     if machine_type is not None and machine_type != record.machine_type:

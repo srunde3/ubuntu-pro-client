@@ -167,7 +167,6 @@ def scenario_matches(
     release: str | None = None,
     machine_type: str | None = None,
     tag: str | None = None,
-    text: str | None = None,
 ) -> bool:
     """Whether a scenario satisfies every filter given."""
     if (release is not None or machine_type is not None) and not (
@@ -175,8 +174,6 @@ def scenario_matches(
     ):
         return False
     if tag is not None and tag not in set(feature_tags) | set(scenario.tags):
-        return False
-    if text is not None and text.lower() not in scenario.name.lower():
         return False
     return True
 

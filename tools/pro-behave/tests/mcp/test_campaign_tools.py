@@ -541,8 +541,7 @@ async def test_a_timeout_beyond_the_server_limit_is_refused(repo, jobs):
 @pytest.mark.asyncio
 async def test_retry_units_requeues_a_failure(repo, jobs):
     failure = dict(
-        passed=0,
-        failed=1,
+        outcome="failed",
         failures=[
             {
                 "step": "Then it works",

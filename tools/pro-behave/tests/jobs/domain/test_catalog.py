@@ -73,7 +73,6 @@ def test_scenario_matches_filters():
         scenario, [], release="resolute", machine_type="lxd-container"
     )
     assert catalog.scenario_matches(scenario, [], tag="arm64")
-    assert catalog.scenario_matches(scenario, [], text="MACHINE")
 
 
 def test_aggregate_dimensions_counts_scenarios_once_per_value():

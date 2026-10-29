@@ -582,7 +582,7 @@ class TestExport:
             attempts.append(attempt(unit, "passed", job_id))
             for name in (
                 "job.json",
-                "exit.json",
+                "result.json",
                 "report.json",
                 "stdout.log",
             ):

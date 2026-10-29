@@ -7,7 +7,6 @@ inject fakes.
 
 from pathlib import Path
 from typing import (
-    Any,
     Callable,
     ContextManager,
     Mapping,
@@ -21,13 +20,13 @@ from pro_behave.jobs.domain.config import CheckoutConfig
 from pro_behave.jobs.domain.jobs import Invocation, Unit
 from pro_behave.jobs.domain.logs import LogDigest
 from pro_behave.jobs.domain.pools import Pool
+from pro_behave.jobs.domain.results import ObservedInstance
 from pro_behave.jobs.messages import (
     Artifacts,
     ExistsFlags,
-    JobExit,
     JobRecord,
     JobRequest,
-    ReportSummary,
+    JobResult,
     RepoState,
 )
 
@@ -129,7 +128,8 @@ class Framework(Protocol):
         self, repo_root: Path, unit: Unit, report: Path
     ) -> Invocation:
         """How to run ``unit`` in ``repo_root``, writing its report to
-        ``report``. Called once, when the job is queued."""
+        ``report``, and the unit's own instances. Called once, when the job
+        is queued."""
         ...
 
     def environment(
@@ -142,8 +142,11 @@ class Framework(Protocol):
         Called at launch, since the options hold secrets."""
         ...
 
-    def summarize_report(self, report: list[Any]) -> ReportSummary:
-        """Counts and failing steps from a job's report."""
+    def observe(
+        self, report: Path, log: Path
+    ) -> list[ObservedInstance] | None:
+        """Every instance a finished job's report shows, with its status,
+        failures and skip reason; None when there is no readable report."""
         ...
 
     def digest_log(self, lines: Sequence[str]) -> LogDigest:
@@ -185,13 +188,13 @@ class JobResultStore(Protocol):
         """Write the job's launch record, once."""
         ...
 
-    def read_exit(self, job_id: str) -> JobExit | None:
-        """Return how the job ended, or None if no exit is recorded."""
+    def read_result(self, job_id: str) -> JobResult | None:
+        """Return how the job ended, or None if no result is recorded."""
         ...
 
-    def write_exit(self, job_id: str, exit: JobExit) -> JobExit:
-        """Record how the job ended, unless an exit already is; return the
-        exit on disk, so the first writer wins."""
+    def write_result(self, job_id: str, result: JobResult) -> JobResult:
+        """Record how the job ended, unless a result already is; return the
+        result on disk, so the first writer wins."""
         ...
 
     def log_tail(self, job_id: str, lines: int) -> str:
@@ -200,10 +203,6 @@ class JobResultStore(Protocol):
 
     def read_log_lines(self, job_id: str) -> list[str]:
         """Return every line of the job's stdout; empty when there is none."""
-        ...
-
-    def read_report(self, job_id: str) -> list[Any] | None:
-        """Return the job's report, or None if missing or invalid."""
         ...
 
     def exists(self, job_id: str) -> ExistsFlags:

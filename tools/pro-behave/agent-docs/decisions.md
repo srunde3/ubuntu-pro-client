@@ -73,3 +73,15 @@ Step 1 of [designs/framework-seam.md](designs/framework-seam.md). Each decision 
 | DEC-31 | The port builds the command at queue time (`invocation`) and the environment at launch (`environment`), in separate methods. `Invocation` holds the command, and step 2 adds the unit's instances to it. | The command is stored in the request. The environment carries secrets, so it is never stored. | |
 | DEC-32 | The job process is a composition root at `pro_behave/job_process.py`. The launcher is given the module to run, and a contract keeps the job process out of `campaign` and the front-ends. | It must build the behave adapter, which `jobs` may not import, and DEC-09 must stay enforced. | |
 | DEC-33 | The campaign domain works on campaign-owned `CatalogScenario` values. Only campaign adapters read the catalog, from the framework the job service uses. | A campaign plans against the same catalog its jobs are validated against, and its domain imports nothing from the catalog. | |
+
+## Built: a job decides its result
+
+The job side of step 2. Each decision was reviewed by an independent agent before it was built.
+
+| ID | Decision | Why | Source |
+| --- | --- | --- | --- |
+| DEC-34 | An instance is identified by its location (`<feature>:<line>`) and recorded with its expected name in the request, at queue time. | Row names repeat across same-named outlines (105 units in the corpus); locations do not. The name check catches a feature edited before the job ran. | |
+| DEC-35 | The adapter observes, with a neutral status per run; the domain decides, with one set of rules for every framework. `failed` means a step failed; `error` means the test machinery broke. | The rules must not be copied into each adapter, and a broken hook says nothing about the product. | |
+| DEC-36 | The rules end in `error`, never in `passed`. A missing, duplicated or renamed instance is `error`, and so is a non-zero exit, named after the row that broke even when it is another combo's. | A result must never claim a pass it cannot show. Hooks run for skipped rows too, so their failures explain the exit. | |
+| DEC-37 | The job process takes a copy of `killed` when its command exits, ignores any later SIGTERM, and builds the result inside a guard whose fallback uses plain values only. Domain constructors build every result: finished, killed, could not start, unreadable. A validator keeps `killed` exactly when there is no outcome. | Keeps DEC-04: a finished job always has its result, and every writer produces one shape. | DEC-25 |
+| DEC-38 | Job responses carry `outcome`, `reason`, `instances` and `failures`; `ok`, the behave counts, `ScenarioStatus` and `text` search go. An interruption's cause is `interruption`, so `reason` means one thing. The response item is `JobSummary`; `JobResult` is the file. | Every reader gets the same result, and one field name has one type. | DEC-26 |

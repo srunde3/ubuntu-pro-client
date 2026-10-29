@@ -181,7 +181,6 @@ def _command_feature_list(args: argparse.Namespace) -> BaseModel:
         release=args.release,
         machine_type=args.machine_type,
         tag=args.tag,
-        text=args.text,
         repo_root=str(_repo_root(args)),
     )
 
@@ -197,7 +196,6 @@ def _command_scenario_find(args: argparse.Namespace) -> BaseModel:
         release=args.release,
         machine_type=args.machine_type,
         tag=args.tag,
-        text=args.text,
         repo_root=str(_repo_root(args)),
         limit=args.limit,
     )
@@ -592,7 +590,6 @@ def _add_catalogue_filters(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--release")
     parser.add_argument("--machine-type", dest="machine_type")
     parser.add_argument("--tag")
-    parser.add_argument("--text", help="a substring of the scenario name")
 
 
 def _add_wait(parser: argparse.ArgumentParser) -> None:
@@ -644,7 +641,7 @@ def _add_job_commands(subparsers: Any) -> None:
     )
     results.add_argument("--job-id", action="append", dest="job_id")
     results.add_argument("--feature")
-    results.add_argument("--scenario", help="a substring of the name")
+    results.add_argument("--scenario", help="a scenario's exact name")
     results.add_argument("--release")
     results.add_argument("--machine-type", dest="machine_type")
     results.add_argument("--state", choices=[s.value for s in JobState])

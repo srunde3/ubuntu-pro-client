@@ -12,7 +12,7 @@ import threading
 from collections import deque
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Callable, Iterator, TypeVar
+from typing import Callable, Iterator, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
@@ -26,9 +26,9 @@ from pro_behave.jobs.domain.pools import Pool
 from pro_behave.jobs.messages import (
     Artifacts,
     ExistsFlags,
-    JobExit,
     JobRecord,
     JobRequest,
+    JobResult,
     RepoState,
 )
 from pro_behave.jobs.ports import JobStartError, Lease, WriteTargets
@@ -292,7 +292,7 @@ class LocalJobResultStore:
             job_dir=str(paths.job_dir),
             request=str(paths.request),
             record=str(paths.record),
-            exit=str(paths.exit),
+            result=str(paths.result),
             stdout_log=str(paths.stdout_log),
             json_report=str(paths.json_report),
         )
@@ -315,19 +315,19 @@ class LocalJobResultStore:
             # A record that cannot be written must not stop the job.
             return
 
-    def read_exit(self, job_id: str) -> JobExit | None:
-        return _read_model(self._paths(job_id).exit, JobExit)
+    def read_result(self, job_id: str) -> JobResult | None:
+        return _read_model(self._paths(job_id).result, JobResult)
 
-    def write_exit(self, job_id: str, exit: JobExit) -> JobExit:
-        written = self.read_exit(job_id)
+    def write_result(self, job_id: str, result: JobResult) -> JobResult:
+        written = self.read_result(job_id)
         if written is not None:
             return written
         try:
-            _write_atomic(self._paths(job_id).exit, _json_text(exit))
+            _write_atomic(self._paths(job_id).result, _json_text(result))
         except OSError:
-            # The exit is still reported; it is recorded on a later look.
+            # The result is still reported; it is recorded on a later look.
             pass
-        return exit
+        return result
 
     def log_tail(self, job_id: str, lines: int) -> str:
         path = self._paths(job_id).stdout_log
@@ -345,27 +345,12 @@ class LocalJobResultStore:
         text = path.read_text(encoding="utf-8", errors="replace")
         return text.rstrip("\n").split("\n") if text else []
 
-    def read_report(self, job_id: str) -> list[Any] | None:
-        path = self._paths(job_id).json_report
-        if not path.exists():
-            return None
-
-        try:
-            report_data = json.loads(path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            return None
-
-        if not isinstance(report_data, list):
-            return None
-
-        return report_data
-
     def exists(self, job_id: str) -> ExistsFlags:
         paths = self._paths(job_id)
         return ExistsFlags(
             request=paths.request.exists(),
             record=paths.record.exists(),
-            exit=paths.exit.exists(),
+            result=paths.result.exists(),
             stdout_log=paths.stdout_log.exists(),
             json_report=paths.json_report.exists(),
         )

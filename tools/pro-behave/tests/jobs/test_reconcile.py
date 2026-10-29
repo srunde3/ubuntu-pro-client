@@ -66,7 +66,7 @@ def test_two_reconciles_at_once_start_a_queued_job_once(tmp_path):
         assert reconciler.wait(timeout=30) == 0
 
     store = LocalJobResultStore(tmp_path / "jobs")
-    assert _eventually(lambda: store.read_exit("job") is not None)
+    assert _eventually(lambda: store.read_result("job") is not None)
     assert starts.read_text().splitlines() == ["started"]
 
 
@@ -89,7 +89,7 @@ def test_a_job_that_ends_starts_the_next_queued_job_itself(tmp_path):
     # reconciles: the first job's process starts the second.
     assert _reconcile(tmp_path).wait(timeout=30) == 0
 
-    assert _eventually(lambda: store.read_exit("second") is not None)
+    assert _eventually(lambda: store.read_result("second") is not None)
     assert order.read_text().splitlines() == ["first", "second"]
 
 
@@ -111,5 +111,5 @@ def test_every_entry_point_starts_what_is_queued(tmp_path, entry_point):
 
     assert _reconcile(tmp_path, entry_point).wait(timeout=60) == 0
 
-    assert _eventually(lambda: store.read_exit("job") is not None)
+    assert _eventually(lambda: store.read_result("job") is not None)
     assert started.read_text().strip() == "started"

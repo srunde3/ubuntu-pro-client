@@ -64,6 +64,16 @@ class FeatureDetail:
     scenarios: List[ScenarioSummary]
 
 
+@dataclass
+class ScenarioInstance:
+    """One run behave makes of a scenario: an Examples row of an outline,
+    or a plain scenario itself. ``line`` is where it is in its feature
+    file, which behave reports as its location."""
+
+    line: int
+    name: str
+
+
 _CONFIG_TAG_PREFIX = "uses.config."
 _GIVEN_MACHINE_STEP_RE = re.compile(
     r"a `(.*)` `(.*)` machine with ubuntu-advantage-tools installed"
@@ -275,3 +285,50 @@ def _read_feature_detail(path: Path) -> Optional[FeatureDetail]:
     summary = summarize_feature(feature)
     _detail_cache[cache_key] = (mtime, summary)
     return summary
+
+
+def instances_of(
+    path: Path, scenario: str, release: str, machine_type: str
+) -> List[ScenarioInstance]:
+    """Each run behave makes of the scenarios named ``scenario`` in the
+    feature file at ``path`` on one ``(release, machine_type)``.
+
+    An outline runs once per Examples row on that combo, and behave names
+    each run after its row. A file that cannot be parsed has none.
+    """
+    try:
+        feature = parse_file(str(path))
+    except Exception:
+        return []
+    found: List[ScenarioInstance] = []
+    for candidate in getattr(feature, "scenarios", []) or []:
+        if getattr(candidate, "name", "") != scenario:
+            continue
+        step_release, step_machine_type = _step_machine_override(candidate)
+        examples = getattr(candidate, "examples", None) or []
+        if not examples:
+            if (step_release, step_machine_type) == (release, machine_type):
+                found.append(
+                    ScenarioInstance(line=candidate.line, name=candidate.name)
+                )
+            continue
+        names = {run.line: run.name for run in candidate.scenarios}
+        for example in examples:
+            table = getattr(example, "table", None)
+            if table is None:
+                continue
+            headings = list(table.headings)
+            for row in table.rows:
+                cells = dict(zip(headings, list(row.cells)))
+                combo = (
+                    step_release or cells.get("release"),
+                    step_machine_type or cells.get("machine_type"),
+                )
+                if combo == (release, machine_type):
+                    found.append(
+                        ScenarioInstance(
+                            line=row.line,
+                            name=names.get(row.line, candidate.name),
+                        )
+                    )
+    return found

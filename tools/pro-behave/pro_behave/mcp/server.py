@@ -195,13 +195,6 @@ MachineTypeFilter = Annotated[
 TagFilter = Annotated[
     str, Field(default="", description="Only keep scenarios with this tag.")
 ]
-TextFilter = Annotated[
-    str,
-    Field(
-        default="",
-        description="Only keep scenarios whose name contains this substring.",
-    ),
-]
 InstallFromArg = Annotated[
     InstallFrom,
     Field(
@@ -214,7 +207,6 @@ InstallFromArg = Annotated[
         ),
     ),
 ]
-
 
 CampaignIdArg = Annotated[
     str, Field(description="A campaign id from list_campaigns.")
@@ -317,7 +309,7 @@ async def healthcheck(request):
         "choose an allowed behave scenario. Returns a lightweight catalog "
         "entry per feature (path, title, scenario_count, requires_config, and "
         "the releases and machine_types it covers). Optional release, "
-        "machine_type, tag, and text filters keep only features with at least "
+        "machine_type and tag filters keep only features with at least "
         "one matching scenario. Use describe_feature for full per-scenario "
         "detail."
     )
@@ -326,14 +318,12 @@ def list_features(
     release: ReleaseFilter = "",
     machine_type: MachineTypeFilter = "",
     tag: TagFilter = "",
-    text: TextFilter = "",
     repo_root: RepoRoot = "",
 ) -> ListFeaturesResponse:
     return _service.list_features(
         release=release or None,
         machine_type=machine_type or None,
         tag=tag or None,
-        text=text or None,
         repo_root=repo_root,
     )
 
@@ -371,7 +361,7 @@ def list_dimensions(repo_root: RepoRoot = "") -> ListDimensionsResponse:
 @tool(
     description=(
         "Find scenarios across all features matching optional release, "
-        "machine_type, tag, and text (scenario-name substring) filters. "
+        "machine_type and tag filters. "
         "Returns matching feature, scenario, type, required config, "
         "and the combos that satisfy the release/machine_type filters. "
         "limit caps the matches, with total and truncated alongside; "
@@ -382,7 +372,6 @@ def find_scenarios(
     release: ReleaseFilter = "",
     machine_type: MachineTypeFilter = "",
     tag: TagFilter = "",
-    text: TextFilter = "",
     limit: Annotated[
         int,
         Field(
@@ -398,7 +387,6 @@ def find_scenarios(
         release=release or None,
         machine_type=machine_type or None,
         tag=tag or None,
-        text=text or None,
         repo_root=repo_root,
         limit=limit,
     )
@@ -488,11 +476,12 @@ def list_jobs(
 
 @tool(
     description=(
-        "What came of each behave job: what it ran, its state and ok, "
-        "behave's own counts, and every failing step with its message. "
+        "What came of each job: what it ran, its state, and once it "
+        "finished its outcome (passed, failed, skipped, error) with the "
+        "reason, each of the unit's instances, and every failing step. "
         "One result per job, most recently started first, the same shape "
         "wait_for_job returns for one job. Filter by "
-        "job_ids, feature, scenario (substring), release, "
+        "job_ids, feature, scenario (exact name), release, "
         "machine_type and state (queued, running, finished, interrupted); "
         "limit "
         "caps the jobs listed, with total and truncated alongside. For "
@@ -512,7 +501,7 @@ def job_results(
         str,
         Field(
             default="",
-            description="Only jobs whose scenario contains this.",
+            description="Only jobs for the scenario of this exact name.",
         ),
     ] = "",
     release: ReleaseFilter = "",
@@ -551,8 +540,9 @@ def job_results(
         "Wait for a queued or running behave job to end by polling "
         "internally. job_id must come from run_job or "
         "list_jobs. Returns state finished with a compact "
-        "structured summary; state interrupted with recent output when it "
-        "ended without a result, with reason killed or died (its process "
+        "result (outcome, reason, instances, failures); state interrupted "
+        "with recent output when it ended without a result, with "
+        "interruption killed or died (its process "
         "died: a crash or a reboot); or, if the wait runs out first, the "
         "job as it stands (queued or running) with timed_out true."
     )
@@ -1059,7 +1049,7 @@ def export_campaign(campaign_id: CampaignIdArg) -> ExportCampaignResponse:
         "Kill a queued or running behave job, whichever process started "
         "it. A queued job never starts. Use it for a running job that has "
         "hung: tox is stopped and allowed to clean up, "
-        "and the job ends interrupted with reason killed, never as a "
+        "and the job ends interrupted with interruption killed, never as a "
         "failure; a running campaign records its attempt as interrupted "
         "and queues the unit again. killed is false when there was nothing "
         "to stop."

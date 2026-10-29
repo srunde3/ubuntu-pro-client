@@ -69,11 +69,9 @@ async def test_mcp_e2e_long_running_attach_flow(monkeypatch):
 
         assert completed_payload is not None
         assert completed_payload["state"] == "finished"
-        assert isinstance(completed_payload.get("ok"), bool)
+        assert completed_payload["outcome"] in ("passed", "failed")
         assert "returncode" in completed_payload
-        assert completed_payload["summary"] is not None
-        assert completed_payload["summary"]["scenarios"]["total"] > 0
-        assert completed_payload["summary"]["steps"]["total"] > 0
+        assert completed_payload["instances"]
 
         jobs_after_completion = await client.call_tool("list_jobs", {})
         finished_jobs = {
@@ -81,7 +79,7 @@ async def test_mcp_e2e_long_running_attach_flow(monkeypatch):
             for job in result_json(jobs_after_completion)["jobs"]
         }
         assert finished_jobs[job_id]["state"] == "finished"
-        assert finished_jobs[job_id]["ok"] == completed_payload["ok"]
+        assert finished_jobs[job_id]["outcome"] == completed_payload["outcome"]
 
         logs_result = await client.call_tool(
             "job_logs", {"job_id": job_id, "lines": 50}
@@ -97,8 +95,11 @@ async def test_mcp_e2e_long_running_attach_flow(monkeypatch):
         assert artifacts_payload["exists"]["stdout_log"] is True
         assert artifacts_payload["exists"]["json_report"] is True
         assert artifacts_payload["exists"]["record"] is True
-        assert artifacts_payload["exists"]["exit"] is True
-        assert artifacts_payload["exit"]["ok"] == completed_payload["ok"]
+        assert artifacts_payload["exists"]["result"] is True
+        assert (
+            artifacts_payload["result"]["outcome"]
+            == completed_payload["outcome"]
+        )
         # repo_root here should be a real Pro client git checkout.
         repo = artifacts_payload["record"]["repo"]
         assert len(repo["commit"]) == 40
@@ -107,7 +108,7 @@ async def test_mcp_e2e_long_running_attach_flow(monkeypatch):
         assert artifacts_payload["record"]["config"] == {
             "contract_token": "<set>"
         }
-        assert finished_jobs[job_id]["ok"] == completed_payload["ok"]
+        assert finished_jobs[job_id]["outcome"] == completed_payload["outcome"]
 
         results = result_json(
             await client.call_tool("job_results", {"job_ids": [job_id]})
@@ -115,7 +116,7 @@ async def test_mcp_e2e_long_running_attach_flow(monkeypatch):
         (result,) = results["results"]
         assert result["job_id"] == job_id
         assert result["state"] == "finished"
-        assert result["summary"]["scenarios"]["total"] >= 1
+        assert result["outcome"] == completed_payload["outcome"]
         assert result["release"] == "noble"
 
         async def ids(**filters):

@@ -14,9 +14,13 @@ from pro_behave.jobs.adapters import (
     LocalJobResultStore,
     LocalJobResultStoreFactory,
 )
+from pro_behave.jobs.domain import layout
 from pro_behave.jobs.domain.config import CheckoutConfig
+from pro_behave.jobs.domain.jobs import Invocation
+from pro_behave.jobs.domain.logs import LogDigest
 from pro_behave.jobs.domain.pools import DEFAULT_MAX_JOBS
-from pro_behave.jobs.messages import JobExit, RepoState
+from pro_behave.jobs.domain.results import killed_result
+from pro_behave.jobs.messages import JobResult, Outcome, RepoState
 from pro_behave.jobs.service import JobService
 
 
@@ -124,8 +128,8 @@ class FakeLanePool:
 class FakeJobLauncher:
     """A ``JobLauncher`` whose jobs run until the test ends them.
 
-    ``finish`` writes the exit the way the job process does; ``crash`` ends a
-    job without one, as a job process killed outright would. With
+    ``finish`` writes the result the way the job process does; ``crash``
+    ends a job without one, as a job process killed outright would. With
     ``finish_on_launch`` (``finish`` keywords), each job ends at once.
     """
 
@@ -168,27 +172,42 @@ class FakeJobLauncher:
         self.killed.append(job_id)
         return job_id in self.running and job_id not in self._unkillable
 
-    def finish(self, job_id, returncode=0, killed=False, log="", report=None):
-        """End a job: its log, its report, then its exit, in that order."""
+    def finish(
+        self,
+        job_id,
+        outcome=Outcome.PASSED,
+        *,
+        returncode=0,
+        killed=False,
+        log="",
+        reason="",
+        instances=(),
+        failures=(),
+    ):
+        """End a job: its log, then its result, in that order."""
         store = LocalJobResultStore(self.jobs_dir)
         paths = store.write_targets(job_id)
         if log:
             paths.stdout_log.write_text(log, encoding="utf-8")
-        if report is not None:
-            paths.json_report.write_text(json.dumps(report), encoding="utf-8")
-        store.write_exit(
+        store.write_result(
             job_id,
-            JobExit(
-                finished_at="T1",
-                returncode=returncode,
-                ok=returncode == 0 and not killed,
-                killed=killed,
+            (
+                killed_result("T1", returncode)
+                if killed
+                else JobResult(
+                    finished_at="T1",
+                    returncode=returncode,
+                    outcome=outcome,
+                    reason=reason,
+                    instances=list(instances),
+                    failures=list(failures),
+                )
             ),
         )
         self._end(job_id)
 
     def crash(self, job_id):
-        """End a job with no exit recorded."""
+        """End a job with no result recorded."""
         self._end(job_id)
 
     def _end(self, job_id):
@@ -196,6 +215,48 @@ class FakeJobLauncher:
         lease = self._leases.pop(job_id, None)
         if lease is not None:
             lease.release()
+
+
+class FakeFramework:
+    """A ``Framework`` whose observations are scripted.
+
+    ``observed`` is what ``observe`` returns; ``observe`` raises ``error``
+    when one is given, and calls ``on_observe`` first when one is given.
+    """
+
+    def __init__(
+        self, *, catalog=(), observed=None, error=None, on_observe=None
+    ):
+        self._catalog = list(catalog)
+        self.observed = observed
+        self.error = error
+        self.on_observe = on_observe
+
+    def catalog(self, repo_root):
+        return list(self._catalog)
+
+    def invocation(self, repo_root, unit, report):
+        return Invocation(command=["true"], instances=[])
+
+    def environment(self, inherited, options, install_from):
+        return dict(inherited)
+
+    def observe(self, report, log):
+        if self.on_observe is not None:
+            self.on_observe()
+        if self.error is not None:
+            raise self.error
+        return self.observed
+
+    def digest_log(self, lines):
+        return LogDigest(
+            total_lines=len(lines),
+            finished=False,
+            errors=[],
+            errors_total=0,
+            summary=None,
+            tail="",
+        )
 
 
 class FakeConfigStore:
@@ -315,16 +376,14 @@ def result_error_text(result):
     raise AssertionError("Expected text content block in tool error result")
 
 
-def job_result(passed=1, failed=0, job_id="job", failures=()):
+def job_result(outcome="passed", job_id="job", failures=(), reason=""):
     """A finished job as ``JobRunner.poll`` reports it."""
     return {
         "state": "finished",
-        "ok": failed == 0,
         "job_id": job_id,
-        "summary": {
-            "scenarios": {"passed": passed, "failed": failed, "skipped": 0},
-            "features": {},
-        },
+        "outcome": outcome,
+        "reason": reason,
+        "instances": [],
         "failures": list(failures),
     }
 
@@ -379,7 +438,11 @@ class FakeJobRunner:
         if job_id in self.results:
             return self.results[job_id]
         if job_id not in {queued[1] for queued in self.queued}:
-            return {"state": "interrupted", "reason": "died", "job_id": job_id}
+            return {
+                "state": "interrupted",
+                "interruption": "died",
+                "job_id": job_id,
+            }
         if self.auto_finish is not None:
             self.finish(job_id, **self.auto_finish)
         return {
@@ -403,8 +466,7 @@ class FakeJobRunner:
             return False
         self.results[job_id] = {
             "state": "interrupted",
-            "reason": "killed",
-            "ok": False,
+            "interruption": "killed",
             "job_id": job_id,
         }
         return True
@@ -438,7 +500,7 @@ class FakeJobFiles:
 
     def files(self, job_id):
         found = {}
-        for name in ("job.json", "exit.json", "report.json", "stdout.log"):
+        for name in layout.JOB_FILE_NAMES:
             if (job_id, name) in self.without:
                 continue
             path = self.tmp_path / "jobs" / job_id / name

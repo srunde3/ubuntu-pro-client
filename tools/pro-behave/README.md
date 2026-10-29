@@ -12,13 +12,13 @@ other.
 
 - `list_features` -- lightweight catalog of feature files.
   - Each entry: `path`, `title`, `scenario_count`, `requires_config`, `releases`, `machine_types`.
-  - Optional `release`, `machine_type`, `tag`, `text` filters keep only features with at least one matching scenario.
+  - Optional `release`, `machine_type` and `tag` filters keep only features with at least one matching scenario.
 - `describe_feature` -- full detail for a single feature (`feature` must be a path from `list_features`).
   - Returns its title, tags, required config, and every scenario: name, type, tags, required config, `Examples` column names, and the distinct `(release, machine_type)` combos it supports.
 - `list_dimensions` -- every distinct `release` and `machine_type` (substrate) used across the whole suite, each with a count of scenarios that reference it.
   - Use it to discover valid filter values.
 - `find_scenarios` -- reverse lookup across all features.
-  - Optional `release`, `machine_type`, `tag`, and `text` (scenario-name substring) filters.
+  - Optional `release`, `machine_type` and `tag` filters.
   - Returns matching `feature`, `scenario`, `type`, required config, and the combos satisfying the filters.
   - `limit` caps the matches (default 50), with `total` and `truncated` alongside; `limit_clamped` is set when a value above the server max was capped.
 - `run_job` -- queues one unit to run in the background: one scenario on one release and one machine type.
@@ -32,11 +32,11 @@ other.
   - No known `job_id` or access to system processes required.
   - Reads every job off disk, so a job started by another server, by the CLI, or before a restart is listed and its state is current.
   - Optional `limit` caps how many ended jobs are returned: the most recent are kept, listed oldest first after the queued and running ones. `total_ended` and `truncated` in the response tell you if older jobs were dropped. `limit` must be positive; values above the server max are silently capped, with `limit_clamped` set when that happens.
-- `job_results` -- what came of each job: what it ran, `state` and `ok`, behave's own counts, and every failing step with its message.
-  - One `JobResult` per job, most recently queued first -- the same shape `wait_for_job` returns for one job.
-  - Optional `job_ids`, `feature`, `scenario` (substring), `release`, `machine_type`, and `state` filters; `limit` caps the jobs listed, with `total` and `truncated` alongside. `limit` must be positive; values above the server max are capped, with `limit_clamped` set.
+- `job_results` -- what came of each job: what it ran, its `state`, and once it finished its result: `outcome`, `reason`, each of the unit's `instances` and every failing step. See [A job's result](#a-jobs-result).
+  - One `JobSummary` per job, most recently queued first -- the same shape `wait_for_job` returns for one job.
+  - Optional `job_ids`, `feature`, `scenario` (exact name), `release`, `machine_type`, and `state` filters; `limit` caps the jobs listed, with `total` and `truncated` alongside. `limit` must be positive; values above the server max are capped, with `limit_clamped` set.
 - `wait_for_job` -- waits for a queued or running job to end.
-  - Returns the job's `JobResult` (plus `returncode` and artifact paths) with `state` `finished` or `interrupted` (with `reason` `killed` or `died`). If the wait runs out first, it returns the job as it stands, `queued` or `running`, with `timed_out: true`.
+  - Returns the job's `JobSummary` (plus `returncode` and artifact paths) with `state` `finished` and its result, or `interrupted` (with `interruption` `killed` or `died`). If the wait runs out first, it returns the job as it stands, `queued` or `running`, with `timed_out: true`.
 - `job_errors` -- what went wrong in a job, from its log: every traceback, hook error and failed assertion in the order they happened, each with its line range, the failing step above it, and the exception raised.
   - The first region is usually the cause and later ones its consequences; `errors` is capped with `errors_total` alongside, long regions and lines are elided.
   - `finished` says whether behave reached its summary; `summary` is that block; `tail` and `log_path` are there when the parser has nothing to say (a tox or pip failure before behave, a killed job).
@@ -44,8 +44,8 @@ other.
   - With `pattern` (a regex): the matching lines from `start` on, each with `context` lines around it, grep-style, until the next window would exceed `lines`. `matches` counts every match whether or not it fit.
   - Without: `lines` lines from `start`, or the last `lines` when `start` is 0.
   - `truncated` says the `lines` budget cut something; `log_path` is the file itself.
-- `job_artifacts` -- returns a job's file paths, which of them exist, its `request`, its launch `record` (null until it starts) and its `exit` (null until it ends).
-- `kill_job` -- kills a queued or running job, whichever process started it. The job ends `interrupted` with `reason` `killed`, never as a failure; `killed` is false when there was nothing to stop.
+- `job_artifacts` -- returns a job's file paths, which of them exist, its `request`, its launch `record` (null until it starts) and its `result` (null until it ends).
+- `kill_job` -- kills a queued or running job, whichever process started it. The job ends `interrupted` with `interruption` `killed`, never as a failure; `killed` is false when there was nothing to stop.
 
 Campaign tools are listed under [Campaigns](#campaigns).
 
@@ -244,7 +244,7 @@ Nothing long-lived drives the queue. Reconcile runs:
 
 - after every MCP tool call, and every 5 seconds in the server;
 - after every `pro-behave` command;
-- in a job's own process, after it records its exit and lets go of its lane,
+- in a job's own process, after it records its result and lets go of its lane,
   so the next queued job takes that lane at once.
 
 The server and the CLI first bring every campaign up to date, in the same
@@ -263,7 +263,7 @@ Each job runs under its own job process,
 never reaches the job. Reconcile takes a lane and `jobs/<id>/job.lock`,
 writes `job.json` while holding the lock, starts the job process and hands
 it both. The job process holds them while it runs tox as its child, and when
-tox exits it writes `exit.json`.
+tox exits it decides the unit's result and writes `result.json`.
 
 Everything the server writes lives under one directory in the server's own
 checkout, `.pro-behave`, with a subdirectory per kind of artifact. A
@@ -285,9 +285,9 @@ per kind.
 
 For each job, these files live under `jobs/`:
 
-- `<job_id>/request.json`: what the job is to run -- unit, built command, install source, checkout, queue time, and the campaign it is an attempt for, if any. Written once, when it is queued.
+- `<job_id>/request.json`: what the job is to run -- unit, built command, the unit's own instances, install source, checkout, queue time, and the campaign it is an attempt for, if any. Written once, when it is queued.
 - `<job_id>/job.json`: what the job ran with -- the request, plus its start time, the checkout's git state, every behave option in force (each secret shown only as `<set>`) and artifact paths. Written once, when it starts.
-- `<job_id>/exit.json`: how it ended -- `returncode`, `ok`, `killed`, `finished_at`, and the `error` when tox could not start. Written once, by the job process, or by `kill_job` for a job still queued; a job without one is running, or was interrupted.
+- `<job_id>/result.json`: how it ended -- `finished_at`, `returncode`, `killed`, and for a job that was not killed its `outcome`, `reason`, `instances` and `failures`. Written once, by the job process, by reconcile for a job that could not start, or by `kill_job` for a job still queued; a job without one is running, or its process died.
 - `<job_id>/job.lock`: held by the job process for as long as it lives, and holding its PID.
 - `<job_id>/kill`: left by `kill_job` on a running job, so a job process still starting up sees the kill.
 - `<job_id>/stdout.log`: combined stdout/stderr stream
@@ -297,25 +297,56 @@ The JSON files are written to a temporary file and renamed into place, so a read
 
 Those three files make a job's state readable from any process, after any crash:
 
-| `exit.json` | `job.json` | `job.lock` held | state |
+| `result.json` | `job.json` | `job.lock` held | state |
 | --- | --- | --- | --- |
 | yes, `killed: false` | either | either | `finished` |
-| yes, `killed: true` | either | either | `interrupted`, reason `killed` |
+| yes, `killed: true` | either | either | `interrupted`, `killed` |
 | no | no | either | `queued` |
 | no | yes | yes | `running` |
-| no | yes | no | `interrupted`, reason `died`: the job process died without writing an exit |
+| no | yes | no | `interrupted`, `died`: the job process died without writing a result |
 
 An interrupted job has no result: it is never a failure or an error, and
 nothing it did counts.
 
-A job that cannot be started at all finishes at once, `ok: false`, with the
-reason in `error`. tox gets a parent-death signal, so it cannot outlive its
+A job that cannot be started at all finishes at once, `outcome: error`,
+with the reason in `reason`. tox gets a parent-death signal, so it cannot outlive its
 job process. `kill_job` on a queued job records it as killed before it
 starts. On a running job it sends SIGTERM to the job process, which passes
 it to tox's process group and waits for it, so pycloudlib can delete what it
-made; the exit is recorded with `killed: true`. A hard kill or a reboot can
+made; the result is recorded with `killed: true`. A SIGTERM that arrives
+after tox exits is ignored, so it cannot stop the result being written. A hard kill or a reboot can
 leave an instance behind: cleaning those up is pycloudlib's business, not
 this tool's.
+
+## A job's result
+
+A job's result is decided once, when tox exits, from the job's files, and
+every reader gets that one result: `wait_for_job`, `job_results`,
+`list_jobs` and campaigns.
+
+When a job is queued, its request records the unit's own instances: one per
+`Examples` row on the unit's combo, or the scenario itself, each with its
+location in the feature file and its name. behave reports every row of the
+scenario and skips the rows of other combos; those rows are not part of the
+unit, and the result neither counts nor lists them, except to explain a
+non-zero exit.
+
+The first rule that matches decides the `outcome`:
+
+| The job | `outcome` |
+| --- | --- |
+| left no readable report | `error` |
+| shows none of the unit's instances | `error` |
+| shows an instance missing, twice, or renamed | `error`: the feature changed since the job was queued |
+| has an instance with a failing step | `failed`, with the `failures` |
+| has an instance whose test machinery broke (a hook or cleanup error, an undefined step) | `error`, with the reason |
+| exited non-zero | `error`, naming the row that broke, if any |
+| skipped every instance | `skipped`, each instance with its skip reason |
+| passed at least one instance and skipped the rest | `passed` |
+
+A killed job has no outcome, and neither does one whose process died: both
+are interrupted. If reading the result itself fails, the outcome is `error`
+with the exception as the reason.
 
 ## Testing
 

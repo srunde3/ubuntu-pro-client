@@ -1,6 +1,6 @@
 # Framework seam
 
-**Status:** accepted. Step 1 (the seam) is built; steps 2 and 3 are not. Settled points are in [decisions.md](../decisions.md) as DEC-22 to DEC-33. No questions are open. Where this file and the review copy differ, this file holds.
+**Status:** accepted. Step 1 (the seam) and the job side of step 2 (results) are built; the campaign side of step 2 and step 3 are not. Settled points are in [decisions.md](../decisions.md) as DEC-22 to DEC-38. No questions are open. Where this file and the review copy differ, this file holds.
 **Review copy:** <https://claude.ai/artifact/VXfoHQDNFo9AjK8Vpx6xmF>, written against `b1b7ba54`.
 
 Describe the tool in terms that hold for any test framework, and make behave one adapter behind them. Every job reports one result for its unit, and a single run and a campaign share it. The tool becomes `pro-e2e`.
@@ -81,25 +81,32 @@ A job's result is decided once, by one set of rules, and every reader gets it: a
 
 Behave selects what to run by filtering: it reports every row of the scenario, and the harness marks the rows for other combos `skipped`. All 17 reports checked from the LP-2163406 campaign hold such rows. A row for another combo is not an instance of the unit, so the result neither counts nor reports it. A `skipped` outcome then means the unit's own instances skipped, for example on a missing contract token.
 
-The invocation names the unit's instances, and the job's request records them when the job is queued. For behave these are row ids: behave names each row `<scenario> -- @<block>.<row> <examples name>`, and the parser knows which rows are on the unit's combo. For pytest they would be node ids. Interpretation matches the report against that list, so it never reads the feature file again, and a checkout that changed after the job ran cannot change the result.
+The invocation names the unit's instances, and the job's request records them when the job is queued. An instance has an `id`, unique in the checkout, and the `name` the framework gives it. For behave the id is the row's location, `<feature>:<line>`, which is also the location behave reports for the row; the name is the row's runtime name, `<scenario> -- @<block>.<row> <examples name>`. Names alone are not unique: in the corpus, 105 units have a row whose name is shared by a row on another combo, because same-named outlines each number their rows from `@1.1`. Locations had no duplicates. For pytest the id would be the node id. Interpretation matches the report against that list by id, and checks each name, so a feature edited between queueing and running is reported rather than misread.
 
 Most units have one instance. 11 of the 271 scenario outlines have a combo with more than one Examples row. "Disable and purge fips" in `features/cli/disable.feature` is one: its rows vary the FIPS service on the same combos.
 
 ### The first matching rule decides the outcome
 
+The adapter observes every run the report shows, with a neutral status: `passed`, `failed` (a step failed), `skipped`, or `error` (the test machinery broke: a hook or cleanup error, an undefined step, or a status it does not recognise). Skip reasons and hook errors come from the job's log, since behave's JSON report carries neither. The rules below live in the jobs domain, so every framework shares them.
+
 | The job | Outcome |
 | --- | --- |
 | was killed, or its process died | none: the job is interrupted |
 | could not start, or left no readable report | `error`, with the reason |
-| ran none of the unit's instances | `error`: ran nothing |
-| has an instance that failed, errored in a hook, or hit an undefined step | `failed`, with the failures |
-| exited non-zero | `error`: the exit and the report disagree |
+| shows none of the unit's instances | `error` |
+| shows one of the unit's instances missing, twice, or renamed | `error`: the feature changed since the job was queued |
+| has an instance with a failing step | `failed`, with the failures |
+| has an instance whose test machinery broke | `error`, with the reason |
+| exited non-zero | `error`, naming the row that broke, which may be another combo's: its hooks still ran |
 | skipped every instance | `skipped`, with the skip reasons |
-| passed at least one instance | `passed`, with any skipped instances and their skip reasons |
+| passed at least one instance and skipped the rest | `passed`, with the skipped instances and their reasons |
+| anything else | `error` |
+
+A unit whose instances all passed is `error` when behave's teardown fails afterwards. Its passed instances stay in the result, so a watcher can see the harness broke rather than the product.
 
 ### Results replace `ok` and the report counts
 
-- `exit.json` becomes `result.json`, which carries `outcome`, `reason` and `failures`. `ok` goes, and `returncode` stays as evidence.
+- `exit.json` becomes `result.json`, which carries `outcome`, `reason`, `instances` and `failures`. `ok` goes, and `returncode` stays as evidence. `error` folds into `reason`.
 - Job responses carry `outcome` in place of `ok` and the `summary` count tables.
 - A campaign records the job's outcome as it stands. `classify.py` stops reading report counts.
 - The jobs and campaign copies of the outcome agree on four values. `ScenarioStatus` and its `unknown` value go.

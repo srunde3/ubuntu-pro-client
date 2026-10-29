@@ -11,29 +11,37 @@ from pro_behave.jobs.domain.jobs import (
     validate_machine_type,
 )
 from pro_behave.jobs.domain.pools import Pool
-from pro_behave.jobs.messages import Interruption, JobExit, JobRecord, JobState
+from pro_behave.jobs.domain.results import killed_result
+from pro_behave.jobs.messages import (
+    Interruption,
+    JobRecord,
+    JobResult,
+    JobState,
+    Outcome,
+)
 
-# The exits a job can have: none yet, one from tox ending, one from a kill.
-EXITS = {
-    "no-exit": None,
-    "exited": JobExit(returncode=0, ok=True),
-    "killed": JobExit(returncode=-15, killed=True),
+# The results a job can have: none yet, one with an outcome, one from a kill.
+RESULTS = {
+    "no-result": None,
+    "finished": JobResult(returncode=0, outcome=Outcome.PASSED),
+    "killed": killed_result("T1", returncode=-15),
 }
 
-# A job's state for every exit, "it has a launch record" and "its process
-# holds the job lock". The job process writes the exit before letting go of
-# the lock, so an exit decides even while the lock is still held; the launch
-# takes the lock before it writes the record, so a held lock without a record
-# is a launch in progress, still queued.
+# A job's state for every result, "it has a launch record" and "its process
+# holds the job lock". The job process writes the result before letting go
+# of the lock, so a result decides even while the lock is still held; the
+# launch
+# takes the lock before it writes the record, so a held lock without a
+# record is a launch in progress, still queued.
 JOB_STATE = {
-    ("no-exit", False, False): JobState.QUEUED,
-    ("no-exit", False, True): JobState.QUEUED,
-    ("no-exit", True, True): JobState.RUNNING,
-    ("no-exit", True, False): JobState.INTERRUPTED,
-    ("exited", False, False): JobState.FINISHED,
-    ("exited", False, True): JobState.FINISHED,
-    ("exited", True, True): JobState.FINISHED,
-    ("exited", True, False): JobState.FINISHED,
+    ("no-result", False, False): JobState.QUEUED,
+    ("no-result", False, True): JobState.QUEUED,
+    ("no-result", True, True): JobState.RUNNING,
+    ("no-result", True, False): JobState.INTERRUPTED,
+    ("finished", False, False): JobState.FINISHED,
+    ("finished", False, True): JobState.FINISHED,
+    ("finished", True, True): JobState.FINISHED,
+    ("finished", True, False): JobState.FINISHED,
     ("killed", False, False): JobState.INTERRUPTED,
     ("killed", False, True): JobState.INTERRUPTED,
     ("killed", True, True): JobState.INTERRUPTED,
@@ -43,7 +51,7 @@ JOB_STATE = {
 
 def test_every_combination_has_an_expected_state():
     assert set(JOB_STATE) == set(
-        itertools.product(EXITS, (False, True), (False, True))
+        itertools.product(RESULTS, (False, True), (False, True))
     )
 
 
@@ -52,20 +60,22 @@ def test_every_state_is_reached():
 
 
 @pytest.mark.parametrize(
-    "exit, launched, lock_held, expected",
-    [(e, la, h, want) for (e, la, h), want in JOB_STATE.items()],
+    "result, launched, lock_held, expected",
+    [(r, la, h, want) for (r, la, h), want in JOB_STATE.items()],
     ids=str,
 )
-def test_job_state(exit, launched, lock_held, expected):
-    state = job_state(exit=EXITS[exit], launched=launched, lock_held=lock_held)
+def test_job_state(result, launched, lock_held, expected):
+    state = job_state(
+        result=RESULTS[result], launched=launched, lock_held=lock_held
+    )
 
     assert state == expected
 
 
-# Why an interrupted job has no result: a kill leaves an exit saying so, and
-# anything else that ends a job without an exit is its process dying.
+# Why an interrupted job has no outcome: a kill leaves a result saying so,
+# and anything else that ends a job without a result is its process dying.
 INTERRUPTION = {
-    "no-exit": Interruption.DIED,
+    "no-result": Interruption.DIED,
     "killed": Interruption.KILLED,
 }
 
@@ -74,9 +84,9 @@ def test_every_interruption_is_reached():
     assert set(INTERRUPTION.values()) == set(Interruption)
 
 
-@pytest.mark.parametrize("exit, expected", INTERRUPTION.items(), ids=str)
-def test_interruption(exit, expected):
-    assert interruption(EXITS[exit]) == expected
+@pytest.mark.parametrize("result, expected", INTERRUPTION.items(), ids=str)
+def test_interruption(result, expected):
+    assert interruption(RESULTS[result]) == expected
 
 
 def test_job_matches_result_filters_no_filters_matches_everything():
@@ -135,14 +145,14 @@ def test_job_matches_result_filters_by_feature():
     )
 
 
-def test_job_matches_result_filters_by_scenario_name_substring():
+def test_job_matches_result_filters_by_exact_scenario_name():
     metadata = JobRecord(scenario="Attach invalid token")
     assert job_matches_result_filters(
         metadata,
         job_id="job1",
         job_ids=None,
         feature=None,
-        scenario="invalid",
+        scenario="Attach invalid token",
         release=None,
         machine_type=None,
     )
@@ -151,7 +161,7 @@ def test_job_matches_result_filters_by_scenario_name_substring():
         job_id="job1",
         job_ids=None,
         feature=None,
-        scenario="expired",
+        scenario="invalid",
         release=None,
         machine_type=None,
     )
