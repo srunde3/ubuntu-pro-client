@@ -1,0 +1,54 @@
+---
+
+name: CI (pro-e2e)
+
+on:
+  push:
+    paths:
+      - "tools/pro-e2e/**"
+      - ".github/workflows/pro-e2e.yaml"
+  pull_request:
+    paths:
+      - "tools/pro-e2e/**"
+      - ".github/workflows/pro-e2e.yaml"
+
+defaults:
+  run:
+    shell: sh -ex {0}
+    working-directory: tools/pro-e2e
+
+jobs:
+  lint-and-style:
+    name: Static Analysis
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Git checkout
+        uses: actions/checkout@v3
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: uv sync --locked --extra lint
+      - name: Formatting
+        run: |
+          uv run black --check pro_e2e tests
+          uv run isort --check-only pro_e2e tests
+      - name: Style
+        run: uv run flake8 pro_e2e tests
+      - name: Mypy
+        run: uv run mypy pro_e2e
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Git checkout
+        uses: actions/checkout@v3
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: uv sync --locked --extra test
+      - name: Unit
+        run: uv run pytest -q -m "not e2e"

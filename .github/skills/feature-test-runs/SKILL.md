@@ -1,11 +1,11 @@
 ---
 name: feature-test-runs
-description: "Run, discover, and debug the features/ behave integration tests through the behave MCP server. Use when asked to run a scenario or feature on a release or machine type, to find which scenarios cover something, or to explain why a behave job failed, errored, or was skipped -- a traceback, a provisioning error, a hook error, an assertion diff, a missing config."
+description: "Run, discover, and debug the features/ behave integration tests through the pro-e2e MCP server. Use when asked to run a scenario or feature on a release or machine type, to find which scenarios cover something, or to explain why a behave job failed, errored, or was skipped -- a traceback, a provisioning error, a hook error, an assertion diff, a missing config."
 ---
 
 # Feature Test Runs
 
-Use the `behave` MCP server (`tools/pro-behave`) for all `features/`
+Use the `behave` MCP server (`tools/pro-e2e`) for all `features/`
 discovery and execution. Don't run `tox -e behave` by hand, and don't grep
 `features/*.feature` for scenarios or valid release/machine_type values.
 Each tool's description says how to call it and what it returns.
@@ -66,5 +66,5 @@ not read each log.
   retry it hoping for a different answer.
 - A **skipped** scenario means a config the host lacks. `requires_config`
   on the catalog entry names them; jobs get them only from the checkout's
-  config (`pro-behave config set behave.<name>`), which the user sets.
+  config (`pro-e2e config set behave.<name>`), which the user sets.
   Report the option names. Never ask for a secret value in chat.

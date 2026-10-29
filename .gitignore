@@ -51,12 +51,12 @@ node_modules
 docs/build/
 .sphinx
 
-# local pro-behave artifacts
-tools/pro-behave/build/
-tools/pro-behave/.venv/
-tools/pro-behave/.pytest_cache/
+# local pro-e2e artifacts
+tools/pro-e2e/build/
+tools/pro-e2e/.venv/
+tools/pro-e2e/.pytest_cache/
 # openspec is a local implementation aid, not a record of the design
-tools/pro-behave/openspec/
+tools/pro-e2e/openspec/
 
 # compiled translations
 debian/po/usr
@@ -64,6 +64,6 @@ debian/po/usr
 # git worktrees
 .worktrees/
 
-# Everything tools/pro-behave writes: job artifacts, campaign
+# Everything tools/pro-e2e writes: job artifacts, campaign
 # records, event logs, run locks.
-.pro-behave/
+.pro-e2e/

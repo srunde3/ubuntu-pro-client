@@ -1,0 +1,200 @@
+[project]
+name = "pro-e2e"
+version = "0.1.0"
+description = "Run ubuntu-pro-client's behave scenarios and campaigns, from a CLI or over MCP"
+requires-python = ">=3.10"
+dependencies = [
+  "mcp[cli]==1.28.1",
+  "uvicorn>=0.30.0",
+  "behave>=1.2.6",
+  "pydantic>=2,<3",
+]
+
+[project.optional-dependencies]
+test = [
+  "pytest>=8.0",
+  "pytest-asyncio>=0.23",
+  "pytest-cov>=7.1.0",
+]
+# Versions matched to the repo-root tox envs (see /tox.ini) where pinned.
+lint = [
+  "black==24.3.0",
+  "isort==5.12.0",
+  "flake8",
+  "mypy",
+  "import-linter>=2.15",
+]
+
+[project.scripts]
+pro-e2e = "pro_e2e.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+# Listed explicitly so setuptools' flat-layout auto-discovery cannot pick
+# up another directory that appears here.
+[tool.setuptools.packages.find]
+include = ["pro_e2e*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+  "e2e: End-to-end tests that exercise real subprocess-backed MCP flows",
+  "long_running: Tests expected to run for minutes",
+  "integration: real components wired together in process: the MCP protocol, the CLI, startup, real behave or the real features/ corpus",
+]
+
+# black/isort discover the *nearest* pyproject.toml to each file, so
+# without these this package would silently drift to black's 88-char
+# default instead of the repo-wide 79-char convention (see /pyproject.toml).
+[tool.black]
+line-length = 79
+
+[tool.isort]
+profile = "black"
+line_length = 79
+# Without this, isort groups the package by whether it happens to be
+# installed in the running environment, so the same file passes in one
+# checkout and fails in another.
+known_first_party = ["pro_e2e", "tests"]
+
+[tool.mypy]
+check_untyped_defs = true
+no_implicit_optional = true
+
+[[tool.mypy.overrides]]
+# Matches the root pyproject.toml override: behave ships no type stubs.
+module = ["behave.*"]
+ignore_missing_imports = "true"
+
+# Run with `uv run lint-imports`. Each contract is a rule from the
+# pro-e2e-architecture skill.
+[tool.importlinter]
+root_packages = ["pro_e2e"]
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "Front-ends on top; behave is an adapter that jobs and campaign never import"
+type = "layers"
+containers = ["pro_e2e"]
+layers = [
+  "cli",
+  "mcp | job_process",
+  "behave | campaign",
+  "jobs",
+]
+
+[[tool.importlinter.contracts]]
+name = "The job process knows nothing of campaigns or front-ends"
+type = "forbidden"
+source_modules = ["pro_e2e.job_process"]
+forbidden_modules = [
+  "pro_e2e.campaign",
+  "pro_e2e.cli",
+  "pro_e2e.mcp",
+]
+
+[[tool.importlinter.contracts]]
+name = "The parser imports only behave and the standard library"
+type = "forbidden"
+source_modules = ["pro_e2e.behave.parser"]
+forbidden_modules = [
+  "pro_e2e.campaign",
+  "pro_e2e.cli",
+  "pro_e2e.job_process",
+  "pro_e2e.jobs",
+  "pro_e2e.mcp",
+]
+
+[[tool.importlinter.contracts]]
+name = "campaign uses only domain.catalog, domain.pools and domain.layout from jobs"
+type = "forbidden"
+source_modules = ["pro_e2e.campaign"]
+forbidden_modules = [
+  "pro_e2e.jobs.adapters",
+  "pro_e2e.jobs.domain.config",
+  "pro_e2e.jobs.domain.jobs",
+  "pro_e2e.jobs.domain.limits",
+  "pro_e2e.jobs.domain.logs",
+  "pro_e2e.jobs.domain.queue",
+  "pro_e2e.jobs.messages",
+  "pro_e2e.jobs.ports",
+  "pro_e2e.jobs.service",
+  "pro_e2e.jobs.views",
+]
+
+[[tool.importlinter.contracts]]
+name = "Only campaign adapters read the catalog"
+type = "forbidden"
+source_modules = [
+  "pro_e2e.campaign.domain",
+  "pro_e2e.campaign.messages",
+  "pro_e2e.campaign.ports",
+  "pro_e2e.campaign.repo",
+  "pro_e2e.campaign.service",
+  "pro_e2e.campaign.views",
+]
+forbidden_modules = ["pro_e2e.jobs.domain.catalog"]
+
+[[tool.importlinter.contracts]]
+name = "jobs layers"
+type = "layers"
+containers = ["pro_e2e.jobs"]
+layers = [
+  "service | adapters",
+  "ports | views",
+  "domain",
+  "messages",
+]
+
+[[tool.importlinter.contracts]]
+name = "campaign layers"
+type = "layers"
+containers = ["pro_e2e.campaign"]
+layers = [
+  "service | adapters | repo",
+  "views | ports",
+  "domain | messages",
+]
+
+[[tool.importlinter.contracts]]
+name = "Domain and service modules do no direct I/O"
+type = "forbidden"
+source_modules = [
+  "pro_e2e.jobs.domain",
+  "pro_e2e.jobs.service",
+  "pro_e2e.jobs.views",
+  "pro_e2e.campaign.domain",
+  "pro_e2e.campaign.service",
+  "pro_e2e.campaign.views",
+]
+forbidden_modules = [
+  "fcntl",
+  "gzip",
+  "os",
+  "signal",
+  "subprocess",
+  "tarfile",
+  "tempfile",
+]
+
+[[tool.importlinter.contracts]]
+name = "Only mcp/server.py imports the MCP framework"
+type = "forbidden"
+source_modules = ["pro_e2e"]
+forbidden_modules = ["mcp", "starlette", "uvicorn"]
+ignore_imports = [
+  "pro_e2e.mcp.server -> mcp",
+  "pro_e2e.mcp.server -> starlette",
+]
+
+# A signal, not a gate: no fail_under. `--cov` prints branch coverage and
+# the lines each file misses.
+[tool.coverage.run]
+branch = true
+source = ["pro_e2e"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
