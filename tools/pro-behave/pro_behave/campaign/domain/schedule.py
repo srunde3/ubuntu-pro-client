@@ -4,9 +4,9 @@ queue."""
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Mapping, Sequence
+from typing import Mapping, Sequence
 
-from pro_behave.campaign.domain.classify import JOB_ENDED, classify_result
+from pro_behave.campaign.domain.classify import JobStatus, classify_result
 from pro_behave.campaign.domain.records import (
     DEFAULT_INSTALL_FROM,
     CampaignState,
@@ -56,27 +56,23 @@ class InFlightJob:
     it now.
 
     ``install_from`` is carried from the attempt that queued it, so the
-    attempt states what the job actually ran with. ``result`` is the job's
-    current status payload.
+    attempt states what the job actually ran with. ``status`` is None until
+    the job has been looked at.
     """
 
     unit: Unit
     job_id: str
-    result: Any = None
+    status: JobStatus | None = None
     install_from: str = DEFAULT_INSTALL_FROM
 
     @property
     def ended(self) -> bool:
-        return isinstance(self.result, dict) and (
-            self.result.get("state") in JOB_ENDED
-        )
+        return self.status is not None and self.status.ended
 
     @property
     def started_at(self) -> str:
         """When the job began running; empty while it is queued."""
-        if not isinstance(self.result, dict):
-            return ""
-        return str(self.result.get("started_at") or "")
+        return self.status.started_at if self.status is not None else ""
 
 
 @dataclass(frozen=True)
@@ -109,7 +105,9 @@ def plan_campaign(
     what makes a paused campaign drain.
     """
     recorded = tuple(
-        classify_result(job.unit, job.result, at) for job in jobs if job.ended
+        classify_result(job.unit, job.status, at)
+        for job in jobs
+        if job.status is not None and job.status.ended
     )
 
     replayed = replay([*records, *recorded])

@@ -170,11 +170,15 @@ FINISHED_FIELDS = (
     "outcome",
     "at",
     "reason",
+    "instances",
     "failures",
 )
 
 
-FAILURE_FIELDS = ("step", "status", "error_message")
+FAILURE_FIELDS = ("instance", "step", "status", "error_message")
+
+
+INSTANCE_FIELDS = ("id", "name", "status", "reason")
 
 
 STARVED_FIELDS = (*UNIT_FIELDS, "pool", "reason", "at")
@@ -271,16 +275,49 @@ class StartedRecord:
     at: str = ""
 
 
+class InstanceStatus(StringEnum):
+    """How one of a unit's instances went, as its job decided."""
+
+    PASSED = "passed"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+    ERROR = "error"
+
+
+INSTANCE_STATUSES = tuple(status.value for status in InstanceStatus)
+
+
+@dataclass(frozen=True)
+class InstanceResult:
+    """One of the unit's instances, and how it went. ``reason`` says why it
+    was skipped, or how the test machinery broke."""
+
+    id: str
+    name: str
+    status: InstanceStatus
+    reason: str = ""
+
+    def as_dict(self) -> dict[str, str]:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "status": self.status.value,
+            "reason": self.reason,
+        }
+
+
 @dataclass(frozen=True)
 class Failure:
-    """One failing step, as a finished job's report gave it."""
+    """One failing step of an instance, as the job's result gave it."""
 
+    instance: str
     step: str
     status: str
     error_message: str = ""
 
     def as_dict(self) -> dict[str, str]:
         return {
+            "instance": self.instance,
             "step": self.step,
             "status": self.status,
             "error_message": self.error_message,
@@ -291,9 +328,9 @@ class Failure:
 class FinishedRecord:
     """That job ended, and what it established.
 
-    ``reason`` says why a result could not be classified, which makes the
-    outcome ``error``. ``failures`` carries the first failing steps, so a
-    failure can be judged without the job's report.
+    ``reason`` says why the outcome is ``error``. ``instances`` are the
+    unit's own, as the job decided them; ``failures`` carries the first
+    failing steps, so a failure can be judged without the job's report.
     """
 
     unit: Unit
@@ -301,6 +338,7 @@ class FinishedRecord:
     outcome: Outcome
     at: str = ""
     reason: str = ""
+    instances: tuple[InstanceResult, ...] = ()
     failures: tuple[Failure, ...] = ()
 
 
@@ -600,13 +638,35 @@ def _parse_finished(body: dict[str, Any]) -> FinishedRecord:
         if not all(isinstance(failure[f], str) for f in FAILURE_FIELDS):
             raise CampaignError("failure fields must be strings")
         parsed.append(Failure(**failure))
+    instances = body["instances"]
+    if not isinstance(instances, list):
+        raise CampaignError("finished field 'instances' must be a list")
     return FinishedRecord(
         unit=_unit_from(body, "finished"),
         job_id=text_field(body, "job_id", "finished"),
         outcome=validate_outcome(body["outcome"]),
         at=text_field(body, "at", "finished"),
         reason=_string_field(body, "reason", "finished"),
+        instances=tuple(_parse_instance(raw) for raw in instances),
         failures=tuple(parsed),
+    )
+
+
+def _parse_instance(raw: Any) -> InstanceResult:
+    instance = require_fields(raw, INSTANCE_FIELDS, "instance")
+    if not all(isinstance(instance[f], str) for f in INSTANCE_FIELDS):
+        raise CampaignError("instance fields must be strings")
+    if instance["status"] not in INSTANCE_STATUSES:
+        raise CampaignError(
+            "instance status must be one of: {}".format(
+                ", ".join(INSTANCE_STATUSES)
+            )
+        )
+    return InstanceResult(
+        id=instance["id"],
+        name=instance["name"],
+        status=InstanceStatus(instance["status"]),
+        reason=instance["reason"],
     )
 
 
@@ -853,6 +913,7 @@ def encode_record(record: Record) -> dict[str, Any]:
         data["job_id"] = record.job_id
         data["outcome"] = record.outcome
         data["reason"] = record.reason
+        data["instances"] = [i.as_dict() for i in record.instances]
         data["failures"] = [failure.as_dict() for failure in record.failures]
         return data
     if isinstance(record, StarvedRecord):

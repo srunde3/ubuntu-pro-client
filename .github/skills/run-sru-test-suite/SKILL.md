@@ -64,7 +64,8 @@ complete picture, not a green one.
 - Triage each class once. Host configuration and infrastructure are
   actionable now; external flakes wait for the batch retry; candidate
   defects are recorded, never retried in hope.
-- `unit.unclassifiable` is a finding to report, not an error to work around.
+- A `unit.errored` whose reason starts "the campaign could not read the job's
+  status" is a fault in the tool: report it, never retry it.
 - `anomaly.repeated_scenario_failure` usually means a shared dependency
   or a host issue rather than a release bug.
 - `job.overdue`: decide whether to `kill_job` it.

@@ -2,6 +2,7 @@
 
 import pytest
 
+from pro_behave.campaign.domain.classify import JobStatus
 from pro_behave.campaign.domain.records import (
     CampaignRecord,
     CampaignState,
@@ -61,13 +62,7 @@ def attempt(unit, outcome, job_id="job1"):
 
 
 def completed(outcome="passed", job_id="job1"):
-    return {
-        "state": "finished",
-        "job_id": job_id,
-        "outcome": outcome,
-        "reason": "",
-        "failures": [],
-    }
+    return JobStatus(state="finished", job_id=job_id, outcome=outcome)
 
 
 class TestPlanTick:
@@ -176,7 +171,7 @@ class TestPlanTick:
             IntentRecord(Intent.RUN, Cause.RUN, AT),
             attempt(UNIT_A, "running"),
         ]
-        jobs = [InFlightJob(unit=UNIT_A, job_id="job1", result=completed())]
+        jobs = [InFlightJob(unit=UNIT_A, job_id="job1", status=completed())]
 
         decided = plan_campaign(
             records=records, jobs=jobs, max_jobs=lxd(2), at=AT
@@ -190,7 +185,7 @@ class TestPlanTick:
             IntentRecord(Intent.RUN, Cause.RUN, AT),
             attempt(UNIT_A, "running"),
         ]
-        jobs = [InFlightJob(unit=UNIT_A, job_id="job1", result=completed())]
+        jobs = [InFlightJob(unit=UNIT_A, job_id="job1", status=completed())]
 
         decided = plan_campaign(
             records=records, jobs=jobs, max_jobs=lxd(1), at=AT
@@ -235,7 +230,7 @@ class TestPlanTick:
             attempt(UNIT_A, "running"),
             IntentRecord(Intent.HOLD, Cause.PAUSE, AT),
         ]
-        jobs = [InFlightJob(unit=UNIT_A, job_id="job1", result=completed())]
+        jobs = [InFlightJob(unit=UNIT_A, job_id="job1", status=completed())]
 
         decided = plan_campaign(
             records=records, jobs=jobs, max_jobs=lxd(4), at=AT
@@ -251,7 +246,7 @@ class TestPlanTick:
             IntentRecord(Intent.RUN, Cause.RUN, AT),
             attempt(UNIT_A, "running"),
         ]
-        jobs = [InFlightJob(unit=UNIT_A, job_id="job1", result=completed())]
+        jobs = [InFlightJob(unit=UNIT_A, job_id="job1", status=completed())]
 
         decided = plan_campaign(
             records=records, jobs=jobs, max_jobs=lxd(4), at=AT
@@ -260,7 +255,7 @@ class TestPlanTick:
         assert decided.state == CampaignState.COMPLETE
         assert decided.queue == ()
 
-    def test_an_unclassifiable_result_does_not_stop_scheduling(self):
+    def test_an_unreadable_result_does_not_stop_scheduling(self):
         records = [
             *plan(UNIT_A, UNIT_B),
             IntentRecord(Intent.RUN, Cause.RUN, AT),
@@ -270,7 +265,7 @@ class TestPlanTick:
             InFlightJob(
                 unit=UNIT_A,
                 job_id="job1",
-                result=completed(outcome="bogus"),
+                status=completed(outcome="bogus"),
             )
         ]
 
@@ -350,7 +345,7 @@ class TestSchedulerNeverRetries:
         ]
         jobs = [
             InFlightJob(
-                unit=UNIT_A, job_id="job1", result=completed(outcome="error")
+                unit=UNIT_A, job_id="job1", status=completed(outcome="error")
             )
         ]
 

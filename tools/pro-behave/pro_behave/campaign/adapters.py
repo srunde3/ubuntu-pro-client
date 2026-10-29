@@ -23,9 +23,17 @@ from typing import IO, Any, Callable, ContextManager, Mapping, Sequence
 
 from pro_behave.campaign.domain import discovery
 from pro_behave.campaign.domain.bundle import JOB_FILES, BundleEntry
+from pro_behave.campaign.domain.classify import (
+    DIED,
+    JOB_INTERRUPTED,
+    JobStatus,
+)
 from pro_behave.campaign.domain.records import (
     CampaignError,
     CampaignRecord,
+    Failure,
+    InstanceResult,
+    InstanceStatus,
     PlanRecord,
     Record,
     Scope,
@@ -351,6 +359,47 @@ class CatalogFeatureReader:
         )
 
 
+def _value(field: Any) -> str:
+    """An enum member's value, or the string itself."""
+    return str(getattr(field, "value", field))
+
+
+def job_status(response: Any) -> JobStatus:
+    """A job service response, as the campaign's own ``JobStatus``.
+
+    The campaign does not import the job service's types, so it reads the
+    response's fields by name; a field a state lacks takes its default.
+    """
+    outcome = getattr(response, "outcome", None)
+    interruption = getattr(response, "interruption", None)
+    return JobStatus(
+        state=_value(response.state),
+        job_id=response.job_id,
+        started_at=getattr(response, "started_at", "") or "",
+        outcome=None if outcome is None else _value(outcome),
+        reason=getattr(response, "reason", "") or "",
+        interruption="" if interruption is None else _value(interruption),
+        instances=tuple(
+            InstanceResult(
+                id=instance.id,
+                name=instance.name,
+                status=InstanceStatus(_value(instance.status)),
+                reason=instance.reason,
+            )
+            for instance in getattr(response, "instances", [])
+        ),
+        failures=tuple(
+            Failure(
+                instance=failure.instance,
+                step=failure.step,
+                status=failure.status,
+                error_message=failure.error_message,
+            )
+            for failure in getattr(response, "failures", [])
+        ),
+    )
+
+
 class ServiceJobRunner:
     """Queues, reads and kills a campaign's jobs through ``JobService``.
 
@@ -403,18 +452,16 @@ class ServiceJobRunner:
             # The unit stays queueable, and the campaign says why.
             raise QueueRefused(str(error), unit.pool) from error
 
-    def poll(self, job_id: str) -> dict[str, Any]:
+    def poll(self, job_id: str) -> JobStatus:
         try:
-            status = self._service.job_status(job_id)
+            response = self._service.job_status(job_id)
         except self._unknown_job:
             # Recorded but never queued: the reconcile that would have
             # queued it died between the two.
-            return {
-                "state": "interrupted",
-                "interruption": "died",
-                "job_id": job_id,
-            }
-        return dict(status.model_dump(mode="json"))
+            return JobStatus(
+                state=JOB_INTERRUPTED, job_id=job_id, interruption=DIED
+            )
+        return job_status(response)
 
     def kill(self, job_id: str) -> bool:
         try:

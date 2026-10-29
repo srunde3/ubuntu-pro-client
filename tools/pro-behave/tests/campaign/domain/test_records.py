@@ -12,6 +12,8 @@ from pro_behave.campaign.domain.records import (
     Cause,
     Failure,
     FinishedRecord,
+    InstanceResult,
+    InstanceStatus,
     Intent,
     IntentRecord,
     InterruptedRecord,
@@ -56,7 +58,23 @@ RECORD_OF_TYPE = {
         "job-1",
         Outcome.FAILED,
         at=AT,
-        failures=(Failure("Then it works", "failed", "it did not"),),
+        reason="",
+        instances=(
+            InstanceResult(
+                "features/a.feature:9", "A -- @1.1 rows", InstanceStatus.FAILED
+            ),
+            InstanceResult(
+                "features/a.feature:10",
+                "A -- @1.2 rows",
+                InstanceStatus.SKIPPED,
+                reason="no token",
+            ),
+        ),
+        failures=(
+            Failure(
+                "features/a.feature:9", "Then it works", "failed", "it did not"
+            ),
+        ),
     ),
     RecordType.INTERRUPTED: InterruptedRecord(
         UNIT_A, "job-2", at=AT, reason="killed"
@@ -86,12 +104,22 @@ def test_each_record_type_survives_encoding(kind, record):
     assert parse_record(encoded) == record
 
 
-def test_an_unclassifiable_finish_keeps_its_problem():
+def test_an_error_keeps_its_reason():
     finished = FinishedRecord(
-        UNIT_A, "job-1", Outcome.ERROR, at=AT, reason="cannot classify"
+        UNIT_A, "job-1", Outcome.ERROR, at=AT, reason="the command exited 2"
     )
 
-    assert parse_record(encode_record(finished)).reason == "cannot classify"
+    assert parse_record(encode_record(finished)).reason == (
+        "the command exited 2"
+    )
+
+
+def test_an_instance_with_an_unknown_status_is_refused():
+    raw = encode_record(RECORD_OF_TYPE[RecordType.FINISHED])
+    raw["instances"][0]["status"] = "bogus"
+
+    with pytest.raises(CampaignError, match="instance status"):
+        parse_record(raw)
 
 
 def test_an_intent_needs_a_command_as_its_cause():

@@ -9,9 +9,10 @@ callables rather than Protocols, matching ``pro_behave.jobs.service``.
 """
 
 from pathlib import Path
-from typing import Any, Callable, ContextManager, Mapping, Protocol, Sequence
+from typing import Callable, ContextManager, Mapping, Protocol, Sequence
 
 from pro_behave.campaign.domain.bundle import BundleEntry
+from pro_behave.campaign.domain.classify import JobStatus
 from pro_behave.campaign.domain.records import (
     CampaignError,
     CampaignRecord,
@@ -141,8 +142,8 @@ class JobRunner(Protocol):
         """
         ...
 
-    def poll(self, job_id: str) -> dict[str, Any]:
-        """Return the job's current status payload, with ``state``.
+    def poll(self, job_id: str) -> JobStatus:
+        """Return the job's current status, and its result once it ended.
 
         A job the job service never queued reads as interrupted, ``died``.
         """

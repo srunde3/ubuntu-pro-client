@@ -18,11 +18,15 @@ from pro_behave.campaign.adapters import (
     TarBundleWriter,
 )
 from pro_behave.campaign.domain.bundle import BundleEntry
+from pro_behave.campaign.domain.classify import JobStatus
 from pro_behave.campaign.domain.records import (
     CampaignError,
     CampaignRecord,
     CampaignState,
+    Failure,
     FinishedRecord,
+    InstanceResult,
+    InstanceStatus,
     PlanRecord,
     RepoState,
     Scope,
@@ -38,6 +42,10 @@ from pro_behave.campaign.ports import (
 from pro_behave.campaign.service import CampaignService
 from pro_behave.jobs.domain import catalog
 from pro_behave.jobs.domain.pools import Pool
+from pro_behave.jobs.messages import Failure as JobFailure
+from pro_behave.jobs.messages import InstanceResult as JobInstanceResult
+from pro_behave.jobs.messages import InstanceStatus as JobInstanceStatus
+from pro_behave.jobs.messages import Outcome as JobOutcome
 from pro_behave.jobs.service import JobServiceError, UnknownJobError
 from tests.conftest import (
     FakeConfigStore,
@@ -630,7 +638,55 @@ class TestServiceJobRunner:
         runner, repo_root = self.job_runner(tmp_path, launcher)
         job_id = self.queue(runner, repo_root)
 
-        assert runner.poll(job_id)["state"] == "running"
+        assert runner.poll(job_id).state == "running"
+
+    def test_a_finished_job_reports_its_whole_result(self, tmp_path):
+        launcher = FakeJobLauncher(tmp_path)
+        runner, repo_root = self.job_runner(tmp_path, launcher)
+        job_id = self.queue(runner, repo_root)
+        launcher.finish(
+            job_id,
+            JobOutcome.FAILED,
+            reason="",
+            instances=[
+                JobInstanceResult(
+                    id="features/a.feature:9",
+                    name="A",
+                    status=JobInstanceStatus.FAILED,
+                )
+            ],
+            failures=[
+                JobFailure(
+                    instance="features/a.feature:9",
+                    step="Then it works",
+                    status="failed",
+                    error_message="it did not",
+                )
+            ],
+        )
+
+        status = runner.poll(job_id)
+
+        assert status == JobStatus(
+            state="finished",
+            job_id=job_id,
+            outcome="failed",
+            instances=(
+                InstanceResult(
+                    id="features/a.feature:9",
+                    name="A",
+                    status=InstanceStatus.FAILED,
+                ),
+            ),
+            failures=(
+                Failure(
+                    instance="features/a.feature:9",
+                    step="Then it works",
+                    status="failed",
+                    error_message="it did not",
+                ),
+            ),
+        )
 
     def test_an_ended_job_reports_how_it_ended(self, tmp_path):
         launcher = FakeJobLauncher(tmp_path)
@@ -640,20 +696,14 @@ class TestServiceJobRunner:
 
         result = runner.poll(job_id)
 
-        assert (result["state"], result["interruption"]) == (
-            "interrupted",
-            "died",
-        )
+        assert (result.state, result.interruption) == ("interrupted", "died")
 
     def test_a_job_never_queued_reads_as_died(self, tmp_path):
         runner, _ = self.job_runner(tmp_path, FakeJobLauncher(tmp_path))
 
         result = runner.poll("never-queued")
 
-        assert (result["state"], result["interruption"]) == (
-            "interrupted",
-            "died",
-        )
+        assert (result.state, result.interruption) == ("interrupted", "died")
 
     def test_a_running_job_is_killed(self, tmp_path):
         launcher = FakeJobLauncher(tmp_path)

@@ -42,7 +42,6 @@ class EventKind(StringEnum):
     UNIT_FAILED = "unit.failed"
     UNIT_SKIPPED = "unit.skipped"
     UNIT_ERRORED = "unit.errored"
-    UNIT_UNCLASSIFIABLE = "unit.unclassifiable"
     UNIT_INTERRUPTED = "unit.interrupted"
     UNIT_RETRIED = "unit.retried"
     ANOMALY_REPEATED_SCENARIO_FAILURE = "anomaly.repeated_scenario_failure"
@@ -74,7 +73,6 @@ ACTIONABLE_KINDS = (
     EventKind.UNIT_FAILED.value,
     EventKind.UNIT_ERRORED.value,
     EventKind.UNIT_SKIPPED.value,
-    EventKind.UNIT_UNCLASSIFIABLE.value,
     EventKind.UNIT_INTERRUPTED.value,
     EventFamily.ANOMALY.value + ".*",
     EventKind.JOB_OVERDUE.value,
@@ -179,40 +177,11 @@ def event_matches(kind: str, patterns: Sequence[str]) -> bool:
     return False
 
 
-def unit_event_kind(outcome: str, unclassifiable: bool = False) -> str:
+def unit_event_kind(outcome: str) -> str:
     """The event kind an outcome produces."""
-    if unclassifiable:
-        return EventKind.UNIT_UNCLASSIFIABLE
     return _UNIT_EVENT_FOR_OUTCOME.get(
         Outcome(outcome), EventKind.UNIT_ERRORED
     )
-
-
-def failure_details(result: Any) -> list[dict[str, str]]:
-    """Pull the failing steps out of a job result, for a unit.failed event.
-
-    Carried on the event so a caller can judge a failure without going back
-    for the job's report.
-    """
-    if not isinstance(result, dict):
-        return []
-    raw = result.get("failures")
-    if not isinstance(raw, list):
-        return []
-    details = []
-    for failure in raw[:MAX_EVENT_FAILURES]:
-        if not isinstance(failure, dict):
-            continue
-        details.append(
-            {
-                "step": str(failure.get("step", "")),
-                "status": str(failure.get("status", "")),
-                "error_message": str(failure.get("error_message", ""))[
-                    :MAX_EVENT_ERROR_CHARS
-                ],
-            }
-        )
-    return details
 
 
 def shorten_failures(data: dict[str, Any], chars: int) -> dict[str, Any]:

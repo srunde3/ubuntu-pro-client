@@ -1,6 +1,6 @@
 # Framework seam
 
-**Status:** accepted. Step 1 (the seam) and the job side of step 2 (results) are built; the campaign side of step 2 and step 3 are not. Settled points are in [decisions.md](../decisions.md) as DEC-22 to DEC-38. No questions are open. Where this file and the review copy differ, this file holds.
+**Status:** accepted. Steps 1 (the seam) and 2 (results) are built; step 3 (the rename) is not. Settled points are in [decisions.md](../decisions.md) as DEC-22 to DEC-40. No questions are open. Where this file and the review copy differ, this file holds.
 **Review copy:** <https://claude.ai/artifact/VXfoHQDNFo9AjK8Vpx6xmF>, written against `b1b7ba54`.
 
 Describe the tool in terms that hold for any test framework, and make behave one adapter behind them. Every job reports one result for its unit, and a single run and a campaign share it. The tool becomes `pro-e2e`.

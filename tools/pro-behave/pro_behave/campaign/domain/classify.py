@@ -1,18 +1,20 @@
-"""What a finished job established for its unit."""
+"""What an ended job established for its unit."""
 
 from __future__ import annotations
 
-from typing import Any
+from dataclasses import dataclass
 
-from pro_behave.campaign.domain.events import failure_details
+from pro_behave.campaign.domain.events import (
+    MAX_EVENT_ERROR_CHARS,
+    MAX_EVENT_FAILURES,
+)
 from pro_behave.campaign.domain.records import (
-    CampaignError,
     Failure,
     FinishedRecord,
+    InstanceResult,
     InterruptedRecord,
     Outcome,
     Unit,
-    text_field,
 )
 
 JOB_FINISHED = "finished"
@@ -32,84 +34,82 @@ DIED = "died"
 INTERRUPTIONS = (KILLED, DIED)
 
 
-def _completed_outcome(result: dict[str, Any]) -> Outcome:
-    """The outcome the finished job decided for its unit."""
-    outcome = result.get("outcome")
-    try:
-        return Outcome(outcome)
-    except ValueError:
-        raise CampaignError(
-            "the finished job reports no known outcome: {!r}".format(outcome)
-        ) from None
+@dataclass(frozen=True)
+class JobStatus:
+    """A job as a campaign sees it when it looks.
 
-
-def finished_from_mcp(unit: Unit, result: Any) -> FinishedRecord:
-    """Map one completed job payload onto a finished attempt.
-
-    Only a finished job has an outcome. Handing a job still in flight here
-    means something is being recorded that nobody has an outcome for yet.
+    ``outcome``, ``reason``, ``instances`` and ``failures`` are the result a
+    finished job decided; ``interruption`` says why an interrupted one has
+    none.
     """
-    if not isinstance(result, dict):
-        raise CampaignError("each job result must be a JSON object")
 
-    state = result.get("state")
-    if state != JOB_FINISHED:
-        raise CampaignError(
-            "cannot record an outcome for a job in state '{}'; only a "
-            "finished job has one".format(state)
+    state: str
+    job_id: str
+    started_at: str = ""
+    outcome: str | None = None
+    reason: str = ""
+    interruption: str = ""
+    instances: tuple[InstanceResult, ...] = ()
+    failures: tuple[Failure, ...] = ()
+
+    @property
+    def ended(self) -> bool:
+        return self.state in JOB_ENDED
+
+
+def _capped(failures: tuple[Failure, ...]) -> tuple[Failure, ...]:
+    """The first failing steps, enough to triage without the job's files."""
+    return tuple(
+        Failure(
+            instance=failure.instance,
+            step=failure.step,
+            status=failure.status,
+            error_message=failure.error_message[:MAX_EVENT_ERROR_CHARS],
         )
-    if "job_id" not in result:
-        raise CampaignError("job result is missing 'job_id'")
-
-    return FinishedRecord(
-        unit=unit,
-        job_id=text_field(result, "job_id", "job result"),
-        outcome=_completed_outcome(result),
+        for failure in failures[:MAX_EVENT_FAILURES]
     )
 
 
 def classify_result(
-    unit: Unit, result: Any, at: str = ""
+    unit: Unit, status: JobStatus, at: str = ""
 ) -> FinishedRecord | InterruptedRecord:
-    """Map an ended job onto the record that closes its attempt.
+    """The record that closes an ended job's attempt.
 
-    Never raises. A job that was killed, or whose process died,
-    established nothing, so its attempt is interrupted and the unit may be
-    queued again. A result that
-    cannot be classified is recorded as ``error`` with the reason in
-    ``reason``: a scheduler has nobody to raise at.
+    A job that was killed, or whose process died, established nothing, so
+    its attempt is interrupted and the unit may be queued again. A finished
+    job's attempt takes the result the job decided. Never raises: a
+    scheduler has nobody to raise at.
     """
-    if isinstance(result, dict) and result.get("state") == JOB_INTERRUPTED:
-        reason = result.get("interruption")
+    if status.state == JOB_INTERRUPTED:
         return InterruptedRecord(
             unit=unit,
-            job_id=str(result.get("job_id", "")),
+            job_id=status.job_id,
             at=at,
-            reason=reason if reason in INTERRUPTIONS else DIED,
+            reason=(
+                status.interruption
+                if status.interruption in INTERRUPTIONS
+                else DIED
+            ),
         )
     try:
-        finished = finished_from_mcp(unit, result)
-    except CampaignError as error:
-        job_id = ""
-        if isinstance(result, dict):
-            raw_job_id = result.get("job_id")
-            job_id = raw_job_id if isinstance(raw_job_id, str) else ""
+        outcome = Outcome(status.outcome)
+    except ValueError:
         return FinishedRecord(
             unit=unit,
-            job_id=job_id,
+            job_id=status.job_id,
             outcome=Outcome.ERROR,
             at=at,
-            reason=str(error),
+            reason=(
+                "the campaign could not read the job's status: "
+                "outcome {!r}".format(status.outcome)
+            ),
         )
     return FinishedRecord(
-        unit=finished.unit,
-        job_id=finished.job_id,
-        outcome=finished.outcome,
+        unit=unit,
+        job_id=status.job_id,
+        outcome=outcome,
         at=at,
-        reason=str(result.get("reason") or ""),
-        failures=(
-            tuple(Failure(**raw) for raw in failure_details(result))
-            if finished.outcome == Outcome.FAILED
-            else ()
-        ),
+        reason=status.reason,
+        instances=status.instances,
+        failures=_capped(status.failures),
     )

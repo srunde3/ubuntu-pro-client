@@ -9,6 +9,8 @@ import pytest
 
 import pro_behave.mcp.server as server_module
 from pro_behave.behave.framework import BehaveFramework
+from pro_behave.campaign.domain.classify import JobStatus
+from pro_behave.campaign.domain.records import Failure as CampaignFailure
 from pro_behave.campaign.ports import QueueRefused
 from pro_behave.jobs.adapters import (
     LocalJobResultStore,
@@ -377,15 +379,17 @@ def result_error_text(result):
 
 
 def job_result(outcome="passed", job_id="job", failures=(), reason=""):
-    """A finished job as ``JobRunner.poll`` reports it."""
-    return {
-        "state": "finished",
-        "job_id": job_id,
-        "outcome": outcome,
-        "reason": reason,
-        "instances": [],
-        "failures": list(failures),
-    }
+    """A finished job as ``JobRunner.poll`` reports it. Each failure is a
+    dict of ``Failure`` fields; ``instance`` may be left out."""
+    return JobStatus(
+        state="finished",
+        job_id=job_id,
+        outcome=outcome,
+        reason=reason,
+        failures=tuple(
+            CampaignFailure(**{"instance": "", **raw}) for raw in failures
+        ),
+    )
 
 
 class FakeJobRunner:
@@ -438,18 +442,16 @@ class FakeJobRunner:
         if job_id in self.results:
             return self.results[job_id]
         if job_id not in {queued[1] for queued in self.queued}:
-            return {
-                "state": "interrupted",
-                "interruption": "died",
-                "job_id": job_id,
-            }
+            return JobStatus(
+                state="interrupted", job_id=job_id, interruption="died"
+            )
         if self.auto_finish is not None:
             self.finish(job_id, **self.auto_finish)
-        return {
-            "state": "running",
-            "job_id": job_id,
-            "started_at": self.started_at,
-        }
+        return JobStatus(
+            state="running",
+            job_id=job_id,
+            started_at=self.started_at,
+        )
 
     def finish(self, job_id, **kwargs):
         self.results[job_id] = job_result(job_id=job_id, **kwargs)
@@ -464,11 +466,9 @@ class FakeJobRunner:
         self.killed.append(job_id)
         if job_id in self.results or job_id in self.unkillable:
             return False
-        self.results[job_id] = {
-            "state": "interrupted",
-            "interruption": "killed",
-            "job_id": job_id,
-        }
+        self.results[job_id] = JobStatus(
+            state="interrupted", job_id=job_id, interruption="killed"
+        )
         return True
 
     def reconcile_jobs(self):

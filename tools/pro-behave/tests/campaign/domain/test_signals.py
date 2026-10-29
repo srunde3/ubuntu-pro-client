@@ -2,6 +2,7 @@
 
 import pytest
 
+from pro_behave.campaign.domain.classify import JobStatus
 from pro_behave.campaign.domain.records import OverdueRecord, Unit
 from pro_behave.campaign.domain.schedule import InFlightJob
 from pro_behave.campaign.domain.signals import elapsed_seconds, overdue_jobs
@@ -27,7 +28,7 @@ def job(started_at=STARTED_AT, state="running"):
     return InFlightJob(
         unit=UNIT_A,
         job_id=JOB_ID,
-        result={"state": state, "started_at": started_at},
+        status=JobStatus(state=state, job_id=JOB_ID, started_at=started_at),
     )
 
 

@@ -378,7 +378,7 @@ class CampaignService:
                 InFlightJob(
                     unit=status.unit,
                     job_id=status.job_id,
-                    result=self._runner().poll(status.job_id),
+                    status=self._runner().poll(status.job_id),
                     # What this job actually runs with.
                     install_from=status.attempts[-1].install_from,
                 )

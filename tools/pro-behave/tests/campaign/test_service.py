@@ -511,7 +511,11 @@ class TestAwaitEvents:
                     job_id="job1",
                     outcome="failed",
                     at=AT,
-                    failures=(Failure("s", "failed", "x" * 50),),
+                    failures=(
+                        Failure(
+                            "features/a.feature:9", "s", "failed", "x" * 50
+                        ),
+                    ),
                 ),
             ],
         )

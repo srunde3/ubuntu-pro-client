@@ -197,27 +197,22 @@ The tool fails loudly instead of guessing:
 - A record a campaign could not have written, such as an attempt on a
   campaign that never ran, is reported as inconsistent rather than read.
 
-## MCP results
+## Job results
 
-Reconcile records each finished job as the outcome of one attempt. Each
-job covers exactly one unit, so the mapping is:
-
-| MCP payload | Outcome |
-| --- | --- |
-| `finished`, every scenario passed | `passed` |
-| `finished`, any scenario failed | `failed` |
-| `finished`, only skips | `skipped` |
-| `finished`, no parseable report (`summary: null`) | `error` |
+Each job covers exactly one unit and decides that unit's result when it
+ends (see "A job's result" in the tool's README). Reconcile records a
+finished job's result as the outcome of one attempt, as it stands: the
+`outcome`, the `reason` an `error` is an error, the unit's `instances`, and
+the first failing steps, each naming its instance.
 
 An `interrupted` job, killed or dead, closes its attempt as `interrupted`
 with that reason. It has no outcome, so the unit runs again while the
 campaign runs.
 
-Anything else -- a scenario status outside passed/failed/skipped, no scenario
-counts at all, or a pass contradicted by `ok: false` -- cannot be classified.
-A skipped Examples row alongside a passing one is not one of these: that run
-passed. Reconcile records an unclassifiable result as `error`, keeps the
-reason, and goes on rather than stopping the campaign.
+A finished job whose status the campaign cannot read is recorded as
+`error`, with a reason starting "the campaign could not read the job's
+status", and reconcile goes on rather than stopping the campaign. That is a
+fault in the tool, never in the product.
 
 ## MCP tools
 
@@ -267,7 +262,7 @@ is how a watcher hears about it promptly.
 | --- | --- |
 | `campaign.*` | `created`, `running`, `finishing`, `complete`, `pausing`, `paused` |
 | `job.*` | `started`, `overdue` |
-| `unit.*` | `passed`, `failed`, `skipped`, `errored`, `unclassifiable`, `interrupted`, `retried` |
+| `unit.*` | `passed`, `failed`, `skipped`, `errored`, `interrupted`, `retried` |
 | `anomaly.*` | `repeated_scenario_failure`, `repeated_skips`, `starved` |
 
 A `campaign.<state>` event is emitted each time the campaign's named state
@@ -286,7 +281,7 @@ like a campaign that never emits.
 A `unit.failed` event carries the failing steps and their messages, so a
 failure can be judged without fetching the job's report; `failure_chars`
 shortens the messages on read for a caller that only wants to skim. A
-`unit.unclassifiable` event carries the reason the result could not be read.
+`unit.errored` event carries the reason the outcome is an error.
 
 Events are not stored. Each read derives them from the campaign's records,
 one pass over the log: a record announces what it says (`job.started`,

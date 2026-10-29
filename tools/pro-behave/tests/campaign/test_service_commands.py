@@ -10,7 +10,7 @@ from typing import NamedTuple
 import pytest
 
 from pro_behave.campaign.adapters import JsonlCampaignStore
-from pro_behave.campaign.domain.classify import KILLED
+from pro_behave.campaign.domain.classify import KILLED, JobStatus
 from pro_behave.campaign.domain.events import event_matches
 from pro_behave.campaign.domain.feed import derive_feed
 from pro_behave.campaign.domain.records import (
@@ -309,25 +309,20 @@ class TestReconcile:
         assert jobs.queued_units == [UNITS[0]]
         assert state(store) == CampaignState.COMPLETE
 
-    def test_an_unclassifiable_result_is_an_error_with_its_reason(
+    def test_a_job_s_error_is_recorded_with_its_reason(
         self, campaigns, store, jobs
     ):
         create(store, units=[UNITS[0]], lxd_max_jobs=1)
         campaigns.run(campaign_id=CAMPAIGN)
-        jobs.results["job1"] = {
-            "state": "finished",
-            "ok": True,
-            "job_id": "job1",
-            "summary": {
-                "scenarios": {"passed": 1, "unknown": 1},
-                "features": {},
-            },
-        }
+        jobs.finish("job1", outcome="error", reason="the command exited 2")
 
         campaigns.reconcile()
 
         (finished,) = records_of(store, FinishedRecord)
-        assert (finished.outcome, bool(finished.reason)) == ("error", True)
+        assert (finished.outcome, finished.reason) == (
+            "error",
+            "the command exited 2",
+        )
 
     def test_a_refused_unit_stays_unattempted(self, store):
         jobs = FakeJobRunner(full_pools={Pool.LXD})
@@ -387,12 +382,9 @@ class TestReconcile:
     ):
         create(store, units=[UNITS[0]], lxd_max_jobs=1)
         campaigns.run(campaign_id=CAMPAIGN)
-        jobs.results["job1"] = {
-            "state": "interrupted",
-            "reason": reason,
-            "ok": False,
-            "job_id": "job1",
-        }
+        jobs.results["job1"] = JobStatus(
+            state="interrupted", job_id="job1", interruption=reason
+        )
 
         campaigns.reconcile()
 
@@ -502,11 +494,9 @@ class TestPause:
         create(store, units=[UNITS[0]], lxd_max_jobs=1)
         campaigns.run(campaign_id=CAMPAIGN)
         campaigns.pause(campaign_id=CAMPAIGN)
-        jobs.results["job1"] = {
-            "state": "interrupted",
-            "reason": "died",
-            "job_id": "job1",
-        }
+        jobs.results["job1"] = JobStatus(
+            state="interrupted", job_id="job1", interruption="died"
+        )
 
         campaigns.reconcile()
 
@@ -802,25 +792,17 @@ class TestEvents:
         assert failed.data["failures"][0]["step"] == "Then it works"
         assert failed.data["failures"][0]["error_message"] == "it did not"
 
-    def test_an_unclassifiable_result_has_its_own_kind_and_reason(
+    def test_an_error_is_announced_with_its_reason(
         self, campaigns, store, events, jobs
     ):
         create(store, units=[UNITS[0]], lxd_max_jobs=1)
         campaigns.run(campaign_id=CAMPAIGN)
-        jobs.results["job1"] = {
-            "state": "finished",
-            "ok": True,
-            "job_id": "job1",
-            "summary": {
-                "scenarios": {"passed": 1, "unknown": 1},
-                "features": {},
-            },
-        }
+        jobs.finish("job1", outcome="error", reason="the command exited 2")
         campaigns.reconcile()
 
-        (odd,) = events.read(CAMPAIGN, kinds=["unit.unclassifiable"])
+        (errored,) = events.read(CAMPAIGN, kinds=["unit.errored"])
 
-        assert odd.data["reason"]
+        assert errored.data["reason"] == "the command exited 2"
 
 
 class TestRetryUnits:

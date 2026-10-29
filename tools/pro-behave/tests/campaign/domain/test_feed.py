@@ -172,19 +172,17 @@ def test_a_failure_carries_its_failing_steps():
     assert event.data["job_id"] == JOB_A
 
 
-def test_an_unclassifiable_finish_has_its_own_kind_and_reason():
+def test_an_error_carries_its_reason():
     records = [
         *RUNNING,
-        finish(UNIT_A, JOB_A, Outcome.ERROR, reason="cannot classify"),
+        finish(UNIT_A, JOB_A, Outcome.ERROR, reason="the command exited 2"),
     ]
 
     (event,) = [
-        e
-        for e in derive_feed(CAMPAIGN, records)
-        if e.kind == "unit.unclassifiable"
+        e for e in derive_feed(CAMPAIGN, records) if e.kind == "unit.errored"
     ]
 
-    assert event.data["reason"] == "cannot classify"
+    assert event.data["reason"] == "the command exited 2"
 
 
 def test_a_retry_says_what_the_unit_was():

@@ -135,7 +135,7 @@ class _Feed:
             if record.outcome == Outcome.FAILED:
                 data["failures"] = [f.as_dict() for f in record.failures]
             self._emit(
-                unit_event_kind(record.outcome, bool(record.reason)),
+                unit_event_kind(record.outcome),
                 record.at,
                 data,
             )

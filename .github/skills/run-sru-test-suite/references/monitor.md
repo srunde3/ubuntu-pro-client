@@ -23,9 +23,9 @@ Use the `behave` MCP tools; each tool's description says how to call it.
        `esm.ubuntu.com` or the CVE endpoints
      - **candidate defect**: `ASSERT FAILED` / `AssertionError` with an
        expected-vs-got diff
-   - `unit.skipped`: note the missing config names; `find_scenarios` with
-     `text` set to the scenario name returns its `requires_config`.
-   - `anomaly.*`, `job.overdue`, `unit.unclassifiable`: note as findings.
+   - `unit.skipped`: note each skipped instance's reason; `describe_feature`
+     on the unit's feature returns each scenario's `requires_config`.
+   - `anomaly.*`, `job.overdue`: note as findings.
 3. Stop and report when any of these holds:
    - `state` is `complete` or `paused`.
    - One cause is hitting every job.

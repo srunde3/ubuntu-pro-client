@@ -1,4 +1,4 @@
-"""Event kinds, presets, matching and failure details."""
+"""Event kinds, presets and matching."""
 
 import json
 
@@ -10,7 +10,6 @@ from pro_behave.campaign.domain.events import (
     EventKind,
     event_matches,
     expand_event_kinds,
-    failure_details,
     unit_event_kind,
 )
 from pro_behave.campaign.domain.records import (
@@ -97,13 +96,6 @@ def test_each_outcome_announces_its_own_event(outcome, kind):
     assert unit_event_kind(outcome) == kind
 
 
-@pytest.mark.parametrize("outcome", list(Outcome), ids=str)
-def test_an_unclassifiable_result_announces_unclassifiable(outcome):
-    assert unit_event_kind(outcome, unclassifiable=True) == (
-        EventKind.UNIT_UNCLASSIFIABLE
-    )
-
-
 # Progress is in the counts on every response, so passes, lane openings and
 # a watcher's own retries are left out of what it has to react to.
 ACTIONABLE = {
@@ -119,7 +111,6 @@ ACTIONABLE = {
     EventKind.UNIT_FAILED: True,
     EventKind.UNIT_SKIPPED: True,
     EventKind.UNIT_ERRORED: True,
-    EventKind.UNIT_UNCLASSIFIABLE: True,
     EventKind.UNIT_INTERRUPTED: True,
     EventKind.UNIT_RETRIED: False,
     EventKind.ANOMALY_REPEATED_SCENARIO_FAILURE: True,
@@ -159,41 +150,6 @@ def test_every_campaign_state_has_an_expected_event():
 @pytest.mark.parametrize("state, kind", EVENT_FOR_STATE.items(), ids=str)
 def test_arriving_in_a_state_announces_its_event(state, kind):
     assert STATE_EVENT[state] == kind
-
-
-class TestFailureDetails:
-    def test_it_carries_the_failing_steps(self):
-        result = {
-            "failures": [
-                {
-                    "step": "Then I see it",
-                    "status": "failed",
-                    "error_message": "nope",
-                }
-            ]
-        }
-
-        assert failure_details(result) == [
-            {
-                "step": "Then I see it",
-                "status": "failed",
-                "error_message": "nope",
-            }
-        ]
-
-    def test_it_caps_how_many_it_carries(self):
-        result = {"failures": [{"step": str(n)} for n in range(10)]}
-
-        assert len(failure_details(result)) == 3
-
-    def test_a_long_message_is_truncated(self):
-        result = {"failures": [{"error_message": "x" * 5000}]}
-
-        assert len(failure_details(result)[0]["error_message"]) == 1200
-
-    @pytest.mark.parametrize("result", [None, "text", {}, {"failures": 3}])
-    def test_anything_unexpected_yields_nothing(self, result):
-        assert failure_details(result) == []
 
 
 class TestEventKindEnum:
