@@ -56,3 +56,4 @@ full tutorial:
 * [Auto-attach mechanisms](dev-docs/explanation/autoattach_mechanisms.md)
 * [How auto-attach works](dev-docs/explanation/how_auto_attach_works.md)
 * [What happens during attach](dev-docs/explanation/what_happens_during_attach.md)
+* [What the end-to-end test suite contains](dev-docs/explanation/e2e_test_suite.md)
