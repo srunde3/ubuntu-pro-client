@@ -63,18 +63,23 @@ several parts of the system must share.
 ## How should reviewers read the documents?
 
 1. Read
-   [`e2e_test_suite.md`](../../explanation/e2e_test_suite.md)
+   [`e2e_test_suite.md`](../../reference/e2e_test_suite.md)
    for the proposed vocabulary and maintainer-facing model. This is a
    human-facing document and should be judged according to that standard.
-2. Read [`system-overview.md`](system-overview.md) for the flow from feature
+2. Read
+   [`e2e_test_coverage.md`](../../explanation/e2e_test_coverage.md)
+   for how current cases, coverage intent, and applicability are compared.
+   This is also a human-facing document and should be judged according to that
+   standard.
+3. Read [`system-overview.md`](system-overview.md) for the flow from feature
    files to validation, coverage analysis, and execution. This is a
    reviewer-facing document created to help the team understand the work. It
    is not going to persist past this implementation. Review this for direction
    and clarity, but keep in mind that it's a temporary doc.
-3. Use
+4. Use
    [`implementation-outline.md`](implementation-outline.md)
    when a decision needs its evidence, edge cases, or detailed rules. This is
    another reviewer-facing (and LLM-facing) document created to help the team
    understand the work. Review this for direction and clarity.
-4. Test the design mentally against real feature files and the work that later
+5. Test the design mentally against real feature files and the work that later
    tools might need to perform.

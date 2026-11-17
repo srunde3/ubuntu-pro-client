@@ -10,7 +10,7 @@ second suite that maintainers must edit.
 
 The terms **scenario**, **parameter group**, **case**, **target**, **job**, and
 **result** have the meanings defined in
-[`e2e_test_suite.md`](../../explanation/e2e_test_suite.md).
+[`e2e_test_suite.md`](../../reference/e2e_test_suite.md).
 
 ## What happens after a maintainer edits a feature file?
 

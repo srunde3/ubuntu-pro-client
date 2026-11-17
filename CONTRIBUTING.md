@@ -46,6 +46,7 @@ full tutorial:
 
 * [Version string formatting](dev-docs/reference/version_string_formatting.md)
 * [Our documentation style guide](dev-docs/reference/styleguide.md)
+* [End-to-end test suite reference](dev-docs/reference/e2e_test_suite.md)
 
 ## Explanation
 
@@ -56,4 +57,5 @@ full tutorial:
 * [Auto-attach mechanisms](dev-docs/explanation/autoattach_mechanisms.md)
 * [How auto-attach works](dev-docs/explanation/how_auto_attach_works.md)
 * [What happens during attach](dev-docs/explanation/what_happens_during_attach.md)
-* [What the end-to-end test suite contains](dev-docs/explanation/e2e_test_suite.md)
+* [How end-to-end test coverage is
+  determined](dev-docs/explanation/e2e_test_coverage.md)

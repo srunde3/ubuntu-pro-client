@@ -5,10 +5,10 @@ we build more tools around them. It is a working design document, not
 maintainer documentation, and we do not intend to keep it after this work is
 complete.
 
-The durable guide is
-[`e2e_test_suite.md`](../../explanation/e2e_test_suite.md). That guide explains
-the finished model. This document records the evidence and decisions that lead
-us there.
+The durable documentation consists of the
+[`e2e_test_suite.md`](../../reference/e2e_test_suite.md) reference and the
+[`e2e_test_coverage.md`](../../explanation/e2e_test_coverage.md) explanation.
+This document records the evidence and decisions that lead to them.
 
 [`system-overview.md`](system-overview.md) shows how the parser, suite model,
 validation, coverage analysis, and test execution fit together.
